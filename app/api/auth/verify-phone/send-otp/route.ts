@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { getCookieDomain } from '@/lib/supabase'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
@@ -18,9 +19,12 @@ export async function POST(request: NextRequest) {
                 cookies: {
                     getAll() { return cookieStore.getAll() },
                     setAll(cookiesToSet) {
-                        cookiesToSet.forEach(({ name, value, options }) =>
-                            cookieStore.set(name, value, options)
-                        )
+                        const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || ''
+                        const domain = getCookieDomain(host.split(':')[0])
+                        cookiesToSet.forEach(({ name, value, options }) => {
+                            const opts = { ...options, ...(domain && { domain }) }
+                            cookieStore.set(name, value, opts)
+                        })
                     },
                 },
             }

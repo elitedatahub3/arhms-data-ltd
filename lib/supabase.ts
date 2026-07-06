@@ -3,9 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 import { Database } from '@/types/supabase'
 
 // Determine cookie domain: prod uses .arhmsgh.com (shared with subdomains), dev/preview uses default
-const getCookieDomain = () => {
-    if (typeof window === 'undefined') return undefined
-    const host = window.location.hostname
+export const getCookieDomain = (hostOverride?: string) => {
+    if (typeof window === 'undefined' && !hostOverride) return undefined
+    const host = hostOverride || window.location.hostname
     
     if (host.endsWith('arhmsgh.com')) {
         return '.arhmsgh.com'

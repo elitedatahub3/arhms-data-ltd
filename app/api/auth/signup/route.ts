@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { getCookieDomain } from '@/lib/supabase'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -37,8 +38,11 @@ export async function POST(request: NextRequest) {
           },
           setAll(cookiesToSet) {
             try {
+              const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || ''
+              const domain = getCookieDomain(host.split(':')[0])
               cookiesToSet.forEach(({ name, value, options }) => {
-                cookieStore.set(name, value, options)
+                const opts = { ...options, ...(domain && { domain }) }
+                cookieStore.set(name, value, opts)
               })
             } catch {
               // The `set` method was called from a Server Component.

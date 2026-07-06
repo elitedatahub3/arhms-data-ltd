@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { getCookieDomain } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { Redis } from '@upstash/redis'
@@ -265,11 +266,14 @@ export async function middleware(request: NextRequest) {
                     return request.cookies.getAll()
                 },
                 setAll(cookiesToSet) {
+                    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || ''
+                    const domain = getCookieDomain(host.split(':')[0])
                     cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
                     res = NextResponse.next({ request })
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        res.cookies.set(name, value, options)
-                    )
+                    cookiesToSet.forEach(({ name, value, options }) => {
+                        const opts = { ...options, ...(domain && { domain }) }
+                        res.cookies.set(name, value, opts)
+                    })
                 },
             },
         }
