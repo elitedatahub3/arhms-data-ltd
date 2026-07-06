@@ -2,8 +2,9 @@
 
 import Image from 'next/image'
 import Link from 'next/link'
-import { Heart, BadgeCheck, ImageIcon } from 'lucide-react'
+import { Heart, BadgeCheck, ImageIcon, MapPin, Flame } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getListingTier, isPopular, conditionLabel } from '@/lib/classifieds-tiers'
 import type { ClassifiedListing, ClassifiedListingImage } from '@/types/supabase'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
@@ -31,26 +32,29 @@ export function ListingCard({ listing, isFavorited, onFavoriteToggle }: ListingC
     const coverImage = images[0]
     const coverUrl = coverImage ? getImagePublicUrl(coverImage.storage_path) : null
 
-    // When a listing is promoted (actively boosted) we keep the image clean:
-    // no "Promoted" tag and no category pill — the Verified badge is the accent.
-    const isPromoted = Boolean(
-        listing.is_boosted && listing.boosted_until && new Date(listing.boosted_until) > new Date()
-    )
+    const tier = getListingTier(listing)
+    const verified = Boolean(listing.users?.seller_verified_at)
+    const popular = isPopular(listing)
+    const condition = conditionLabel(listing.condition)
 
     return (
         <Link href={`/classifieds/${listing.id}`}>
-            <div className="bg-white dark:bg-[#151c2c] rounded-xl border border-gray-100 dark:border-gray-800 overflow-hidden hover:shadow-lg hover:border-gray-200 dark:hover:border-gray-700 transition-all duration-300 cursor-pointer h-full flex flex-col">
+            <div
+                className={cn(
+                    'group bg-white dark:bg-[#151c2c] rounded-xl overflow-hidden border-2 hover:shadow-lg transition-all duration-300 cursor-pointer h-full flex flex-col',
+                    tier ? tier.borderClass : 'border-gray-100 dark:border-gray-800 hover:border-gray-200 dark:hover:border-gray-700'
+                )}
+            >
                 {/* Image */}
-                <div className="relative w-full h-48 bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                <div className="relative w-full aspect-square bg-gray-100 dark:bg-gray-800 overflow-hidden">
                     {coverUrl ? (
                         <Image
                             src={coverUrl}
                             alt={listing.title}
                             fill
-                            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                            className="object-cover"
+                            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                            className="object-cover transition-transform duration-300 group-hover:scale-105"
                             onError={(e) => {
-                                // On error fall back to placeholder
                                 const target = e.target as HTMLImageElement
                                 target.style.display = 'none'
                                 target.parentElement?.querySelector('.img-fallback')?.removeAttribute('style')
@@ -69,22 +73,44 @@ export function ListingCard({ listing, isFavorited, onFavoriteToggle }: ListingC
                         <span className="text-xs font-medium">No image</span>
                     </div>
 
+                    {/* Tier ribbon — vertical strip on the left edge */}
+                    {tier && (
+                        <div
+                            className={cn(
+                                'absolute top-0 left-0 z-10 px-1 py-2 text-[10px] font-black tracking-widest rounded-br-md shadow-sm',
+                                tier.ribbonClass
+                            )}
+                            style={{ writingMode: 'vertical-rl' }}
+                        >
+                            {tier.label}
+                        </div>
+                    )}
+
+                    {/* Trust badges — stacked top-right */}
+                    <div className="absolute top-2 right-2 z-10 flex flex-col items-end gap-1">
+                        {verified && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/90 dark:bg-gray-900/85 backdrop-blur px-2 py-0.5 text-[10px] font-bold text-gray-800 dark:text-gray-100 shadow-sm">
+                                <BadgeCheck className="w-3.5 h-3.5 text-sky-600" />
+                                Verified ID
+                            </span>
+                        )}
+                        {popular && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white/90 dark:bg-gray-900/85 backdrop-blur px-2 py-0.5 text-[10px] font-bold text-gray-800 dark:text-gray-100 shadow-sm">
+                                <Flame className="w-3.5 h-3.5 text-orange-500" />
+                                POPULAR
+                            </span>
+                        )}
+                    </div>
+
                     {/* Multi-image count badge */}
                     {images.length > 1 && (
-                        <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <div className="absolute bottom-2 right-2 z-10 bg-black/60 text-white text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                             <ImageIcon className="w-3 h-3" />
                             {images.length}
                         </div>
                     )}
 
-                    {/* Category badge — hidden on promoted listings for a clean image */}
-                    {listing.classified_categories && !isPromoted && (
-                        <div className="absolute top-2 left-2 bg-emerald-500 text-white text-xs font-bold px-3 py-1 rounded-full">
-                            {listing.classified_categories.name}
-                        </div>
-                    )}
-
-                    {/* Favorite button */}
+                    {/* Favorite button — bottom-left to avoid the trust badges */}
                     <button
                         title="Toggle favorite"
                         aria-label="Toggle favorite"
@@ -93,54 +119,51 @@ export function ListingCard({ listing, isFavorited, onFavoriteToggle }: ListingC
                             onFavoriteToggle?.(listing.id)
                         }}
                         className={cn(
-                            'absolute top-2 right-2 rounded-full p-2 transition-all',
+                            'absolute bottom-2 left-2 z-10 rounded-full p-2 transition-all',
                             isFavorited
                                 ? 'bg-red-500 text-white'
                                 : 'bg-white/80 dark:bg-gray-800/80 text-gray-500 hover:bg-white hover:text-red-500'
                         )}
                     >
-                        <Heart className={cn('w-5 h-5', isFavorited && 'fill-current')} />
+                        <Heart className={cn('w-4 h-4', isFavorited && 'fill-current')} />
                     </button>
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 flex flex-col p-4">
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                        <h3 className="font-bold text-gray-900 dark:text-white text-sm line-clamp-2 flex-1">
-                            {listing.title}
-                        </h3>
-                        {listing.users?.seller_verified_at && (
-                            <div className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-sky-500 to-blue-600 px-2 py-0.5 shadow-sm shadow-blue-500/25 ring-1 ring-white/25">
-                                <BadgeCheck className="w-3.5 h-3.5 text-white" />
-                                <span className="text-[11px] font-bold tracking-wide text-white">Verified</span>
-                            </div>
-                        )}
-                    </div>
-
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                        {listing.location || 'Location not specified'}
+                <div className="flex-1 flex flex-col p-3">
+                    {/* Price */}
+                    <p className="text-base font-black text-emerald-600 dark:text-emerald-400 leading-tight">
+                        GH₵ {Number(listing.price).toLocaleString()}
                     </p>
 
-                    {/* Condition badge */}
-                    {listing.condition && (
-                        <div className="inline-flex w-fit mb-3">
-                            <span className="text-xs font-semibold px-2 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 capitalize">
-                                {listing.condition}
-                            </span>
-                        </div>
-                    )}
+                    {/* Title */}
+                    <h3 className="mt-1 font-semibold text-gray-900 dark:text-white text-sm line-clamp-2">
+                        {listing.title}
+                    </h3>
 
-                    <div className="mt-auto">
-                        <p className="text-lg font-black text-emerald-600 dark:text-emerald-400">
-                            GHS {listing.price.toFixed(2)}
-                        </p>
-                        <p className="text-xs text-gray-400 dark:text-gray-500">
-                            Posted {new Date(listing.created_at).toLocaleDateString()}
-                        </p>
+                    {/* Location */}
+                    <p className="mt-1 flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 truncate">
+                        <MapPin className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">{listing.location || 'Location not specified'}</span>
+                    </p>
+
+                    {/* Bottom row: condition pill + tier icon */}
+                    <div className="mt-auto pt-2.5 flex items-center justify-between gap-2">
+                        {condition ? (
+                            <span className="text-[11px] font-semibold px-2 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                                {condition}
+                            </span>
+                        ) : (
+                            <span />
+                        )}
+                        {tier && (
+                            <span className="inline-flex items-center justify-center rounded-md bg-gray-50 dark:bg-gray-800 p-1">
+                                <tier.Icon className={cn('w-4 h-4', tier.iconClass)} />
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
         </Link>
     )
 }
-

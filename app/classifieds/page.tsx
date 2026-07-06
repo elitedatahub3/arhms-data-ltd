@@ -7,7 +7,6 @@ import { getCategories } from '@/lib/classifieds-queries'
 import { ListingGrid } from '@/components/classifieds/listing-grid'
 import { Loader2, Search, Grid3x3, List, Plus, TrendingUp } from 'lucide-react'
 import Link from 'next/link'
-import { HeroCarousel } from '@/components/classifieds/hero-carousel'
 import { CategoryPicture } from '@/components/classifieds/category-picture'
 import { SellButton } from '@/components/classifieds/sell-button'
 import { supabase } from '@/lib/supabase'
@@ -117,65 +116,91 @@ export default function ClassifiedsPage() {
 
     return (
         <div className="min-h-screen bg-white dark:bg-[#0a0f1c]">
-            {/* Green Banner Search */}
-            <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 dark:from-emerald-600 dark:to-emerald-700 py-6">
-                <div className="max-w-7xl mx-auto px-4">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-white text-xl font-bold">What are you looking for?</h2>
-                        <div className="flex items-center gap-3">
+            {/* Hero search header — carries the premium "hero" treatment
+                (emerald gradient, inset glow, floating circles, dot grid) with
+                the real search form on top. Replaces the old flat banner + promo carousel. */}
+            <div className="max-w-7xl mx-auto px-4 pt-4">
+                <div className="relative overflow-hidden rounded-2xl shadow-2xl">
+                    {/* Gradient base + inset glow */}
+                    <div
+                        className="absolute inset-0 bg-gradient-to-br from-emerald-600 via-teal-500 to-green-400 dark:from-emerald-700 dark:via-teal-600 dark:to-emerald-500 transition-all duration-700"
+                        style={{ boxShadow: 'inset 0 0 100px rgba(16,185,129,0.45)' }}
+                    />
+
+                    {/* Floating translucent circles */}
+                    <div className="pointer-events-none absolute -top-16 -right-16 w-72 h-72 rounded-full bg-white/5" />
+                    <div className="pointer-events-none absolute -bottom-20 -left-12 w-56 h-56 rounded-full bg-white/5" />
+                    <div className="pointer-events-none absolute top-6 right-44 w-28 h-28 rounded-full bg-white/5" />
+
+                    {/* Dot-grid overlay */}
+                    <div
+                        className="pointer-events-none absolute inset-0 opacity-[0.08]"
+                        style={{
+                            backgroundImage: 'radial-gradient(circle, #ffffff 1px, transparent 1px)',
+                            backgroundSize: '22px 22px',
+                        }}
+                    />
+
+                    {/* Content */}
+                    <div className="relative z-10 p-6 md:p-8">
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                            <div>
+                                <h2 className="text-white text-xl md:text-2xl font-black leading-tight drop-shadow-md">
+                                    What are you looking for?
+                                </h2>
+                                <p className="hidden sm:block text-white/85 text-sm font-medium mt-1">
+                                    Buy and sell anything across Ghana
+                                </p>
+                            </div>
                             {/* SELL opens a login-less "Become a Seller" popup: enter a phone
                                 number → invisible account is provisioned → seller dashboard.
                                 Existing sellers skip straight to the dashboard. */}
-                            <SellButton />
+                            <div className="flex-shrink-0">
+                                <SellButton />
+                            </div>
                         </div>
-                    </div>
-                    <form onSubmit={handleSearch} className="flex gap-3">
-                        <select
-                            aria-label="Location filter"
-                            className="px-4 py-2 rounded-lg bg-white text-gray-900 font-medium border-0 focus:ring-2 focus:ring-emerald-400"
-                        >
-                            <option>All Ghana</option>
-                            <option>Ahafo</option>
-                            <option>Ashanti</option>
-                            <option>Bono</option>
-                            <option>Bono East</option>
-                            <option>Central</option>
-                            <option>Eastern</option>
-                            <option>Greater Accra</option>
-                            <option>North East</option>
-                            <option>Northern</option>
-                            <option>Oti</option>
-                            <option>Savannah</option>
-                            <option>Upper East</option>
-                            <option>Upper West</option>
-                            <option>Volta</option>
-                            <option>Western</option>
-                            <option>Western North</option>
-                        </select>
-                        <div className="relative flex-1">
-                            <input
-                                type="text"
-                                placeholder="I am looking for..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full px-4 py-2 rounded-lg border-0 focus:ring-2 focus:ring-emerald-400"
-                            />
-                            <button
-                                type="submit"
-                                aria-label="Search listings"
-                                className="absolute right-3 top-1/2 -translate-y-1/2"
+                        <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-3">
+                            <select
+                                aria-label="Location filter"
+                                className="px-4 py-2.5 rounded-xl bg-white/15 backdrop-blur-md border border-white/25 text-white font-medium focus:ring-2 focus:ring-white/60 focus:outline-none [&>option]:text-gray-900"
                             >
-                                <Search className="w-5 h-5 text-gray-400" />
-                            </button>
-                        </div>
-                    </form>
+                                <option>All Ghana</option>
+                                <option>Ahafo</option>
+                                <option>Ashanti</option>
+                                <option>Bono</option>
+                                <option>Bono East</option>
+                                <option>Central</option>
+                                <option>Eastern</option>
+                                <option>Greater Accra</option>
+                                <option>North East</option>
+                                <option>Northern</option>
+                                <option>Oti</option>
+                                <option>Savannah</option>
+                                <option>Upper East</option>
+                                <option>Upper West</option>
+                                <option>Volta</option>
+                                <option>Western</option>
+                                <option>Western North</option>
+                            </select>
+                            <div className="relative flex-1">
+                                <input
+                                    type="text"
+                                    placeholder="I am looking for..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full px-4 py-2.5 pr-11 rounded-xl bg-white text-gray-900 shadow-lg ring-1 ring-white/30 border-0 focus:ring-2 focus:ring-white focus:outline-none"
+                                />
+                                <button
+                                    type="submit"
+                                    aria-label="Search listings"
+                                    className="absolute right-3 top-1/2 -translate-y-1/2"
+                                >
+                                    <Search className="w-5 h-5 text-gray-400" />
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
-            </div>
-
-
-            {/* Hero Carousel */}
-            <div className="max-w-7xl mx-auto px-4 pt-6">
-                <HeroCarousel />
             </div>
 
             {/* Jiji-style promo row + category grid */}
@@ -266,7 +291,7 @@ export default function ClassifiedsPage() {
                     {listings.length > 0 && (
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="text-xl font-bold text-gray-900 dark:text-white">
-                                Trending Now
+                                Trending ads
                             </h3>
                             <div className="flex gap-2">
                                 <button
@@ -303,6 +328,7 @@ export default function ClassifiedsPage() {
                             isLoading={isLoading}
                             favorites={favorites}
                             onFavoriteToggle={handleFavoriteToggle}
+                            viewMode={viewMode}
                         />
                     )}
                 </div>

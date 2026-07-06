@@ -2,6 +2,7 @@
 
 import { ListingCard } from './listing-card'
 import { Loader2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { ClassifiedListing } from '@/types/supabase'
 
 interface ListingGridProps {
@@ -10,6 +11,7 @@ interface ListingGridProps {
     onLoadMore?: () => void
     favorites?: string[]
     onFavoriteToggle?: (listingId: string) => void
+    viewMode?: 'grid' | 'list'
 }
 
 export function ListingGrid({
@@ -18,6 +20,7 @@ export function ListingGrid({
     onLoadMore,
     favorites = [],
     onFavoriteToggle,
+    viewMode = 'grid',
 }: ListingGridProps) {
     if (isLoading && listings.length === 0) {
         return (
@@ -41,7 +44,14 @@ export function ListingGrid({
 
     return (
         <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div
+                className={cn(
+                    'grid gap-3 sm:gap-4',
+                    viewMode === 'list'
+                        ? 'grid-cols-1 sm:grid-cols-2'
+                        : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4'
+                )}
+            >
                 {listings.map((listing) => (
                     <ListingCard
                         key={listing.id}
