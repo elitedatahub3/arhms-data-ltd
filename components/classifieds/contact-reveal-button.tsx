@@ -1,11 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { Phone, Mail, MapPin } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SafetyTipsModal } from './safety-tips-modal'
-import { useAuth } from '@/contexts/auth-context'
 import { toast } from 'sonner'
 import type { ClassifiedListing } from '@/types/supabase'
 
@@ -14,20 +12,12 @@ interface ContactRevealButtonProps {
     userId?: string
 }
 
-export function ContactRevealButton({ listing, userId }: ContactRevealButtonProps) {
-    const router = useRouter()
-    const { session } = useAuth()
+export function ContactRevealButton({ listing }: ContactRevealButtonProps) {
     const [showSafetyModal, setShowSafetyModal] = useState(false)
     const [contactInfo, setContactInfo] = useState<any>(null)
-    const [isLoading, setIsLoading] = useState(false)
     const [revealed, setRevealed] = useState(false)
 
     const handleClick = () => {
-        if (!userId) {
-            router.push(`/auth/login?redirect=/classifieds/${listing.id}`)
-            return
-        }
-
         if (revealed) {
             return
         }
@@ -35,40 +25,23 @@ export function ContactRevealButton({ listing, userId }: ContactRevealButtonProp
         setShowSafetyModal(true)
     }
 
-    const handleAcknowledgeSafety = async () => {
-        setIsLoading(true)
-        try {
-            if (!session?.access_token) {
-                toast.error('Please log in to reveal contact info')
-                return
-            }
-
-            const response = await fetch('/api/classifieds/contact-reveal', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify({
-                    listing_id: listing.id,
-                    acknowledged_safety_tips: true,
-                }),
-            })
-
-            if (!response.ok) {
-                throw new Error('Failed to reveal contact info')
-            }
-
-            const data = await response.json()
-            setContactInfo(data)
-            setRevealed(true)
-            setShowSafetyModal(false)
-            toast.success('Contact information revealed!')
-        } catch (error: any) {
-            toast.error(error.message || 'Failed to reveal contact info')
-        } finally {
-            setIsLoading(false)
-        }
+    // Contact details already ship with the listing (loaded via getListingById on
+    // the detail page), so we reveal them directly — no login or extra API call.
+    const handleAcknowledgeSafety = () => {
+        const l = listing as any
+        setContactInfo({
+            seller_name: l.users?.first_name,
+            phone: l.contact_phone,
+            email: l.contact_email,
+            location: l.location,
+            whatsapp_number: l.whatsapp_number,
+            facebook_url: l.facebook_url,
+            twitter_url: l.twitter_url,
+            instagram_url: l.instagram_url,
+        })
+        setRevealed(true)
+        setShowSafetyModal(false)
+        toast.success('Contact information revealed!')
     }
 
     if (revealed && contactInfo) {
@@ -189,14 +162,13 @@ export function ContactRevealButton({ listing, userId }: ContactRevealButtonProp
                 onClick={handleClick}
                 className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-6 text-base"
             >
-                {userId ? 'Reveal Seller Contact' : 'Login to Contact Seller'}
+                Contact Seller
             </Button>
 
             <SafetyTipsModal
                 open={showSafetyModal}
                 onOpenChange={setShowSafetyModal}
                 onAcknowledge={handleAcknowledgeSafety}
-                isLoading={isLoading}
             />
         </>
     )

@@ -177,6 +177,18 @@
     box-shadow: 0 25px 60px rgba(124,58,237,0.2);
   }
 
+  /* Slide 5 — Marketplace (emerald) */
+  .hero-slide-5 {
+    background: linear-gradient(145deg,#ffffff,#ecfdf5);
+    border: 1px solid rgba(16,185,129,0.18);
+    box-shadow: 0 25px 60px rgba(16,185,129,0.08);
+  }
+  .dark .hero-slide-5 {
+    background: linear-gradient(145deg,#04140d,#03110a);
+    border: 1px solid rgba(16,185,129,0.22);
+    box-shadow: 0 25px 60px rgba(16,185,129,0.18);
+  }
+
   /* ── Hero card mirror reflection (light mode only) ──────────────────── */
   .hero-reflect {
     position: absolute;
@@ -196,6 +208,7 @@
   .hero-reflect-2 { background: linear-gradient(145deg, #eef2ff, #ffffff); }
   .hero-reflect-3 { background: linear-gradient(145deg, #eff6ff, #ffffff); }
   .hero-reflect-4 { background: linear-gradient(145deg, #f5f3ff, #ffffff); }
+  .hero-reflect-5 { background: linear-gradient(145deg, #ecfdf5, #ffffff); }
 
   .hero-separator {
     background: linear-gradient(to right, transparent, rgba(37,99,235,0.10) 30%, rgba(124,58,237,0.10) 70%, transparent);

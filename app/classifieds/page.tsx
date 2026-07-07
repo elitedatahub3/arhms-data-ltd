@@ -9,6 +9,8 @@ import { Loader2, Search, Grid3x3, List, Plus, TrendingUp } from 'lucide-react'
 import Link from 'next/link'
 import { CategoryPicture } from '@/components/classifieds/category-picture'
 import { SellButton } from '@/components/classifieds/sell-button'
+import { HeroTagline } from '@/components/classifieds/hero-tagline'
+import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { supabase } from '@/lib/supabase'
 import type { ClassifiedListing, ClassifiedCategory } from '@/types/supabase'
 
@@ -148,14 +150,13 @@ export default function ClassifiedsPage() {
                                 <h2 className="text-white text-xl md:text-2xl font-black leading-tight drop-shadow-md">
                                     What are you looking for?
                                 </h2>
-                                <p className="hidden sm:block text-white/85 text-sm font-medium mt-1">
-                                    Buy and sell anything across Ghana
-                                </p>
+                                <HeroTagline className="text-white/85 text-sm font-medium mt-1 min-h-[1.25rem]" />
                             </div>
                             {/* SELL opens a login-less "Become a Seller" popup: enter a phone
                                 number → invisible account is provisioned → seller dashboard.
                                 Existing sellers skip straight to the dashboard. */}
-                            <div className="flex-shrink-0">
+                            <div className="flex-shrink-0 flex items-center gap-2">
+                                <ThemeToggle className="border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white" />
                                 <SellButton />
                             </div>
                         </div>
