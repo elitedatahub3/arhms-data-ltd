@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { LayoutDashboard, Wallet, Package, ClipboardList, Store, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { usePageAccess } from '@/hooks/use-page-access'
 
 const leftItems = [
     { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -17,6 +18,8 @@ const rightItems = [
 
 export function MobileBottomNav() {
     const pathname = usePathname()
+    const { isPageAccessible } = usePageAccess()
+    const showBuyData = isPageAccessible('/dashboard/data-packages')
 
     const isActive = (href: string) => {
         if (href === '/dashboard') return pathname === '/dashboard'
@@ -80,28 +83,30 @@ export function MobileBottomNav() {
                         )
                     })}
 
-                    {/* Center FAB — Buy Data */}
-                    <Link
-                        href="/dashboard/data-packages"
-                        className="flex flex-col items-center -mt-6 min-w-[64px]"
-                    >
-                        <span
-                            className={cn(
-                                'h-14 w-14 rounded-full flex items-center justify-center shadow-lg mb-1 transition-transform active:scale-95',
-                                buyDataActive ? 'bg-amber-500' : 'bg-amber-400'
-                            )}
+                    {/* Center FAB — Buy Data (hidden when Data Packages access is off) */}
+                    {showBuyData && (
+                        <Link
+                            href="/dashboard/data-packages"
+                            className="flex flex-col items-center -mt-6 min-w-[64px]"
                         >
-                            <Package className="h-6 w-6 text-black" />
-                        </span>
-                        <span
-                            className={cn(
-                                'text-[10px] font-semibold leading-none',
-                                buyDataActive ? 'text-amber-400' : 'text-zinc-400'
-                            )}
-                        >
-                            Buy Data
-                        </span>
-                    </Link>
+                            <span
+                                className={cn(
+                                    'h-14 w-14 rounded-full flex items-center justify-center shadow-lg mb-1 transition-transform active:scale-95',
+                                    buyDataActive ? 'bg-amber-500' : 'bg-amber-400'
+                                )}
+                            >
+                                <Package className="h-6 w-6 text-black" />
+                            </span>
+                            <span
+                                className={cn(
+                                    'text-[10px] font-semibold leading-none',
+                                    buyDataActive ? 'text-amber-400' : 'text-zinc-400'
+                                )}
+                            >
+                                Buy Data
+                            </span>
+                        </Link>
+                    )}
 
                     {/* Right items */}
                     {rightItems.map((item) => {

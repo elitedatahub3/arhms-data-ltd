@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server'
 import { getCachedPublicConfig } from '@/lib/public-config'
-import { PUBLIC_CONFIG_REVALIDATE_SECONDS } from '@/lib/cache-tags'
+
+// Never CDN/browser-cache this response. The underlying config read is already
+// memoized server-side (unstable_cache) and invalidated via revalidateTag on
+// every admin save, so serving it fresh per request is cheap AND lets page-access
+// toggles (e.g. Data Packages) take effect immediately instead of being pinned to
+// a stale edge-cached value for up to an hour.
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
     try {
@@ -8,7 +14,7 @@ export async function GET() {
 
         return NextResponse.json(config.pageAccess, {
             headers: {
-                'Cache-Control': `public, s-maxage=${PUBLIC_CONFIG_REVALIDATE_SECONDS}, stale-while-revalidate=3600`,
+                'Cache-Control': 'no-store, must-revalidate',
             },
         })
     } catch (error) {

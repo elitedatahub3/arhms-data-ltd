@@ -46,7 +46,7 @@ export function usePageAccess() {
 
     const fetchPageAccess = async () => {
         try {
-            const response = await fetch('/api/settings/page-access')
+            const response = await fetch('/api/settings/page-access', { cache: 'no-store' })
             if (!response.ok) throw new Error('Failed to fetch settings')
             const settingsMap = await response.json()
 

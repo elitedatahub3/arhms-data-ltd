@@ -10,7 +10,6 @@ import { DashboardHeader } from '@/components/dashboard/header'
 import { MobileBottomNav } from '@/components/dashboard/mobile-bottom-nav'
 import { PageAccessGuard } from '@/components/dashboard/page-access-guard'
 import { Skeleton } from '@/components/ui/skeleton'
-import { FloatingWhatsApp } from '@/components/floating-whatsapp'
 import { PushNotificationManager } from '@/components/PushNotificationManager'
 import { cn } from '@/lib/utils'
 import { useUI } from '@/contexts/ui-context'
@@ -90,7 +89,6 @@ export default function DashboardLayout({
                     </main>
                     <CopyrightFooter className="bg-background/60" />
                 </div>
-                <FloatingWhatsApp variant="auth" />
                 {/* <SupportChatWidget /> */}
             </div>
         )
@@ -115,7 +113,6 @@ export default function DashboardLayout({
                 </main>
                 <CopyrightFooter className="bg-background/60" />
             </div>
-            <FloatingWhatsApp variant="auth" />
             <MobileBottomNav />
             {/* <SupportChatWidget /> */}
         </div>

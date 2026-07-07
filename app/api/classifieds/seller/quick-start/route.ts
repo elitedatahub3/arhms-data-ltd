@@ -5,13 +5,21 @@ import { sendSMS } from '@/lib/sms-service'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
 
 /**
- * Login-less seller onboarding.
+ * Login-less seller entry point (phone-first).
  *
- * Takes only a phone number and silently provisions (or re-uses) an invisible
- * Supabase account keyed to that phone, marks the user as a seller, sends a
- * welcome SMS, and returns one-time credentials so the client can establish a
- * session via signInWithPassword. The phone is NOT ownership-verified (product
- * decision) — see the plan's security notes.
+ * Takes only a phone number and, depending on whether that phone already owns
+ * an account, returns one of three `mode`s the client acts on:
+ *   - 'signin'         → existing seller: a magic-link token_hash to consume via
+ *                        verifyOtp (does NOT touch their password).
+ *   - 'login_required' → the phone belongs to a non-seller account; the client
+ *                        sends them to normal login instead of silently taking
+ *                        over a buyer account.
+ *   - 'created'        → new phone: an invisible seller account is provisioned
+ *                        and one-time credentials are returned for
+ *                        signInWithPassword.
+ *
+ * The phone is NOT ownership-verified (product decision) — we limit the blast
+ * radius by only auto-signing-in accounts already flagged is_seller.
  */
 export async function POST(request: NextRequest) {
     try {
@@ -27,60 +35,77 @@ export async function POST(request: NextRequest) {
             )
         }
         const normalized = validation.normalizedNumber // 0XXXXXXXXX
+
+        const supabase = createServerClient()
+
+        // 2. Resolve the account by phone (UNIQUE), covering BOTH real-email and
+        //    pseudo-email sellers. phone_number is stored in the same 0… form.
+        const { data: existing } = await supabase
+            .from('users')
+            .select('id, email, is_seller, first_name')
+            .eq('phone_number', normalized)
+            .maybeSingle()
+
+        if (existing) {
+            // Non-seller account owns this phone → don't hijack it without any
+            // verification; hand off to normal login.
+            if (!existing.is_seller) {
+                return NextResponse.json({ mode: 'login_required' }, { status: 200 })
+            }
+
+            // Existing seller → mint a session WITHOUT rotating their password.
+            const { data: link, error: linkErr } = await supabase.auth.admin.generateLink({
+                type: 'magiclink',
+                email: existing.email,
+            })
+
+            if (linkErr || !link?.properties?.hashed_token) {
+                console.error('[QuickStart] generateLink error:', linkErr?.message)
+                return NextResponse.json({ error: 'Could not start seller session' }, { status: 500 })
+            }
+
+            return NextResponse.json(
+                { mode: 'signin', token_hash: link.properties.hashed_token },
+                { status: 200 }
+            )
+        }
+
+        // 3. New phone → provision an invisible seller account.
         const intl = '233' + normalized.slice(1) // 233XXXXXXXXX
         const pseudoEmail = `seller_${intl}@sellers.arhmsgh.com`
         const password = `${randomUUID()}${randomUUID()}`
 
-        const supabase = createServerClient()
+        let userId: string | null = null
+        let firstName = 'Seller'
 
-        // 2. Find an existing invisible account for this phone (public.users mirrors auth.users via trigger)
-        const { data: existing } = await supabase
-            .from('users')
-            .select('id, first_name')
-            .eq('email', pseudoEmail)
-            .maybeSingle()
+        const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+            email: pseudoEmail,
+            password,
+            email_confirm: true,
+            user_metadata: { first_name: 'Seller', phone_number: normalized },
+        })
 
-        let userId = existing?.id ?? null
-        let firstName = existing?.first_name || 'Seller'
+        if (createErr || !created?.user) {
+            // Handle a race where the account was created between the lookup and now
+            const { data: raced } = await supabase
+                .from('users')
+                .select('id, first_name')
+                .eq('email', pseudoEmail)
+                .maybeSingle()
 
-        if (userId) {
-            // Returning phone → rotate the password so we can hand the client a working credential
-            const { error: updErr } = await supabase.auth.admin.updateUserById(userId, { password })
-            if (updErr) {
-                console.error('[QuickStart] updateUserById error:', updErr.message)
-                return NextResponse.json({ error: 'Could not start seller session' }, { status: 500 })
+            if (raced?.id) {
+                userId = raced.id
+                firstName = raced.first_name || 'Seller'
+                await supabase.auth.admin.updateUserById(userId, { password })
+            } else {
+                console.error('[QuickStart] createUser error:', createErr?.message)
+                return NextResponse.json({ error: 'Could not create seller account' }, { status: 500 })
             }
         } else {
-            // New phone → create the invisible auth account (trigger inserts the public.users row)
-            const { data: created, error: createErr } = await supabase.auth.admin.createUser({
-                email: pseudoEmail,
-                password,
-                email_confirm: true,
-                user_metadata: { first_name: 'Seller', phone_number: normalized },
-            })
-
-            if (createErr || !created?.user) {
-                // Handle a race where the account was created between the lookup and now
-                const { data: raced } = await supabase
-                    .from('users')
-                    .select('id, first_name')
-                    .eq('email', pseudoEmail)
-                    .maybeSingle()
-
-                if (raced?.id) {
-                    userId = raced.id
-                    firstName = raced.first_name || 'Seller'
-                    await supabase.auth.admin.updateUserById(userId, { password })
-                } else {
-                    console.error('[QuickStart] createUser error:', createErr?.message)
-                    return NextResponse.json({ error: 'Could not create seller account' }, { status: 500 })
-                }
-            } else {
-                userId = created.user.id
-            }
+            userId = created.user.id
         }
 
-        // 3. Mark seller + store phone on the public.users row
+        // Mark seller + store phone on the public.users row
         const { error: sellerErr } = await supabase
             .from('users')
             .update({ is_seller: true, phone_number: normalized })
@@ -91,15 +116,15 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Could not enable seller status' }, { status: 500 })
         }
 
-        // 4. Welcome SMS (non-fatal)
+        // Welcome SMS (non-fatal, new sellers only)
         const welcomeMessage = `Welcome ${firstName}! 🎉 You are now a seller on ARHMS MARKETPLACE. Start posting items to reach buyers. Visit: arhmsgh.com`
         const smsResult = await sendSMS({ recipient: normalized, message: welcomeMessage })
         if (!smsResult.success) {
             console.warn('[QuickStart] SMS failed (seller still enabled):', smsResult.error)
         }
 
-        // 5. Hand back one-time credentials for the client to sign in with
-        return NextResponse.json({ email: pseudoEmail, password }, { status: 200 })
+        // Hand back one-time credentials for the client to sign in with
+        return NextResponse.json({ mode: 'created', email: pseudoEmail, password }, { status: 200 })
     } catch (error: any) {
         console.error('[QuickStart] Exception:', error?.message)
         return NextResponse.json(

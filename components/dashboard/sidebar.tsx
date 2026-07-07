@@ -447,6 +447,8 @@ export function DashboardSidebar() {
 
                     {userNavItems
                     .filter(item => (!hideMashup || item.label !== 'Special MTN Mashup') && (!hideExpressMtn || item.label !== 'EXPRESS MTN') && (item.label !== 'Developer API' || (dbUser?.role === 'agent' || dbUser?.role === 'dealer' || dbUser?.role === 'admin' || dbUser?.role === 'sub-admin')))
+                    .filter(item => (!hideMashup || item.label !== 'Special MTN Mashup') && (!hideExpressMtn || item.label !== 'EXPRESS MTN'))
+                    .filter(item => isPageAccessible('/dashboard/data-packages') || !item.href.startsWith('/dashboard/data-packages'))
                         .map((item) => {
                         const isExternal = 'external' in item && item.external
                         const isActive = isExternal ? false : isLinkActive(item.href)

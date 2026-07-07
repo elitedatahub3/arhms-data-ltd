@@ -31,7 +31,10 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        const { data: dbUser } = await supabaseAuth.from('users').select('role').eq('id', user.id).single()
+        // Look up the role with the service-role client (keyed by the getUser()-verified
+        // user.id) so the check never depends on an RLS-bound self-read that can return
+        // null and cause a false 403. This route is exempt from the middleware admin gate.
+        const { data: dbUser } = await getAdminSettingsClient().from('users').select('role').eq('id', user.id).single()
         const role = (dbUser as any)?.role
 
         const PUBLIC_SAFE_KEYS = [
@@ -129,7 +132,10 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        const { data: dbUser } = await supabaseAuth.from('users').select('role').eq('id', user.id).single()
+        // Look up the role with the service-role client (keyed by the getUser()-verified
+        // user.id) so the check never depends on an RLS-bound self-read that can return
+        // null and cause a false 403. This route is exempt from the middleware admin gate.
+        const { data: dbUser } = await getAdminSettingsClient().from('users').select('role').eq('id', user.id).single()
         if ((dbUser as any)?.role !== 'admin') {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
         }

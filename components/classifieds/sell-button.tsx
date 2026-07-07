@@ -29,8 +29,11 @@ interface SellButtonProps {
  * "Sell" entry point. Branches on auth state:
  *  - already a seller       -> straight to the seller dashboard
  *  - logged in, not a seller-> phone popup -> /api/classifieds/seller/enable
- *  - not logged in          -> phone popup -> /api/classifieds/seller/quick-start
- *                              (invisible account, no login screen)
+ *  - not logged in          -> phone popup -> /api/classifieds/seller/quick-start,
+ *                              which returns a `mode`:
+ *                                'signin'         -> existing seller: verifyOtp
+ *                                'created'        -> new phone: signInWithPassword
+ *                                'login_required' -> non-seller account: /auth/login
  */
 export function SellButton({ className, children }: SellButtonProps) {
     const router = useRouter()
@@ -76,7 +79,9 @@ export function SellButton({ className, children }: SellButtonProps) {
                     throw new Error(data.error || 'Could not enable selling')
                 }
             } else {
-                // Not logged in — provision an invisible account, then sign in silently
+                // Not logged in — phone decides the path: existing seller signs in,
+                // new phone gets an invisible account, a non-seller account is sent
+                // to normal login.
                 const res = await fetch('/api/classifieds/seller/quick-start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -85,15 +90,30 @@ export function SellButton({ className, children }: SellButtonProps) {
                 const data = await res.json().catch(() => ({}))
                 if (!res.ok) throw new Error(data.error || 'Could not start selling')
 
-                const { error: signInError } = await supabase.auth.signInWithPassword({
-                    email: data.email,
-                    password: data.password,
-                })
-                if (signInError) throw new Error(signInError.message)
+                if (data.mode === 'login_required') {
+                    // A normal (non-seller) account owns this number — log in there.
+                    setOpen(false)
+                    router.push('/auth/login?redirect=/classifieds/seller/dashboard')
+                    return
+                } else if (data.mode === 'signin') {
+                    // Returning seller — consume the magic-link token (keeps their password).
+                    const { error: otpError } = await supabase.auth.verifyOtp({
+                        token_hash: data.token_hash,
+                        type: 'magiclink',
+                    })
+                    if (otpError) throw new Error(otpError.message)
+                } else {
+                    // New phone — sign in with the one-time credentials.
+                    const { error: signInError } = await supabase.auth.signInWithPassword({
+                        email: data.email,
+                        password: data.password,
+                    })
+                    if (signInError) throw new Error(signInError.message)
+                }
             }
 
             await refreshUser()
-            toast.success('You are now a seller! 🎉')
+            toast.success('Welcome to your seller dashboard! 🎉')
             setOpen(false)
             router.push(DASHBOARD)
         } catch (err: any) {
@@ -119,10 +139,10 @@ export function SellButton({ className, children }: SellButtonProps) {
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
-                        <DialogTitle>Become a Seller</DialogTitle>
+                        <DialogTitle>Sell on ARHMS</DialogTitle>
                         <DialogDescription>
-                            Enter your phone number to start selling. We&apos;ll set up your
-                            seller account instantly — no login required.
+                            Enter your phone number. New sellers are set up instantly, and
+                            returning sellers go straight to their dashboard — no password needed.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -148,15 +168,15 @@ export function SellButton({ className, children }: SellButtonProps) {
                             {submitting ? (
                                 <>
                                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                    Setting up your shop…
+                                    Please wait…
                                 </>
                             ) : (
-                                'Become a Seller'
+                                'Continue'
                             )}
                         </Button>
 
                         <p className="text-xs text-muted-foreground text-center">
-                            We&apos;ll send a confirmation SMS to this number.
+                            New sellers get a confirmation SMS to this number.
                         </p>
                     </form>
                 </DialogContent>

@@ -126,10 +126,15 @@ export async function POST(request: NextRequest) {
 
     const userId = authData.user.id
 
-    // 3. Create users table row (with minimal info, filled by sub later)
+    // 3. Ensure the users table row. The `on_auth_user_created` trigger
+    //    (supabase/triggers.sql -> handle_new_user) ALREADY inserts a
+    //    public.users row when the auth user is created above, so a plain
+    //    INSERT here collides on the primary key and fails ("Failed to create
+    //    user record"). Upsert on `id` updates that trigger-created row (and
+    //    still inserts if the trigger is somehow absent), setting the phone.
     const { error: userCreateError } = await supabase
       .from('users')
-      .insert({
+      .upsert({
         id: userId,
         email,
         phone_number: cleanPhone,
@@ -137,7 +142,7 @@ export async function POST(request: NextRequest) {
         last_name: '',
         role: 'customer', // Subs start as customers, auto-upgraded on approval
         status: 'active',
-      })
+      }, { onConflict: 'id' })
 
     if (userCreateError) {
       console.error('[SubAgentSignup] User create error:', userCreateError)
