@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
+import { primaryImageUrl, getUserDisplayNames } from '@/lib/marketplace-messaging'
 
 export async function GET(
     request: NextRequest,
@@ -20,16 +21,21 @@ export async function GET(
         const limit = Math.min(100, parseInt(request.nextUrl.searchParams.get('limit') || '50'))
         const offset = (page - 1) * limit
 
-        // Get conversation
-        const { data: conversation, error: convError } = await supabaseUserClient
+        // Get conversation (+ listing details for the pinned chat header).
+        // These marketplace_* tables aren't in the generated Database types, so
+        // the row infers `never` — cast to any (matches the rest of these routes).
+        const { data: conversationData, error: convError } = await supabaseUserClient
             .from('marketplace_conversations')
-            .select('*')
+            .select(
+                '*, classified_listings(title, price_pesewas, classified_listing_images(storage_path, display_order))'
+            )
             .eq('id', id)
             .single()
 
-        if (convError || !conversation) {
+        if (convError || !conversationData) {
             return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
         }
+        const conversation = conversationData as any
 
         // Check authorization
         if (
@@ -61,8 +67,7 @@ export async function GET(
             .map((m: any) => m.id)
 
         if (unreadMessageIds.length > 0) {
-            await supabaseUserClient
-                .from('marketplace_conversation_messages')
+            await (supabaseUserClient.from('marketplace_conversation_messages') as any)
                 .update({ read_at: new Date().toISOString() })
                 .in('id', unreadMessageIds)
         }
@@ -72,12 +77,22 @@ export async function GET(
                 ? conversation.seller_id
                 : conversation.buyer_id
 
+        const names = await getUserDisplayNames([otherUserId])
+        const listing = (conversation as any).classified_listings
+
         return NextResponse.json({
             success: true,
             conversation: {
                 id: conversation.id,
                 listing_id: conversation.listing_id,
                 other_user_id: otherUserId,
+                other_user: { id: otherUserId, name: names[otherUserId] || 'Marketplace user' },
+                listing: {
+                    id: conversation.listing_id,
+                    title: listing?.title ?? '',
+                    price_pesewas: listing?.price_pesewas ?? 0,
+                    image_url: primaryImageUrl(listing?.classified_listing_images),
+                },
                 created_at: conversation.created_at,
             },
             messages: (messages || []).reverse(),

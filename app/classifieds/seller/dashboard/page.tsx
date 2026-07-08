@@ -26,7 +26,7 @@ export default function SellerDashboardPage() {
         // `user` is momentarily null on first render and we'd bounce a logged-in user.
         if (!authLoading && !user) {
             toast.error('Please log in to access seller dashboard')
-            router.push('/auth/login?redirect=/classifieds/seller/dashboard')
+            router.push('/classifieds/auth/login?redirect=/classifieds/seller/dashboard')
         }
     }, [authLoading, user, router])
 

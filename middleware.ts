@@ -548,8 +548,13 @@ export async function middleware(request: NextRequest) {
 
         // Seller-only routes: /classifieds/seller/*
         if (pathname.startsWith('/classifieds/seller')) {
+            // The seller phone login page is itself a login screen — logged-out
+            // users MUST be able to reach it (otherwise it loops back here).
+            if (pathname === '/classifieds/seller/login') {
+                return addNoCacheHeaders(setCORSHeaders(res, request, origin))
+            }
             if (!authUser) {
-                return addNoCacheHeaders(NextResponse.redirect(new URL(`/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)))
+                return addNoCacheHeaders(NextResponse.redirect(new URL(`/classifieds/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)))
             }
             // TODO: Check if user has is_seller flag in Phase 2
             return addNoCacheHeaders(setCORSHeaders(res, request, origin))
@@ -558,7 +563,7 @@ export async function middleware(request: NextRequest) {
         // Buyer-only routes: /classifieds/buyer/*
         if (pathname.startsWith('/classifieds/buyer')) {
             if (!authUser) {
-                return addNoCacheHeaders(NextResponse.redirect(new URL(`/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)))
+                return addNoCacheHeaders(NextResponse.redirect(new URL(`/classifieds/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)))
             }
             return addNoCacheHeaders(setCORSHeaders(res, request, origin))
         }

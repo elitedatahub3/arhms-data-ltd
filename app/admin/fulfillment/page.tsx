@@ -117,10 +117,6 @@ export default function FulfillmentPage() {
     const [isSyncingEazyData, setIsSyncingEazyData] = useState(false)
     const [eazydataSyncCooldown, setEazydataSyncCooldown] = useState(false)
 
-    // DataKazina MTN Package ID 6 toggle
-    const [mtnPlanId6Enabled, setMtnPlanId6Enabled] = useState(false)
-    const [isSavingMtnPlanId6, setIsSavingMtnPlanId6] = useState(false)
-
     // Cron Settings state
     const [cronRefulfillEnabled, setCronRefulfillEnabled] = useState(false)
     const [cronRefulfillDelay, setCronRefulfillDelay] = useState('5')
@@ -183,7 +179,6 @@ export default function FulfillmentPage() {
                     'cron_auto_refulfill_delay_minutes',
                     'cron_auto_complete_enabled',
                     'cron_auto_complete_delay_minutes',
-                    'dk_mtn_plan_id_6_enabled',
                 ])
 
             const map = (data || []).reduce((acc: any, curr: any) => {
@@ -225,9 +220,6 @@ export default function FulfillmentPage() {
             setCronRefulfillDelay(map.cron_auto_refulfill_delay_minutes || '5')
             setCronAutoCompleteEnabled(map.cron_auto_complete_enabled === 'true')
             setCronAutoCompleteDelay(map.cron_auto_complete_delay_minutes || '30')
-
-            // Load DataKazina MTN Package ID 6 setting
-            setMtnPlanId6Enabled(map.dk_mtn_plan_id_6_enabled === 'true')
         } catch (error) {
             console.error('Failed to fetch settings:', error)
         }
@@ -322,23 +314,6 @@ export default function FulfillmentPage() {
         saveSettings(newSettings)
     }
 
-    const toggleDkMtnPlanId6 = async () => {
-        setIsSavingMtnPlanId6(true)
-        const newValue = !mtnPlanId6Enabled
-        try {
-            const { error } = await (supabase.from('admin_settings') as any).upsert(
-                { key: 'dk_mtn_plan_id_6_enabled', value: String(newValue) },
-                { onConflict: 'key' }
-            )
-            if (error) throw error
-            setMtnPlanId6Enabled(newValue)
-            toast.success(`MTN Package ID 6 ${newValue ? 'enabled' : 'disabled'}`)
-        } catch (err: any) {
-            toast.error('Failed to save setting: ' + err.message)
-        } finally {
-            setIsSavingMtnPlanId6(false)
-        }
-    }
 
 
 
@@ -826,21 +801,6 @@ export default function FulfillmentPage() {
                             <Server className="w-3.5 h-3.5 text-emerald-500" />
                             <span className="text-xs font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">DataKazina Networks</span>
                             <span className="text-[10px] text-muted-foreground">(enabling a network here auto-disables CodeCraft for same network)</span>
-                        </div>
-                        <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5 rounded-lg w-fit">
-                            <Switch
-                                id="dk-mtn-plan-id-6"
-                                checked={mtnPlanId6Enabled}
-                                onCheckedChange={toggleDkMtnPlanId6}
-                                disabled={isSavingMtnPlanId6}
-                                className="scale-75"
-                            />
-                            <label htmlFor="dk-mtn-plan-id-6" className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 cursor-pointer select-none">
-                                Use <span className="font-black">package_id: 6</span> for MTN
-                            </label>
-                            {mtnPlanId6Enabled && (
-                                <span className="text-[10px] bg-emerald-500 text-white px-1.5 py-0.5 rounded-full font-bold">ON</span>
-                            )}
                         </div>
                     </div>
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">

@@ -29,13 +29,14 @@ interface StatusResponse {
     data?: any
 }
 
-// DataKazina network IDs
+// DataKazina network IDs (verified against live /fetch-data-packages feed).
+// NOTE: this account has NO network_id 3. MTN data is sold as "MTN EXPRESS" = network_id 6.
 const NETWORK_IDS: Record<string, number> = {
-    'MTN': 3,
+    'MTN': 6,
     'Telecel': 2,
     'AT-iShare': 1,
     'AT-BigTime': 4,
-    'EXPRESS MTN': 3,
+    'EXPRESS MTN': 6,
 }
 
 // Cache for bundle mappings (will be populated from API or Supabase)
@@ -204,7 +205,8 @@ export async function fulfillOrder(
         }
 
         // --- SIZE NORMALIZATION ---
-        // Try exact match first, then normalized numeric match
+        // The mapped bundleId is used purely as an availability/stock check; the actual purchase
+        // request sends network_id + numeric shared_bundle. Try exact match first, then normalized.
         let bundleId = networkMappings[dataSize]
 
         if (!bundleId) {
@@ -235,7 +237,7 @@ export async function fulfillOrder(
 
         const volumeNumber = Number(volumeValue)
 
-        console.log(`[DataKazina] Fulfillment Start: Order ${orderId} | Network: ${network} (${networkId}) | Package: ${dataSize} (ID: ${bundleId}, Vol: ${volumeNumber})`)
+        console.log(`[DataKazina] Fulfillment Start: Order ${orderId} | Network: ${network} (${networkId}) | Size: ${dataSize} (Vol: ${volumeNumber})`)
         // ---------------------------
 
         // Normalize phone number
@@ -243,31 +245,11 @@ export async function fulfillOrder(
         if (normalizedPhone.startsWith('233')) normalizedPhone = '0' + normalizedPhone.slice(3)
         else if (!normalizedPhone.startsWith('0')) normalizedPhone = '0' + normalizedPhone
 
-        // Check if the admin has enabled the hardcoded package_id: 6 override for standard MTN
-        let mtnPackageId6Enabled = false
-        if (network === 'MTN') {
-            try {
-                const supabase = createServerClient()
-                const { data: setting } = await (supabase.from('admin_settings') as any)
-                    .select('value')
-                    .eq('key', 'dk_mtn_plan_id_6_enabled')
-                    .maybeSingle()
-                mtnPackageId6Enabled = setting?.value === 'true'
-            } catch {
-                // Silently ignore — fall back to standard payload
-            }
-        }
-
         const requestBody: Record<string, any> = {
             recipient_msisdn: normalizedPhone,
             network_id: networkId,
-            shared_bundle: volumeNumber, // ✅ FIX: send the numeric volume, e.g. 15 for "15GB"
+            shared_bundle: volumeNumber, // send the numeric volume, e.g. 15 for "15GB"
             incoming_api_ref: orderId,
-        }
-
-        if (network === 'EXPRESS MTN' || mtnPackageId6Enabled) {
-            requestBody.package_id = 6
-            console.log(`[DataKazina] MTN/EXPRESS MTN override: using package_id=6`)
         }
 
         console.log(`[DataKazina] Request payload:`, sanitizeForLog(requestBody))

@@ -8,18 +8,34 @@ import { toast } from 'sonner'
 
 interface Props {
     label?: string
+    /** Path the OAuth flow returns to. Defaults to the main-domain callback. */
+    callbackPath?: string
+    /** Optional post-login destination, forwarded to the callback as `?next=`. */
+    next?: string
 }
 
-export function GoogleSignInButton({ label = 'Continue with Google' }: Props) {
+export function GoogleSignInButton({
+    label = 'Continue with Google',
+    callbackPath = '/auth/callback',
+    next,
+}: Props) {
     const [isLoading, setIsLoading] = useState(false)
 
     const handleGoogleSignIn = async () => {
         setIsLoading(true)
         try {
+            // Persist the post-login path in a short-lived cookie rather than a
+            // ?next= query param: Supabase matches redirectTo against its allow-list
+            // and a query string can break an exact match, silently falling back to
+            // the Site URL (localhost). Keep redirectTo an EXACT allow-listed URL.
+            if (next) {
+                document.cookie = `mkt_oauth_next=${encodeURIComponent(next)}; path=/; max-age=600; samesite=lax`
+            }
+            const redirectTo = `${window.location.origin}${callbackPath}`
             const { error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
-                    redirectTo: `${window.location.origin}/auth/callback`,
+                    redirectTo,
                     queryParams: {
                         access_type: 'offline',
                         prompt: 'consent',
