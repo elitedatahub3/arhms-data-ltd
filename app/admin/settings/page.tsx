@@ -27,6 +27,7 @@ export default function AdminSettingsPage() {
     const [afaPriceAgent, setAfaPriceAgent] = useState('15')
     const [afaPriceDealer, setAfaPriceDealer] = useState('15')
     const [dealerPromoEnabled, setDealerPromoEnabled] = useState(false)
+    const [landingRcOnlyEnabled, setLandingRcOnlyEnabled] = useState(false)
     const [supportEmail, setSupportEmail] = useState('')
     const [guestStorefrontUrl, setGuestStorefrontUrl] = useState('')
     const [whatsappGroupLink, setWhatsappGroupLink] = useState('')
@@ -55,6 +56,7 @@ export default function AdminSettingsPage() {
     const [hideMashup, setHideMashup] = useState(false)
     const [hideExpressMtn, setHideExpressMtn] = useState(false)
     const [hideStandardMtn, setHideStandardMtn] = useState(false)
+    const [resultsCheckerOnly, setResultsCheckerOnly] = useState(false)
 
     useEffect(() => {
         fetchSettings()
@@ -84,6 +86,7 @@ export default function AdminSettingsPage() {
             setAfaPriceAgent(settingsMap.afa_price_agent || '15')
             setAfaPriceDealer(settingsMap.afa_price_dealer || '15')
             setDealerPromoEnabled(settingsMap.dealer_promo_enabled === 'true')
+            setLandingRcOnlyEnabled(settingsMap.landing_rc_only_enabled === 'true')
             setSupportEmail(settingsMap.support_email || '')
             setGuestStorefrontUrl(settingsMap.guest_storefront_url || `${process.env.NEXT_PUBLIC_APP_URL || ''}/shop/demo`)
             setWhatsappGroupLink(settingsMap.whatsapp_group_link || '')
@@ -115,6 +118,7 @@ export default function AdminSettingsPage() {
             setHideMashup(settingsMap.special_mtn_mashup_hidden === 'true')
             setHideExpressMtn(settingsMap.express_mtn_hidden === 'true')
             setHideStandardMtn(settingsMap.standard_mtn_hidden === 'true')
+            setResultsCheckerOnly(settingsMap.results_checker_only_mode === 'true')
 
         } catch (error) {
             console.error('Error fetching settings:', error)
@@ -136,6 +140,7 @@ export default function AdminSettingsPage() {
                 { key: 'afa_price_agent', value: afaPriceAgent },
                 { key: 'afa_price_dealer', value: afaPriceDealer },
                 { key: 'dealer_promo_enabled', value: String(dealerPromoEnabled) },
+                { key: 'landing_rc_only_enabled', value: String(landingRcOnlyEnabled) },
                 { key: 'support_email', value: supportEmail },
                 { key: 'guest_storefront_url', value: guestStorefrontUrl },
                 { key: 'whatsapp_group_link', value: whatsappGroupLink },
@@ -163,6 +168,7 @@ export default function AdminSettingsPage() {
                 { key: 'special_mtn_mashup_hidden', value: String(hideMashup) },
                 { key: 'express_mtn_hidden', value: String(hideExpressMtn) },
                 { key: 'standard_mtn_hidden', value: String(hideStandardMtn) },
+                { key: 'results_checker_only_mode', value: String(resultsCheckerOnly) },
                 // Classifieds boost fees
                 { key: 'classifieds_boost_fee_7d', value: settings['classifieds_boost_fee_7d'] || '' },
                 { key: 'classifieds_boost_fee_14d', value: settings['classifieds_boost_fee_14d'] || '' },
@@ -295,6 +301,22 @@ export default function AdminSettingsPage() {
                                     placeholder={`${process.env.NEXT_PUBLIC_APP_URL || ''}/shop/your-shop`}
                                 />
                                 <p className="text-xs text-muted-foreground">Changes to this link will instantly update the unauthenticated app pages.</p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Homepage Mode</CardTitle>
+                            <CardDescription>Control which landing page visitors see at the site root.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex items-center justify-between p-4 border rounded-lg">
+                                <div className="space-y-0.5">
+                                    <Label className="text-base">Results-Checker-only homepage</Label>
+                                    <p className="text-sm text-muted-foreground">When ON, the homepage advertises only the Results Checker product. When OFF, the full ARHMS landing page is shown.</p>
+                                </div>
+                                <Switch checked={landingRcOnlyEnabled} onCheckedChange={setLandingRcOnlyEnabled} />
                             </div>
                         </CardContent>
                     </Card>
@@ -823,6 +845,23 @@ export default function AdminSettingsPage() {
                                     checked={hideStandardMtn}
                                     onCheckedChange={setHideStandardMtn}
                                     className="data-[state=checked]:bg-blue-500"
+                                />
+                            </div>
+
+                            <div className="flex items-center justify-between p-4 border rounded-lg border-purple-100 dark:border-purple-900 bg-purple-50/50 dark:bg-purple-900/10">
+                                <div className="space-y-0.5">
+                                    <Label className="text-base text-purple-700 dark:text-purple-400 font-bold flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+                                        Results Checker Only Mode
+                                    </Label>
+                                    <p className="text-sm text-purple-700/60 dark:text-purple-300/60 font-medium">
+                                        When ON, every user's dashboard sidebar shows only the Results Checker link — all other menus (profile, My Shop, admin) are hidden
+                                    </p>
+                                </div>
+                                <Switch
+                                    checked={resultsCheckerOnly}
+                                    onCheckedChange={setResultsCheckerOnly}
+                                    className="data-[state=checked]:bg-purple-500"
                                 />
                             </div>
 

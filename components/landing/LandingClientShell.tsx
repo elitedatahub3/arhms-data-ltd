@@ -356,7 +356,7 @@ export function LandingClientShell({
                                     </span>
                                 ))}
                             </div>
-                            <HeroBtn href="/dashboard/result-checker" variant="primary"><GraduationCap className="w-4 h-4" /> Check Results Now</HeroBtn>
+                            <HeroBtn href="/dashboard/results-checker" variant="primary"><GraduationCap className="w-4 h-4" /> Check Results Now</HeroBtn>
                             <SlideDots current={1} total={SLIDE_COUNT} onDotClick={setSlide} dark={isDark} />
                         </div>
 

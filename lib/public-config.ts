@@ -29,6 +29,7 @@ export interface PublicConfigData {
     pageAccess: Record<string, string>
     storefrontAirtimeSettings: Record<string, string>
     activeSystemAnnouncements: PublicAnnouncementData[]
+    landingRcOnlyEnabled: boolean
 }
 
 const PUBLIC_SETTING_KEYS = [
@@ -75,6 +76,7 @@ const PUBLIC_SETTING_KEYS = [
     'airtime_enabled_mtn',
     'airtime_enabled_telecel',
     'airtime_enabled_at',
+    'landing_rc_only_enabled',
 ] as const
 
 const PAGE_ACCESS_KEYS = PUBLIC_SETTING_KEYS.filter(key => key.startsWith('page_access_'))
@@ -115,6 +117,7 @@ const fallbackConfig: PublicConfigData = {
     pageAccess: {},
     storefrontAirtimeSettings: {},
     activeSystemAnnouncements: [],
+    landingRcOnlyEnabled: false,
 }
 
 let publicConfigClient: SupabaseClient | null = null
@@ -214,6 +217,7 @@ async function fetchPublicConfig(): Promise<PublicConfigData> {
                 message: announcement.message,
                 visible_on: announcement.visible_on,
             })),
+            landingRcOnlyEnabled: settings.landing_rc_only_enabled === 'true',
         }
     } catch {
         console.error('[PublicConfig] Unable to fetch public config; using fallback values')

@@ -9,12 +9,32 @@ const LandingClientShell = dynamic(
     { loading: () => null }
 )
 
+// Alternate homepage that advertises only the Results Checker product.
+// Rendered when the `landing_rc_only_enabled` admin toggle is ON.
+const ResultCheckerLanding = dynamic(
+    () => import('@/components/landing/ResultCheckerLanding').then(m => ({ default: m.ResultCheckerLanding })),
+    { loading: () => null }
+)
+
 // ISR: revalidate every 10 minutes so a new approved shop is picked up quickly
 export const revalidate = 600
 
 export default async function HomePage() {
     // Fetch public config server-side — serializable data only passed to client
     const config = await getPublicConfig()
+
+    // When the admin toggle is ON, the homepage advertises only the Results
+    // Checker product. No guest-store resolution is needed — the CTA links
+    // straight to /dashboard/results-checker.
+    if (config.landingRcOnlyEnabled) {
+        return (
+            <ResultCheckerLanding
+                initialAdminPhone={config.whatsappAdminNumber}
+                initialWhatsappGroupLink={config.whatsappGroupLink}
+                initialWhatsappChannelLink={config.whatsappChannelLink}
+            />
+        )
+    }
 
     // Resolve the guest store URL:
     // 1. Use the admin-configured URL if it's set and not the placeholder

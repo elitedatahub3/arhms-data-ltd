@@ -116,9 +116,10 @@ export function DashboardSidebar() {
     const [providerSaving, setProviderSaving] = useState<'web' | 'shop' | null>(null)
     const [hideMashup, setHideMashup] = useState(false)
     const [hideExpressMtn, setHideExpressMtn] = useState(false)
+    const [resultsCheckerOnly, setResultsCheckerOnly] = useState(false)
 
     useEffect(() => {
-        fetch('/api/admin-settings?keys=special_mtn_mashup_hidden,express_mtn_hidden')
+        fetch('/api/admin-settings?keys=special_mtn_mashup_hidden,express_mtn_hidden,results_checker_only_mode')
             .then(r => r.ok ? r.json() : null)
             .then(data => {
                 if (data && String(data.special_mtn_mashup_hidden) === 'true') {
@@ -126,6 +127,9 @@ export function DashboardSidebar() {
                 }
                 if (data && String(data.express_mtn_hidden) === 'true') {
                     setHideExpressMtn(true)
+                }
+                if (data && String(data.results_checker_only_mode) === 'true') {
+                    setResultsCheckerOnly(true)
                 }
             })
             .catch(() => {})
@@ -299,7 +303,7 @@ export function DashboardSidebar() {
                 </div>
 
                 {/* Profile Widget - Refined & Professional */}
-                {!isCollapsed && dbUser && (
+                {!isCollapsed && dbUser && !resultsCheckerOnly && (
                     dbUser.role === 'dealer' ? (
                         /* Specialized Dealer Profile Widget matching the uploaded image */
                         <div className="mx-4 mt-6 p-4 rounded-2xl bg-black/15 border border-white/10 shadow-lg text-white">
@@ -446,7 +450,7 @@ export function DashboardSidebar() {
                     )}
 
                     {userNavItems
-                    .filter(item => (!hideMashup || item.label !== 'Special MTN Mashup') && (!hideExpressMtn || item.label !== 'EXPRESS MTN') && (item.label !== 'Developer API' || (dbUser?.role === 'agent' || dbUser?.role === 'dealer' || dbUser?.role === 'admin' || dbUser?.role === 'sub-admin')))
+                    .filter(item => !resultsCheckerOnly || item.href === '/dashboard/results-checker')
                     .filter(item => (!hideMashup || item.label !== 'Special MTN Mashup') && (!hideExpressMtn || item.label !== 'EXPRESS MTN'))
                     .filter(item => isPageAccessible('/dashboard/data-packages') || !item.href.startsWith('/dashboard/data-packages'))
                         .map((item) => {
@@ -477,7 +481,7 @@ export function DashboardSidebar() {
                     })}
 
                     {/* My Shop Group — only shown when shop access is enabled */}
-                    {isPageAccessible('/dashboard/shop') && (
+                    {isPageAccessible('/dashboard/shop') && !resultsCheckerOnly && (
                         <>
                             {!isCollapsed && (
                                 <p className={cn(
@@ -545,7 +549,7 @@ export function DashboardSidebar() {
                     )}
 
                     {/* Join Community — appears below My Shop */}
-                    {!isCollapsed && communityLink && (
+                    {!isCollapsed && communityLink && !resultsCheckerOnly && (
                         <a
                             href={communityLink}
                             target="_blank"
@@ -562,7 +566,7 @@ export function DashboardSidebar() {
                             <span className="text-sm font-semibold tracking-tight">Join Community</span>
                         </a>
                     )}
-                    {isCollapsed && communityLink && (
+                    {isCollapsed && communityLink && !resultsCheckerOnly && (
                         <a
                             href={communityLink}
                             target="_blank"
@@ -581,7 +585,7 @@ export function DashboardSidebar() {
                         </a>
                     )}
 
-                    {(isAdmin || isSubAdmin) && (
+                    {(isAdmin || isSubAdmin) && !resultsCheckerOnly && (
                         <>
                             {!isCollapsed && (
                                 <p className={cn(
@@ -632,7 +636,7 @@ export function DashboardSidebar() {
                     )}
 
                     {/* Payment Gateway Widget — admin only */}
-                    {isAdmin && (
+                    {isAdmin && !resultsCheckerOnly && (
                         <div className={cn("mt-6", isCollapsed ? "px-0" : "px-1")}>
                             {isCollapsed ? (
                                 <div className="flex justify-center py-2" title="Payment Gateway">
