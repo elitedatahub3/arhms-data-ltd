@@ -59,6 +59,7 @@ export async function POST(request: Request) {
         const codecraftNetworkSettings = dbFulfillmentSettings.codecraft_networks || {}
         const kingflexyNetworkSettings = dbFulfillmentSettings.kingflexy_networks || {}
         const eazydataNetworkSettings = dbFulfillmentSettings.eazydata_networks || {}
+        const agentportalNetworkSettings = dbFulfillmentSettings.agentportal_networks || {}
 
         // Construct query to find pending orders
         let query = supabaseAdmin
@@ -90,6 +91,7 @@ export async function POST(request: Request) {
         const { fulfillOrder: ccFulfillOrder } = await import('@/lib/codecraft-service')
         const { fulfillOrder: kfFulfillOrder } = await import('@/lib/kingflexy-service')
         const { fulfillOrder: edFulfillOrder } = await import('@/lib/eazydata-service')
+        const { fulfillOrder: apFulfillOrder } = await import('@/lib/agentportal-service')
 
         // Process each pending order safely
         for (const order of pendingOrders) {
@@ -97,16 +99,17 @@ export async function POST(request: Request) {
             const isCodeCraftEnabled = codecraftNetworkSettings[order.network] === true
             const isKingFlexyEnabled = kingflexyNetworkSettings[order.network] === true
             const isEazyDataEnabled = eazydataNetworkSettings[order.network] === true
+            const isAgentPortalEnabled = agentportalNetworkSettings[order.network] === true
 
             // No supplier enabled → skip
-            if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled) {
+            if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled) {
                 console.log(`[ManualRefulfill] Skipping order ${order.id}: No active supplier for network ${order.network}.`)
                 skipped++
                 continue
             }
 
             // Multiple suppliers enabled → conflict guard, skip
-            const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled].filter(Boolean).length
+            const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled, isAgentPortalEnabled].filter(Boolean).length
             if (activeCount > 1) {
                 console.error(`[ManualRefulfill] CONFLICT: Multiple suppliers active for ${order.network} on order ${order.id}. Skipping.`)
                 await sendAdminNewOrderAlert({
@@ -126,7 +129,7 @@ export async function POST(request: Request) {
             }
 
             // Determine which supplier will handle this order
-            const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : 'datakazina'
+            const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : isAgentPortalEnabled ? 'agentportal' : 'datakazina'
 
             // ATOMIC LOCK: Try to update this specific order from 'pending' to 'processing'
             // If another process/request already took it, this will return 0 rows
@@ -163,6 +166,8 @@ export async function POST(request: Request) {
                 result = await kfFulfillOrder(order.network, order.phone_number, order.size, order.id)
             } else if (isEazyDataEnabled) {
                 result = await edFulfillOrder(order.network, order.phone_number, order.size, order.id)
+            } else if (isAgentPortalEnabled) {
+                result = await apFulfillOrder(order.network, order.phone_number, order.size, order.id)
             } else {
                 result = await fulfillOrder(order.network, order.phone_number, order.size, order.id)
             }
@@ -199,6 +204,7 @@ export async function POST(request: Request) {
                     if (isCodeCraftEnabled) refUpdate.codecraft_reference = result.transactionId
                     else if (isKingFlexyEnabled) refUpdate.kingflexy_reference = result.transactionId
                     else if (isEazyDataEnabled) refUpdate.eazydata_reference = result.transactionId
+                    else if (isAgentPortalEnabled) refUpdate.agentportal_reference = result.transactionId
                     else refUpdate.dakazina_reference = result.transactionId
                 }
                 if (Object.keys(refUpdate).length > 0) {
@@ -222,6 +228,9 @@ export async function POST(request: Request) {
                     }
                     if (isEazyDataEnabled && result.transactionId) {
                         shopOrderUpdate.eazydata_reference = result.transactionId
+                    }
+                    if (isAgentPortalEnabled && result.transactionId) {
+                        shopOrderUpdate.agentportal_reference = result.transactionId
                     }
                     await supabaseAdmin
                         .from('shop_orders')

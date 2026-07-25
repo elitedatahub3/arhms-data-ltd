@@ -86,9 +86,10 @@ CREATE TABLE IF NOT EXISTS public.orders (
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
   payment_status TEXT DEFAULT 'paid' CHECK (payment_status IN ('paid', 'refunded')),
   reference_code TEXT NOT NULL UNIQUE,
-  fulfillment_method TEXT DEFAULT 'auto' CHECK (fulfillment_method IN ('auto', 'manual', 'codecraft', 'datakazina', 'kingflexy', 'eazydata')),
+  fulfillment_method TEXT DEFAULT 'auto' CHECK (fulfillment_method IN ('auto', 'manual', 'codecraft', 'datakazina', 'kingflexy', 'eazydata', 'agentportal')),
   codecraft_reference TEXT,
   dakazina_reference TEXT,
+  agentportal_reference TEXT,
   error_message TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
