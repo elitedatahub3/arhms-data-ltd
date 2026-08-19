@@ -1883,38 +1883,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     className={SHEET_FIELD_CLASS}
                                 />
                             </div>
-
-                            {/* Gateway picker, in the chip row the sheet uses for the paying
-                                network. The dot stays neutral until picked — these are
-                                gateways, not networks, so there is no brand colour to show. */}
-                            <div className="space-y-2">
-                                <Label className={SHEET_LABEL_CLASS}>Pay with</Label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {([
-                                        { id: 'moolre', label: 'Moolre' },
-                                        { id: 'hubtel', label: 'Hubtel' },
-                                        { id: 'paystack', label: 'Paystack' },
-                                    ] as const).map(({ id, label }) => (
-                                        <button
-                                            key={id}
-                                            type="button"
-                                            onClick={() => setWebPaymentProvider(id)}
-                                            className={cn(
-                                                'flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-bold transition-all',
-                                                webPaymentProvider === id
-                                                    ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
-                                                    : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
-                                            )}
-                                        >
-                                            <span className={cn(
-                                                'w-2.5 h-2.5 rounded-full shrink-0',
-                                                webPaymentProvider === id ? 'bg-[var(--brand-color)]' : 'bg-gray-300 dark:bg-gray-600'
-                                            )} />
-                                            {label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
                         </div>
 
                         {/* Cost + action, pinned like the sheet's action bar. Unlike a bundle
