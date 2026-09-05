@@ -5,10 +5,11 @@ import { isUtilityVisibleTo, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-inte
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import {
-    queryUtilityAccount,
     UTILITY_SERVICES,
     isUtilityService,
 } from '@/lib/hubtel-utility-service'
+// The catalogue above stays; the network call comes from the provider seam.
+import { queryUtilityAccount } from '@/lib/utility-provider'
 
 /**
  * Resolves a utility account number to the customer's name before they pay.
