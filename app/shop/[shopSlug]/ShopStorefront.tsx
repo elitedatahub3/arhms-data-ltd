@@ -6,13 +6,14 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import StorefrontUtilities from '@/components/shop/storefront-utilities'
 import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
 import {
     Phone, Mail, MessageCircle, ShoppingCart, Loader2,
     CheckCircle2, AlertCircle, X, Search, Zap, Smartphone, ChevronDown, Check, Menu, Bell,
     History, TrendingUp, Coins, Calendar, CalendarRange, RefreshCw, Info, Clock, Copy, ArrowRight, AlertTriangle, Users, Target, Sparkles, Download, Share2, GraduationCap, Store, BadgeCheck
-} from 'lucide-react'
+, Receipt } from 'lucide-react'
 import {
     ID_TYPES, REGIONS, AFA_REQUIRED_FIELDS, MIN_AFA_AGE,
     validateId, maskIdNumber, ageFromDob, maxDobInputValue,
@@ -93,6 +94,7 @@ interface ShopData {
     banner_pos_x?: number
     banner_pos_y?: number
     banner_zoom?: number
+    utilities_enabled?: boolean
     ussd_code?: string | null
     ussd_status?: string | null
 }
@@ -195,7 +197,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     
     // Global State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-    const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa'>('data')
+    const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
     const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
     const [loading, setLoading] = useState(false)
     const [pageLoading, setPageLoading] = useState(true)
@@ -217,7 +219,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     const beneficiaryRef = useRef<HTMLInputElement>(null)
     const [otpCode, setOtpCode] = useState('')
     const [otpReference, setOtpReference] = useState<string | null>(null)
-    const [otpOrderType, setOtpOrderType] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa'>('data')
+    const [otpOrderType, setOtpOrderType] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
 
     // Results Checker State
     const [rcTypes, setRcTypes] = useState<any[]>([])
@@ -1441,6 +1443,24 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">AFA REGISTRATION</span>
                         </button>
                     )}
+
+                    {/* PAY BILLS Button — only when the owner has switched it on */}
+                    {shop.utilities_enabled && (
+                        <button
+                            onClick={() => { setActiveTab('utilities'); setIsAirtimeOpen(false) }}
+                            className={cn(
+                                "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
+                                activeTab === 'utilities'
+                                    ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400"
+                                    : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
+                            )}
+                        >
+                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'utilities' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
+                                <Receipt className={cn("w-6 h-6", activeTab === 'utilities' ? "text-white" : "text-gray-400")} />
+                            </div>
+                            <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">PAY BILLS</span>
+                        </button>
+                    )}
                 </div>
 
                 {/* Error banner */}
@@ -1798,6 +1818,18 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 <p className="text-[10px] text-center text-muted-foreground">Direct MoMo Prompt</p>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {/* ── Utilities (Pay Bills) Tab Content ── */}
+                {shop.utilities_enabled && activeTab === 'utilities' && (
+                    <div className="bg-white dark:bg-[#151c2c] rounded-2xl border border-gray-100 dark:border-gray-800 p-4 sm:p-6">
+                        <h2 className="text-lg font-black mb-1">Pay a bill</h2>
+                        <p className="text-xs text-gray-500 mb-4">
+                            DSTV, GOtv, StarTimes, ECG and Ghana Water. Verify the account first —
+                            bill payments cannot be reversed.
+                        </p>
+                        <StorefrontUtilities shopSlug={shop.shop_slug} brandColor={shop.brand_color} />
                     </div>
                 )}
 
