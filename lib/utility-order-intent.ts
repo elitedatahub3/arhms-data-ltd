@@ -48,12 +48,14 @@ export function isUtilityVisibleTo(
  * part: it is the only thing standing between a mistyped digit and a stranger's bill.
  */
 import {
-    queryUtilityAccount,
     resolveDestination,
     UTILITY_SERVICES,
     isUtilityService,
     type UtilityService,
 } from '@/lib/hubtel-utility-service'
+// The catalogue above stays; the account verification call comes from the provider
+// seam, so which upstream verifies is decided in one place.
+import { queryUtilityAccount } from '@/lib/utility-provider'
 
 export interface UtilityIntentInput {
     service: unknown

@@ -18,10 +18,10 @@ import { createServerClient } from '@/lib/supabase'
 import { triggerUtilityFulfillment, buildUtilityClientReference } from '@/lib/utility-fulfillment-dispatcher'
 import { finalizeUtilityOrder } from '@/lib/utility-order-completion'
 import {
-    queryUtilityAccount,
     UTILITY_SERVICES,
     isUtilityService,
 } from '@/lib/hubtel-utility-service'
+import { queryUtilityAccount } from '@/lib/utility-provider'
 import { sendPushToAdmins } from '@/lib/web-push'
 
 export interface UtilitySettleResult {

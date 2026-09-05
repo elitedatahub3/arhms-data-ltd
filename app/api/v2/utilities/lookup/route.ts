@@ -4,7 +4,8 @@ import {
     logApiRequest, getClientIp, enforceRateLimit,
 } from '@/lib/api-auth'
 import { isUtilityVisibleTo, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-intent'
-import { queryUtilityAccount, UTILITY_SERVICES } from '@/lib/hubtel-utility-service'
+import { UTILITY_SERVICES } from '@/lib/hubtel-utility-service'
+import { queryUtilityAccount } from '@/lib/utility-provider'
 import {
     BILLER_KEYS, isBillerKey, serviceForBiller, toLookupPayload, lookupFailureStatus,
 } from '@/lib/api-v2-billers'
