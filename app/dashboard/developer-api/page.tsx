@@ -86,6 +86,7 @@ const LANGS: { id: Lang; label: string }[] = [
     { id: 'php',        label: 'PHP'        },
 ]
 
+const KEY  = 'YOUR_API_KEY'
 // Apex, NOT www. www.arhmsgh.com answers every /api request with a 307 to the apex,
 // and a cross-host redirect makes clients drop the Authorization header -- curl and
 // axios both do, by design. A partner copying a www sample gets 401 no matter how
@@ -306,7 +307,7 @@ export default function DeveloperApiPage() {
     }, [fetchKeys, fetchLogs, fetchCommission])
 
     useEffect(() => {
-        if (dbUser && dbUser.role !== 'agent' && dbUser.role !== 'admin' && dbUser.role !== 'sub-admin') {
+        if (dbUser && dbUser.role !== 'agent' && dbUser.role !== 'dealer' && dbUser.role !== 'admin' && dbUser.role !== 'sub-admin') {
             router.push('/dashboard/upgrade')
         }
     }, [dbUser, router])
