@@ -28,6 +28,22 @@ const STALE_MINUTES = 2
 const ALERT_CUTOFF_MINUTES = 60
 const BATCH = 25
 
+/**
+ * How old a paid-but-undispatched order may be before this sweep will still send it.
+ *
+ * Both reconciliation crons used to filter on `dispatch_claimed_at IS NOT NULL`, so
+ * an order that was PAID but never dispatched was invisible to them permanently. Two
+ * real ECG payments sat that way — one for 17 days — because the dispatcher exits on
+ * the auto-fulfilment flag BEFORE it claims, leaving provider and
+ * dispatch_claimed_at null. Nothing else in the system ever looks at those rows.
+ *
+ * Bounded rather than unlimited on purpose. Paying a days-old bill is its own kind of
+ * wrong: the customer has very likely paid it elsewhere by then, and a bill payment
+ * cannot be recalled. Inside the window the customer is still waiting; outside it, a
+ * human decides between fulfilling and refunding.
+ */
+const RESCUE_WINDOW_HOURS = 24
+
 export async function GET(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
     if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -35,7 +51,7 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createServerClient() as any
-    const results = { checked: 0, completed: 0, failed: 0, pending: 0, flagged: 0, errors: [] as string[] }
+    const results = { checked: 0, completed: 0, failed: 0, pending: 0, rescued: 0, flagged: 0, errors: [] as string[] }
 
     try {
         const staleCutoff = new Date(Date.now() - STALE_MINUTES * 60 * 1000).toISOString()
@@ -117,6 +133,52 @@ export async function GET(request: NextRequest) {
             }
 
             results.pending++
+        }
+
+        // ── Paid but never dispatched ────────────────────────────────────────
+        // Distinct from the sweep above, which chases orders already sent. These were
+        // charged and then dropped — the dispatcher returned before claiming, so they
+        // carry no provider and no claim stamp and no other code path will ever look
+        // at them again.
+        const rescueFloor = new Date(Date.now() - RESCUE_WINDOW_HOURS * 3600 * 1000).toISOString()
+
+        const { data: undispatched } = await supabase
+            .from('utility_orders')
+            .select('id, reference_code, service, bill_amount, account_number, created_at')
+            .eq('status', 'pending')
+            .eq('payment_status', 'paid')
+            .is('dispatch_claimed_at', null)
+            .lt('created_at', new Date(Date.now() - STALE_MINUTES * 60 * 1000).toISOString())
+            .order('created_at', { ascending: true })
+            .limit(BATCH)
+
+        for (const order of (undispatched || [])) {
+            const label = isUtilityService(order.service) ? UTILITY_SERVICES[order.service].label : order.service
+            results.checked++
+
+            if (order.created_at < rescueFloor) {
+                // Too old to send unasked. Surface it once and leave the call to a
+                // human — see RESCUE_WINDOW_HOURS.
+                results.flagged++
+                await sendPushToAdmins({
+                    title: '⚠️ Paid bill was never sent',
+                    body: `${order.reference_code}: ${label} GHS ${Number(order.bill_amount).toFixed(2)} → ${order.account_number} was charged but never dispatched, and is now over ${RESCUE_WINDOW_HOURS}h old. Fulfil or refund it by hand.`,
+                    url: '/admin/utilities',
+                }).catch(() => {})
+                continue
+            }
+
+            // triggerUtilityFulfillment is the only safe way to send one: it claims
+            // dispatch_claimed_at with a conditional UPDATE first, so this racing the
+            // admin Retry button cannot pay the same bill twice.
+            const { triggerUtilityFulfillment } = await import('@/lib/utility-fulfillment-dispatcher')
+            const sent = await triggerUtilityFulfillment(order.id)
+            if (sent.dispatched) {
+                results.rescued++
+                console.log(`[CronKfUtility] Rescued undispatched order ${order.reference_code}`)
+            } else {
+                results.errors.push(`${order.reference_code}: ${sent.reason}`)
+            }
         }
 
         return NextResponse.json({ success: true, ...results })
