@@ -18,6 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPushToUser } from '@/lib/web-push'
 import { UTILITY_SERVICES, isUtilityService } from '@/lib/hubtel-utility-service'
 import { creditCommissionForOrder } from '@/lib/commission-earning'
+import { creditResellersForOrder } from '@/lib/utility-shop-earning'
 import { queueApiWebhook } from '@/lib/api-webhook'
 
 export type UtilityFinalStatus = 'processing' | 'completed' | 'failed' | 'refunded'
@@ -175,6 +176,9 @@ export async function finalizeUtilityOrder(
     // 'completed' call paid no bill and earns nothing.
     if (finalStatus === 'completed') {
         await creditCommissionForOrder({ orderId })
+        // Storefront sales only — pays the selling shop and its upline the margin
+        // they were snapshotted for at checkout. A no-op on a dashboard order.
+        await creditResellersForOrder({ orderId })
     }
 
     // Tell the partner, if this order came from an API key with a webhook configured.

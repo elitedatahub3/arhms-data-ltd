@@ -17,6 +17,7 @@ import {
     type MomoChargeResult,
 } from '@/lib/paystack-momo-checkout'
 import { buildUtilityIntent, utilitySettingKeys, isUtilityVisibleTo, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-intent'
+import { computeUtilityMarkup } from '@/lib/utility-shop-pricing'
 
 /**
  * Direct-pay (MoMo / card) utility bill payment.
@@ -43,14 +44,6 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        const supabaseUserClient = await createRouteHandlerClient()
-        const { data: { user: authUser }, error: authError } = await supabaseUserClient.auth.getUser()
-
-        if (authError || !authUser) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const userId = authUser.id
         const supabase = createServerClient() as any
 
         let body: any
@@ -63,10 +56,46 @@ export async function POST(request: NextRequest) {
         const {
             service, accountNumber, amount, phone, email,
             momoPhone, momoNetwork, otpCode, reference: existingRef,
+            shopSlug,
         } = body
 
         if (typeof service !== 'string') {
             return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+        }
+
+        // ── Who is buying ────────────────────────────────────────────────────
+        // Two callers share this route. A signed-in customer buys for themselves.
+        // A storefront buyer is a GUEST — there is no session to read — so the shop
+        // owner stands as the account of record, exactly as storefront data and
+        // airtime orders do. Everything downstream (wallet, role-based platform fee,
+        // order ownership) then works unchanged.
+        let userId: string
+        let shop: { id: string; name: string; owner_id: string; utility_fee_percent: number; utilities_enabled: boolean } | null = null
+
+        if (typeof shopSlug === 'string' && shopSlug.trim()) {
+            const { data: shopRow } = await supabase
+                .from('shop_profiles')
+                .select('id, name, owner_id, utility_fee_percent, utilities_enabled, approval_status, is_active')
+                .eq('slug', shopSlug.trim())
+                .maybeSingle()
+
+            if (!shopRow || shopRow.approval_status !== 'approved' || shopRow.is_active !== true) {
+                return NextResponse.json({ error: 'Shop not found' }, { status: 404 })
+            }
+            if (shopRow.utilities_enabled !== true) {
+                return NextResponse.json({ error: 'This shop does not accept bill payments.' }, { status: 403 })
+            }
+
+            shop = shopRow
+            userId = shopRow.owner_id
+        } else {
+            const supabaseUserClient = await createRouteHandlerClient()
+            const { data: { user: authUser }, error: authError } = await supabaseUserClient.auth.getUser()
+
+            if (authError || !authUser) {
+                return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+            }
+            userId = authUser.id
         }
 
         // â”€â”€ Load profile + settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -102,7 +131,33 @@ export async function POST(request: NextRequest) {
         // â”€â”€ Gateway fee on top of our own fee â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Same rule as the data checkout: Paystack and Hubtel charge us, Moolre and
         // PaySwitch charge the payer directly.
-        const subtotal = intent.totalPaid
+        // ── Reseller margin ──────────────────────────────────────────────────
+        // Only on a storefront sale. computeUtilityMarkup enforces the one rule that
+        // matters — platform fee plus every reseller margin never exceeds the cap —
+        // and returns the split already trimmed to fit, so what is added here can
+        // never put the customer over it.
+        const markup = shop
+            ? await computeUtilityMarkup(supabase, {
+                shopId: shop.id,
+                service: intent.service,
+                ownerRole: userRole,
+                billAmount: intent.billAmount,
+            })
+            : null
+
+        const resellerFee = markup ? markup.resellerAmount : 0
+
+        if (markup?.trimmed) {
+            // The customer is charged the capped figure regardless; this says the
+            // configuration asked for more than the cap allows, which an admin
+            // should straighten out.
+            console.warn(
+                `[UtilityGatewayInit] Shop ${shop?.id} markup trimmed to the ${markup.capPercent}% cap ` +
+                `on ${intent.service} (wanted more than ${markup.resellerPercent}%).`
+            )
+        }
+
+        const subtotal = parseFloat((intent.totalPaid + resellerFee).toFixed(2))
         let gatewayFee = 0
         let totalAmount = subtotal
 
@@ -178,6 +233,22 @@ export async function POST(request: NextRequest) {
             bill_amount: intent.billAmount,
             fee_rate: intent.feeRate,
             fee_amount: intent.feeAmount,
+
+            // Storefront only. The split is SNAPSHOTTED here, at the moment the
+            // customer is quoted, and paid out from this copy when the bill settles
+            // — which may be hours later, by which time a Lead could have changed
+            // their margin or a sub could have left the chain.
+            ...(shop ? {
+                shop_id: shop.id,
+                shop_name: shop.name,
+                reseller_fee_amount: resellerFee,
+                reseller_split: markup?.legs.map(l => ({
+                    shop_id: l.shopId,
+                    owner_id: l.ownerId,
+                    percent: l.percent,
+                    amount: l.amount,
+                })) ?? [],
+            } : {}),
         }
 
         if (!paymentId) {

@@ -236,5 +236,15 @@ function buildOrderRow(
         status,
         reference_code: payment.reference,
         client_reference: buildUtilityClientReference(payment.reference),
+
+        // ── Storefront attribution ───────────────────────────────────────────
+        // Absent on a dashboard sale, in which case these stay null and no reseller
+        // is ever paid. The split was computed and snapshotted when the customer was
+        // quoted; it is carried through the payment metadata rather than recomputed
+        // here, because by settlement time a Lead may have changed their margin.
+        shop_id: meta.shop_id ?? null,
+        shop_name: meta.shop_name ?? null,
+        reseller_fee_amount: Number(meta.reseller_fee_amount ?? 0),
+        reseller_split: meta.reseller_split ?? null,
     }
 }
