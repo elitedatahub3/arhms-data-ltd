@@ -95,9 +95,23 @@ export default function StorefrontUtilities({
             const json = await res.json()
             if (!res.ok) { setError(json.error || 'Could not verify that account'); setLookup(null); return }
             setLookup(json)
-            // ECG returns a list; preselect the first so the common single-meter case
-            // needs no extra tap, but the customer can still change it.
-            if (json.meters?.length) setChosenMeter(json.meters[0].meterNumber)
+            // ECG returns every meter on the phone. Honour one the customer typed
+            // themselves when it is genuinely on that phone, and only fall back to
+            // preselecting the first — overwriting a typed meter would silently pay
+            // a different one, and a bill payment cannot be reversed.
+            if (json.meters?.length) {
+                const typed = account.replace(/\s+/g, '').toLowerCase()
+                const match = json.meters.find(
+                    (m: Meter) => m.meterNumber.replace(/\s+/g, '').toLowerCase() === typed
+                )
+                if (match) setChosenMeter(match.meterNumber)
+                else if (!typed) setChosenMeter(json.meters[0].meterNumber)
+                // Typed a meter that is not on this phone: select nothing and make
+                // them choose. Falling back to the first meter here would pay a
+                // DIFFERENT customer's bill than the one they typed, and there is no
+                // way to reverse it.
+                else setChosenMeter('')
+            }
         } catch {
             setError('Something went wrong. Please try again.')
         } finally {
@@ -216,18 +230,27 @@ export default function StorefrontUtilities({
                     </div>
                 )}
 
-                {!isEcg && (
-                    <div>
-                        <label className="block text-sm font-medium mb-1">{def.hint}</label>
-                        <input
-                            value={account}
-                            onChange={e => { setAccount(e.target.value); reset() }}
-                            placeholder={def.hint}
-                            inputMode="numeric"
-                            className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
-                        />
-                    </div>
-                )}
+                {/* Shown for ECG too, matching the dashboard. Hiding it forced a
+                    customer who already knows their meter number through a phone
+                    lookup they did not need — and a phone with no meters registered
+                    then looks like a broken shop rather than the wrong number. */}
+                <div>
+                    <label className="block text-sm font-medium mb-1">
+                        {isEcg ? 'Meter Number' : def.hint}
+                    </label>
+                    <input
+                        value={account}
+                        onChange={e => { setAccount(e.target.value); reset() }}
+                        placeholder={isEcg ? 'Meter Number' : def.hint}
+                        inputMode="numeric"
+                        className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                    />
+                    {isEcg && (
+                        <p className="text-[11px] text-gray-400 mt-1">
+                            Type it, or pick one of the meters on your ECG Power App number.
+                        </p>
+                    )}
+                </div>
 
                 <button
                     type="button"
@@ -253,6 +276,17 @@ export default function StorefrontUtilities({
                 <div className="space-y-4">
                     {lookup.meters.length > 0 ? (
                         <div>
+                            {/* Only when they typed a meter that is not on this phone.
+                                Says which, rather than quietly selecting another one. */}
+                            {account.trim() && !chosenMeter && (
+                                <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
+                                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                                    <span>
+                                        Meter <span className="font-mono font-bold">{account.trim()}</span> is not
+                                        registered to {phone || 'that phone number'}. Check the number, or pick one below.
+                                    </span>
+                                </div>
+                            )}
                             <label className="block text-sm font-semibold mb-2">
                                 Choose the meter
                             </label>
