@@ -70,13 +70,13 @@ export async function POST(request: NextRequest) {
         // airtime orders do. Everything downstream (wallet, role-based platform fee,
         // order ownership) then works unchanged.
         let userId: string
-        let shop: { id: string; name: string; owner_id: string; utility_fee_percent: number; utilities_enabled: boolean } | null = null
+        let shop: { id: string; shop_name: string; owner_id: string; utility_fee_percent: number; utilities_enabled: boolean } | null = null
 
         if (typeof shopSlug === 'string' && shopSlug.trim()) {
             const { data: shopRow } = await supabase
                 .from('shop_profiles')
-                .select('id, name, owner_id, utility_fee_percent, utilities_enabled, approval_status, is_active')
-                .eq('slug', shopSlug.trim())
+                .select('id, shop_name, owner_id, utility_fee_percent, utilities_enabled, approval_status, is_active')
+                .eq('shop_slug', shopSlug.trim())
                 .maybeSingle()
 
             if (!shopRow || shopRow.approval_status !== 'approved' || shopRow.is_active !== true) {
@@ -241,7 +241,7 @@ export async function POST(request: NextRequest) {
             // their margin or a sub could have left the chain.
             ...(shop ? {
                 shop_id: shop.id,
-                shop_name: shop.name,
+                shop_name: shop.shop_name,
                 reseller_fee_amount: resellerFee,
                 reseller_split: markup?.legs.map(l => ({
                     shop_id: l.shopId,

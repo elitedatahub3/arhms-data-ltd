@@ -91,7 +91,7 @@ interface ShopRow {
     owner_id: string
     utility_fee_percent: number | null
     utilities_enabled: boolean | null
-    name?: string | null
+    shop_name?: string | null
 }
 
 /**
@@ -104,7 +104,7 @@ interface ShopRow {
 async function resolveChainShops(db: any, sellingShopId: string): Promise<ShopRow[]> {
     const { data: shop } = await db
         .from('shop_profiles')
-        .select('id, owner_id, name, utility_fee_percent, utilities_enabled')
+        .select('id, owner_id, shop_name, utility_fee_percent, utilities_enabled')
         .eq('id', sellingShopId)
         .maybeSingle()
 
@@ -116,7 +116,7 @@ async function resolveChainShops(db: any, sellingShopId: string): Promise<ShopRo
     for (const a of ancestors) {
         const { data: up } = await db
             .from('shop_profiles')
-            .select('id, owner_id, name, utility_fee_percent, utilities_enabled')
+            .select('id, owner_id, shop_name, utility_fee_percent, utilities_enabled')
             .eq('id', a.shopId)
             .maybeSingle()
         if (up) chain.push(up as ShopRow)

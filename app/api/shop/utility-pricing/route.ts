@@ -26,7 +26,7 @@ async function ownedShop(request: NextRequest) {
     const db = createServerClient() as any
     const { data: shop } = await db
         .from('shop_profiles')
-        .select('id, owner_id, name, utility_fee_percent, utilities_enabled')
+        .select('id, owner_id, shop_name, utility_fee_percent, utilities_enabled')
         .eq('owner_id', user.id)
         .maybeSingle()
 
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            shop: { id: shop.id, name: shop.name },
+            shop: { id: shop.id, name: shop.shop_name },
             fee_percent: Number(shop.utility_fee_percent || 0),
             utilities_enabled: shop.utilities_enabled === true,
             cap_percent: await resolveMarkupCap(db),
