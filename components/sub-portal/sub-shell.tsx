@@ -24,6 +24,7 @@ import {
   ClipboardList,
   Crown,
   Tag,
+  Receipt,
   User,
   Download,
   ExternalLink,
@@ -56,6 +57,7 @@ const NAV = [
   { href: '/dashboard/sub/afa', label: 'AFA Registration', icon: BadgeCheck },
   { href: '/dashboard/sub/rc', label: 'Results Checker', icon: GraduationCap },
   { href: '/dashboard/sub/pricing', label: 'Pricing', icon: Tag },
+  { href: '/dashboard/sub/utilities', label: 'Bill Payments', icon: Receipt },
   { href: '/dashboard/sub/profile', label: 'Profile', icon: User },
   { href: '/dashboard/sub/install', label: 'Install App', icon: Download },
 ]
