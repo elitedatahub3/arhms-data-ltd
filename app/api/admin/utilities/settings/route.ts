@@ -16,6 +16,22 @@ const UTILITY_SETTING_KEYS: string[] = [
     'utility_auto_fulfillment_enabled',
     'utility_public_launch',
     'page_access_utilities',
+
+    // Where bills can be bought. The master gate above answers "open to anyone but
+    // an admin"; these two answer "open on this surface", and a storefront can be
+    // shut without touching the dashboard.
+    'utility_dashboard_enabled',
+    'utility_storefront_enabled',
+
+    // The ceiling on what a customer pays over the face value of a bill — platform
+    // fee plus every reseller margin. Enforced in lib/utility-shop-pricing.ts.
+    'utility_total_markup_cap_percent',
+
+    // Commission Services API: the partner's cut of the commission the provider
+    // pays us, and the amount bounds /api/v2/utilities/pay enforces.
+    'commission_share_percent',
+    'utility_api_min_amount',
+    'utility_api_max_amount',
     ...UTILITY_SERVICE_KEYS.flatMap(service => [
         `utility_enabled_${service}`,
         `utility_auto_${service}`,

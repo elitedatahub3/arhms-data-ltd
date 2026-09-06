@@ -169,6 +169,10 @@ export default function AdminUtilitiesPage() {
 
     const autoMasterOn = settings['utility_auto_fulfillment_enabled'] === 'true'
     const launchedOn = settings['utility_public_launch'] === 'true'
+    // Absent counts as OPEN for these two, unlike the master gate where absent means
+    // closed — they only narrow something that is already open.
+    const dashboardOn = settings['utility_dashboard_enabled'] !== 'false'
+    const storefrontOn = settings['utility_storefront_enabled'] !== 'false'
 
     return (
         <div className="space-y-6 pb-24">
@@ -381,6 +385,71 @@ export default function AdminUtilitiesPage() {
                                         checked={autoMasterOn}
                                         onCheckedChange={v => setSetting('utility_auto_fulfillment_enabled', String(v))}
                                     />
+                                </div>
+                            </div>
+
+                            {/* Where bills can be bought. The master switch above decides
+                                whether the product is open at all; these decide which way in. */}
+                            <div className="border rounded-2xl p-5">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <Label className="text-base font-bold flex items-center gap-2">
+                                            <Settings2 className="w-4 h-4" /> Show on the customer dashboard
+                                        </Label>
+                                        <p className="text-sm text-muted-foreground mt-1 max-w-xl">
+                                            Turns Pay Bills on or off at /dashboard/utilities. Independent of storefronts, so one surface can run while the other is shut.
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        checked={dashboardOn}
+                                        onCheckedChange={v => setSetting('utility_dashboard_enabled', String(v))}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="border rounded-2xl p-5">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <Label className="text-base font-bold flex items-center gap-2">
+                                            <Settings2 className="w-4 h-4" /> Sell from shop storefronts
+                                        </Label>
+                                        <p className="text-sm text-muted-foreground mt-1 max-w-xl">
+                                            Lets shops offer bill payments to their own customers. The riskier surface — the buyer is a guest, the shop owner is the account of record and a reseller chain gets paid — so it closes on its own.
+                                        </p>
+                                    </div>
+                                    <Switch
+                                        checked={storefrontOn}
+                                        onCheckedChange={v => setSetting('utility_storefront_enabled', String(v))}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="border rounded-2xl p-5 space-y-4">
+                                <div>
+                                    <Label className="text-base font-bold">Percentages</Label>
+                                    <p className="text-sm text-muted-foreground mt-1 max-w-xl">
+                                        The cap is the total a customer can be charged over the face value of a
+                                        bill. The platform fee below, plus every shop and sub-agent margin, all
+                                        come out of it — a shop cannot set a margin that would push past it.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {[
+                                        { key: 'utility_total_markup_cap_percent', label: 'Total markup cap %', fallback: '5' },
+                                        { key: 'commission_share_percent', label: 'API partner share %', fallback: '40' },
+                                        { key: 'utility_api_min_amount', label: 'API min amount', fallback: '1' },
+                                        { key: 'utility_api_max_amount', label: 'API max amount', fallback: '1000' },
+                                    ].map(f => (
+                                        <div key={f.key}>
+                                            <Label className="text-xs">{f.label}</Label>
+                                            <Input
+                                                type="number"
+                                                step="0.01"
+                                                value={settings[f.key] ?? f.fallback}
+                                                onChange={e => setSetting(f.key, e.target.value)}
+                                            />
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
 

@@ -4,7 +4,7 @@ import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { UTILITY_SERVICES, isUtilityService } from '@/lib/hubtel-utility-service'
 import { queryUtilityAccount } from '@/lib/utility-provider'
-import { isUtilityVisibleTo, UTILITY_LAUNCH_KEY, utilitySettingKeys } from '@/lib/utility-order-intent'
+import { isUtilitySurfaceOpen, UTILITY_LAUNCH_KEY, utilitySettingKeys, utilitySurfaceSettingKeys } from '@/lib/utility-order-intent'
 import { computeUtilityMarkup } from '@/lib/utility-shop-pricing'
 
 /**
@@ -89,6 +89,7 @@ export async function POST(request: NextRequest) {
             db.from('users').select('role').eq('id', shop.owner_id).maybeSingle(),
             db.from('admin_settings').select('key, value').in('key', [
                 ...utilitySettingKeys(service),
+                ...utilitySurfaceSettingKeys(),
                 UTILITY_LAUNCH_KEY,
             ]),
         ])
@@ -96,8 +97,9 @@ export async function POST(request: NextRequest) {
         const settings: Record<string, string> = {}
         for (const row of ((settingRows as any[]) || [])) settings[row.key] = row.value
 
-        // The shop's own toggle cannot open a product the platform has closed.
-        if (!isUtilityVisibleTo((owner as any)?.role, settings)) {
+        // The shop's own toggle cannot open a product the platform has closed, and
+        // storefronts have their own switch on top of the master gate.
+        if (!isUtilitySurfaceOpen('storefront', (owner as any)?.role, settings)) {
             return NextResponse.json({ error: 'Bill payments are not available yet.' }, { status: 403 })
         }
         if (settings[`utility_enabled_${service}`] === 'false') {

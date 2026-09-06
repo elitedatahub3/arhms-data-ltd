@@ -16,7 +16,7 @@ import {
     assertOwnPendingPayment,
     type MomoChargeResult,
 } from '@/lib/paystack-momo-checkout'
-import { buildUtilityIntent, utilitySettingKeys, isUtilityVisibleTo, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-intent'
+import { buildUtilityIntent, utilitySettingKeys, isUtilitySurfaceOpen, UTILITY_LAUNCH_KEY, utilitySurfaceSettingKeys } from '@/lib/utility-order-intent'
 import { computeUtilityMarkup } from '@/lib/utility-shop-pricing'
 
 /**
@@ -104,6 +104,7 @@ export async function POST(request: NextRequest) {
             supabase.from('admin_settings').select('key, value').in('key', [
                 ...utilitySettingKeys(service),
                 ...WEB_FEE_SETTING_KEYS,
+                ...utilitySurfaceSettingKeys(),
                 'active_payment_provider_web',
                 UTILITY_LAUNCH_KEY,
             ]),
@@ -114,7 +115,7 @@ export async function POST(request: NextRequest) {
 
         // Live in production but not yet open â€” a hidden page is not a closed one,
         // and this is the route that moves money.
-        if (!isUtilityVisibleTo(profile?.role, settings)) {
+        if (!isUtilitySurfaceOpen(shop ? 'storefront' : 'dashboard', profile?.role, settings)) {
             return NextResponse.json({ error: 'Bill payments are not available yet.' }, { status: 403 })
         }
 

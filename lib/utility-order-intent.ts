@@ -25,6 +25,42 @@ export function isUtilityVisibleTo(
     return ['admin', 'sub-admin'].includes(String(role || ''))
 }
 
+/** Where a bill can be bought. Each surface has its own switch. */
+export type UtilitySurface = 'dashboard' | 'storefront'
+
+export const UTILITY_SURFACE_KEYS: Record<UtilitySurface, string> = {
+    dashboard:  'utility_dashboard_enabled',
+    storefront: 'utility_storefront_enabled',
+}
+
+/**
+ * Whether bills can be bought on this particular surface.
+ *
+ * Two gates, deliberately not one. isUtilityVisibleTo answers "is this product open
+ * to anyone but an admin"; this answers "is this WAY of buying it open". They
+ * compose, and the master still wins — so an admin can leave the dashboard running
+ * while shutting storefronts, which is the riskier surface: the buyer is a guest,
+ * the shop owner is the account of record, and a reseller chain is being paid.
+ *
+ * An absent key counts as OPEN, unlike the master gate where absent means closed.
+ * The difference is deliberate: the master protects a product that has never been
+ * proven, while these two only narrow something already open, and a missing row
+ * should not silently take a working surface offline.
+ */
+export function isUtilitySurfaceOpen(
+    surface: UtilitySurface,
+    role: string | null | undefined,
+    settings: Record<string, string>
+): boolean {
+    if (!isUtilityVisibleTo(role, settings)) return false
+    return settings[UTILITY_SURFACE_KEYS[surface]] !== 'false'
+}
+
+/** Both surface keys, for a caller's `.in()` query. */
+export function utilitySurfaceSettingKeys(): string[] {
+    return Object.values(UTILITY_SURFACE_KEYS)
+}
+
 /**
  * Validates and prices one utility bill purchase.
  *
