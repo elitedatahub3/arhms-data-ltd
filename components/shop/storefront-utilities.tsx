@@ -18,7 +18,7 @@
  * can carry several meters and paying the wrong one is unrecoverable.
  */
 import { useState } from 'react'
-import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight } from 'lucide-react'
+import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight, ChevronDown, Pencil, Phone, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const BILLERS = [
@@ -73,6 +73,9 @@ export default function StorefrontUtilities({
     // which ECG links to the paying number on first payment. Cleared on every input
     // change so it can never carry over to a meter it was not shown for.
     const [ackUnlinked, setAckUnlinked] = useState(false)
+    // Kept out of reset() on purpose: reset() runs on every keystroke in the meter
+    // field, and collapsing the panel the customer is typing into would be absurd.
+    const [showManual, setShowManual] = useState(false)
     const [quote, setQuote] = useState<Quote | null>(null)
 
     const [verifying, setVerifying] = useState(false)
@@ -239,61 +242,102 @@ export default function StorefrontUtilities({
             <div className="space-y-3">
                 {(isEcg || def.id === 'ghanawater') && (
                     <div>
-                        <label className="block text-sm font-medium mb-1">Phone number linked to the account</label>
+                        <label className="block text-sm font-medium mb-1">
+                            {isEcg ? 'ECG phone number' : 'Phone number linked to the account'}
+                        </label>
+                        <div className="relative">
+                            <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input
+                                value={phone}
+                                onChange={e => { setPhone(e.target.value); reset() }}
+                                placeholder="0XXXXXXXXX"
+                                inputMode="numeric"
+                                className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 pl-9 pr-3 py-2.5 text-sm"
+                            />
+                        </div>
+                        {isEcg && (
+                            <p className="text-[11px] text-gray-400 mt-1">
+                                We list the meters registered to this phone.
+                            </p>
+                        )}
+                    </div>
+                )}
+
+                {/* Non-ECG billers confirm the exact account asked about, so the
+                    number is the primary input and there is nothing to disclose. */}
+                {!isEcg && (
+                    <div>
+                        <label className="block text-sm font-medium mb-1">{def.hint}</label>
                         <input
-                            value={phone}
-                            onChange={e => { setPhone(e.target.value); reset() }}
-                            placeholder="0XXXXXXXXX"
+                            value={account}
+                            onChange={e => { setAccount(e.target.value); reset() }}
+                            placeholder={def.hint}
                             inputMode="numeric"
                             className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
                         />
                     </div>
                 )}
 
-                {/* Shown for ECG too, matching the dashboard. Hiding it forced a
-                    customer who already knows their meter number through a phone
-                    lookup they did not need — and a phone with no meters registered
-                    then looks like a broken shop rather than the wrong number. */}
-                <div>
-                    <label className="block text-sm font-medium mb-1">
-                        {isEcg ? 'Meter Number' : def.hint}
-                    </label>
-                    <input
-                        value={account}
-                        onChange={e => { setAccount(e.target.value); reset() }}
-                        placeholder={isEcg ? 'Meter Number' : def.hint}
-                        inputMode="numeric"
-                        className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
-                    />
-                    {isEcg && (
-                        <p className="text-[11px] text-gray-400 mt-1">
-                            Type it, or pick one of the meters on your ECG Power App number.
-                        </p>
-                    )}
+                {/* ECG: the phone lookup is the main road and this is the slip road.
+                    Collapsed because most customers should pick from their own meters
+                    — choosing off that list is verified, typing one is not — but it
+                    stays reachable for a first-time meter the lookup cannot know. */}
+                {isEcg && (
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700">
+                        <button
+                            type="button"
+                            onClick={() => setShowManual(v => !v)}
+                            className="w-full flex items-center gap-2 px-3 py-2.5 text-sm"
+                        >
+                            <Pencil className="w-4 h-4 text-gray-400 shrink-0" />
+                            <span className="flex-1 text-left">Enter meter number manually</span>
+                            <ChevronDown className={cn('w-4 h-4 text-gray-400 transition-transform', showManual && 'rotate-180')} />
+                        </button>
 
-                    {/* Shown once a meter has been typed that the lookup did not
-                        return — either it is new to this phone or the phone has no
-                        meters at all. ECG links it on first payment, so this is a
-                        legitimate first-time purchase rather than an error; the tick
-                        is what makes it deliberate, because nothing has verified whose
-                        meter it is and a bill payment cannot be reversed. */}
-                    {isEcg && account.trim() && !chosenMeter && (
-                        <label className="mt-2 flex items-start gap-2 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={ackUnlinked}
-                                onChange={e => setAckUnlinked(e.target.checked)}
-                                className="mt-0.5 w-4 h-4 shrink-0"
-                            />
-                            <span className="text-[11px] text-gray-600 dark:text-gray-400">
-                                ECG will link meter{' '}
-                                <span className="font-mono font-bold">{account.trim()}</span>
-                                {phone ? <> to <span className="font-bold">{phone}</span></> : null}.
-                                Check the meter number carefully — this payment cannot be reversed.
-                            </span>
-                        </label>
-                    )}
-                </div>
+                        {showManual && (
+                            <div className="border-t border-gray-200 dark:border-gray-700 p-3 space-y-3">
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Meter number</label>
+                                    <input
+                                        value={account}
+                                        onChange={e => { setAccount(e.target.value); reset() }}
+                                        placeholder="Meter number"
+                                        inputMode="numeric"
+                                        className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                                    />
+                                </div>
+
+                                {/* The tick is the whole safeguard on this path. Nothing
+                                    has verified whose meter this is, and a bill payment
+                                    cannot be reversed — so it names the exact number and
+                                    phone, and clears on every edit. */}
+                                <label className="flex items-start gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={ackUnlinked}
+                                        onChange={e => setAckUnlinked(e.target.checked)}
+                                        className="mt-0.5 w-4 h-4 shrink-0"
+                                    />
+                                    <span className="text-[11px] text-gray-600 dark:text-gray-400">
+                                        ECG will link this meter to{' '}
+                                        <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
+                                    </span>
+                                </label>
+
+                                <button
+                                    type="button"
+                                    onClick={() => { setChosenMeter(''); requote(amount) }}
+                                    disabled={!account.trim() || !ackUnlinked || !phone.trim()}
+                                    className="w-full rounded-xl py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                                    style={{ backgroundColor: accent }}
+                                >
+                                    Continue with this meter
+                                    <ArrowRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 <button
                     type="button"
@@ -303,7 +347,9 @@ export default function StorefrontUtilities({
                     style={{ backgroundColor: accent }}
                 >
                     {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Receipt className="w-4 h-4" />}
-                    Verify account
+                    {/* For ECG this fetches a list rather than confirming one account,
+                        so calling it "Verify account" promised something it cannot do. */}
+                    {isEcg ? 'Find my meters' : 'Verify account'}
                 </button>
             </div>
 
@@ -321,9 +367,10 @@ export default function StorefrontUtilities({
                 <div className="space-y-4">
                     {lookup.meters.length > 0 ? (
                         <div>
-                            {/* Only when they typed a meter that is not on this phone.
-                                Says which, rather than quietly selecting another one. */}
-                            {account.trim() && !chosenMeter && (
+                            {/* Only when they typed a meter that is not on this phone
+                                AND have not knowingly accepted that. Says which meter,
+                                rather than quietly selecting a different one. */}
+                            {account.trim() && !chosenMeter && !ackUnlinked && (
                                 <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
                                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                                     <span>
