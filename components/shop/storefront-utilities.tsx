@@ -69,6 +69,10 @@ export default function StorefrontUtilities({
 
     const [lookup, setLookup] = useState<LookupResult | null>(null)
     const [chosenMeter, setChosenMeter] = useState<string>('')
+    // ECG only. Ticked by the customer to pay a meter the lookup does not know,
+    // which ECG links to the paying number on first payment. Cleared on every input
+    // change so it can never carry over to a meter it was not shown for.
+    const [ackUnlinked, setAckUnlinked] = useState(false)
     const [quote, setQuote] = useState<Quote | null>(null)
 
     const [verifying, setVerifying] = useState(false)
@@ -82,7 +86,7 @@ export default function StorefrontUtilities({
     const def = BILLERS.find(b => b.id === biller)!
     const isEcg = biller === 'ecg'
 
-    const reset = () => { setLookup(null); setQuote(null); setChosenMeter(''); setError(null) }
+    const reset = () => { setLookup(null); setQuote(null); setChosenMeter(''); setError(null); setAckUnlinked(false) }
 
     const verify = async () => {
         setError(null); setVerifying(true); setQuote(null)
@@ -156,7 +160,11 @@ export default function StorefrontUtilities({
                 body: JSON.stringify({
                     shopSlug,
                     service: biller,
-                    accountNumber: isEcg ? chosenMeter : account,
+                    // With no listed meter chosen, the typed one is what ECG is asked
+                    // to credit — and the flag below is what lets the server accept a
+                    // meter its lookup did not return.
+                    accountNumber: isEcg ? (chosenMeter || account) : account,
+                    acknowledgeUnlinkedMeter: isEcg && !chosenMeter && ackUnlinked,
                     amount: Number(amount),
                     phone,
                     email,
@@ -184,7 +192,19 @@ export default function StorefrontUtilities({
     const amountNum = Number(amount)
     const belowMin = lookup && Number.isFinite(amountNum) && amountNum > 0 && amountNum < lookup.min_amount
     const aboveMax = lookup && Number.isFinite(amountNum) && amountNum > lookup.max_amount
-    const canPay = !!lookup && !!quote && !belowMin && !aboveMax && (!isEcg || !!chosenMeter)
+    /**
+     * An ECG meter the lookup never returned is still payable, because ECG links it
+     * to the paying number on first payment — but only once the customer has ticked
+     * the acknowledgement, since nothing has verified whose meter it is.
+     */
+    const payingUnlinkedMeter = isEcg && !chosenMeter && !!account.trim() && ackUnlinked
+
+    // Everything except ECG still requires a successful lookup: for those billers the
+    // provider confirms the exact account asked about, so a failed check means the
+    // number is wrong.
+    const accountReady = payingUnlinkedMeter || (!!lookup && (!isEcg || !!chosenMeter))
+
+    const canPay = accountReady && !!quote && !belowMin && !aboveMax
         && (!lookup.requires_email || !!email) && !paying
 
     return (
@@ -250,6 +270,29 @@ export default function StorefrontUtilities({
                             Type it, or pick one of the meters on your ECG Power App number.
                         </p>
                     )}
+
+                    {/* Shown once a meter has been typed that the lookup did not
+                        return — either it is new to this phone or the phone has no
+                        meters at all. ECG links it on first payment, so this is a
+                        legitimate first-time purchase rather than an error; the tick
+                        is what makes it deliberate, because nothing has verified whose
+                        meter it is and a bill payment cannot be reversed. */}
+                    {isEcg && account.trim() && !chosenMeter && (
+                        <label className="mt-2 flex items-start gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={ackUnlinked}
+                                onChange={e => setAckUnlinked(e.target.checked)}
+                                className="mt-0.5 w-4 h-4 shrink-0"
+                            />
+                            <span className="text-[11px] text-gray-600 dark:text-gray-400">
+                                ECG will link meter{' '}
+                                <span className="font-mono font-bold">{account.trim()}</span>
+                                {phone ? <> to <span className="font-bold">{phone}</span></> : null}.
+                                Check the meter number carefully — this payment cannot be reversed.
+                            </span>
+                        </label>
+                    )}
                 </div>
 
                 <button
@@ -271,8 +314,10 @@ export default function StorefrontUtilities({
                 </div>
             )}
 
-            {/* Verified */}
-            {lookup && (
+            {/* Verified, OR an acknowledged meter the lookup never returned. The
+                second case is a first-time ECG customer: the phone has no meters yet,
+                so there is nothing to verify against and the tick is what carries it. */}
+            {(lookup || payingUnlinkedMeter) && (
                 <div className="space-y-4">
                     {lookup.meters.length > 0 ? (
                         <div>
