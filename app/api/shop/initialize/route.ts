@@ -321,26 +321,60 @@ export async function POST(request: NextRequest) {
 
         // ── PAYSTACK BRANCH ──────────────────────────────────────────────────────
         if (shopProvider === 'paystack') {
-            const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email: validatedGuestEmail || `guest-${cleanPhone}@checkout.arhmsgh.com`,
-                    amount: totalAmount, // already in pesewas
-                    reference: shopRef,
-                    callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/shop/${shopSlug}/success?reference=${shopRef}`,
-                    metadata: fullMetadata,
-                }),
-            })
+            if (!process.env.PAYSTACK_SECRET_KEY) {
+                console.error('[ShopInit] PAYSTACK_SECRET_KEY is not configured.')
+                return NextResponse.json(
+                    { error: 'Card payments are temporarily unavailable. Please try again shortly.' },
+                    { status: 503 }
+                )
+            }
 
-            const paystackData = await paystackRes.json()
+            // Unlike the other gateway branches, this one talks to Paystack directly
+            // rather than through a service module that already isolates network
+            // failures. Without its own try/catch, a slow/unreachable Paystack or a
+            // non-JSON response (rate-limit page, proxy error) threw all the way out
+            // to the route's generic catch, which told the customer nothing more
+            // useful than "Internal server error".
+            let paystackRes: Response
+            try {
+                paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: validatedGuestEmail || `guest-${cleanPhone}@checkout.arhmsgh.com`,
+                        amount: totalAmount, // already in pesewas
+                        reference: shopRef,
+                        callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/shop/${shopSlug}/success?reference=${shopRef}`,
+                        metadata: fullMetadata,
+                    }),
+                    signal: AbortSignal.timeout(15_000),
+                })
+            } catch (err: any) {
+                console.error('[ShopInit] Paystack init request failed:', err?.message || err)
+                return NextResponse.json(
+                    { error: 'Could not reach the payment provider. Please try again shortly.' },
+                    { status: 502 }
+                )
+            }
+
+            const paystackText = await paystackRes.text()
+            let paystackData: any
+            try {
+                paystackData = JSON.parse(paystackText)
+            } catch (parseErr) {
+                console.error('[ShopInit] Unparseable Paystack response. Status:', paystackRes.status, 'Body:', paystackText.slice(0, 500))
+                return NextResponse.json(
+                    { error: 'Payment gateway returned an unexpected response. Please try again shortly.' },
+                    { status: 502 }
+                )
+            }
 
             if (!paystackData.status) {
                 console.error('[ShopInit] Paystack init failed:', paystackData)
-                return NextResponse.json({ error: 'Payment gateway error' }, { status: 500 })
+                return NextResponse.json({ error: paystackData.message || 'Payment gateway error' }, { status: 500 })
             }
 
             return NextResponse.json({
