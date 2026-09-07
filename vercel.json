@@ -34,6 +34,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/sync-kingflexy-airtime",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/verify-payswitch-payments",
       "schedule": "*/5 * * * *"
     },
