@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react'
 import {
     Tv, Zap, Droplets, CheckCircle2, Loader2, Wallet, AlertTriangle,
-    Search, ArrowRight, History, Copy, RefreshCw, Info, Phone, Pencil, ChevronRight,
+    Search, ArrowRight, History, Copy, RefreshCw, Info, Phone,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { useSearchParams } from 'next/navigation'
@@ -166,9 +166,6 @@ function UtilitiesPageInner() {
     // Lookup — the gate on the whole form
     const [lookup, setLookup] = useState<LookupResult | null>(null)
     const [lookupLoading, setLookupLoading] = useState(false)
-    // ECG manual entry. Collapsed by default so the verified route — picking off the
-    // meters the provider returns — is the one in front of the customer.
-    const [showManualMeter, setShowManualMeter] = useState(false)
     // Ticked to pay a meter the lookup did not return. ECG links it to the paying
     // number on first payment, so this is a real first-time customer rather than an
     // error — but nothing has verified whose meter it is, hence the explicit tick.
@@ -345,8 +342,9 @@ function UtilitiesPageInner() {
     const autoLookupReady = useMemo(() => {
         if (!service) return false
         if (service.requiresPhone && !/^0\d{9}$/.test(phone.replace(/\s+/g, ''))) return false
-        // ECG asks by phone alone; its meter is chosen from the answer.
-        if (service.kind === 'meter-by-phone') return true
+        // ECG is asked by phone but the question is about ONE meter, so there is
+        // nothing to check until the customer has typed which.
+        if (service.kind === 'meter-by-phone') return !!accountNumber.replace(/\s+/g, '')
         const account = accountNumber.replace(/\s+/g, '')
         if (!account) return false
         try {
@@ -367,8 +365,10 @@ function UtilitiesPageInner() {
     const runLookup = async () => {
         if (!service) return
 
-        if (service.kind !== 'meter-by-phone' && !accountNumber.trim()) {
-            toast.error(`Enter the ${service.accountLabel}`)
+        // Required for every biller now, ECG included — the check confirms one
+        // meter, so there has to be one to confirm.
+        if (!accountNumber.trim()) {
+            toast.error(service.kind === 'meter-by-phone' ? 'Enter the meter number' : `Enter the ${service.accountLabel}`)
             return
         }
         if (service.requiresPhone && !/^0\d{9}$/.test(phone.replace(/\s+/g, ''))) {
@@ -490,7 +490,6 @@ function UtilitiesPageInner() {
         // Must clear with the rest: an acknowledgement left standing would apply to
         // whatever meter is typed next, which is not what the customer agreed to.
         setAckUnlinkedMeter(false)
-        setShowManualMeter(false)
     }
 
     const requestBody = () => ({
@@ -686,103 +685,59 @@ function UtilitiesPageInner() {
                                         </div>
                                         {isEcgService && (
                                             <p className="text-[11px] text-slate-400 mt-1">
-                                                We list the meters registered to this phone.
+                                                The number the meter is paid on.
                                             </p>
                                         )}
                                     </div>
                                 )}
 
-                                {/* ECG asks by phone and answers with a LIST, so the
-                                    number is not the input — it is the result. Every
-                                    other biller confirms the exact account asked about,
-                                    so for those the field stays front and centre. */}
-                                {!isEcgService && (
-                                    <div>
-                                        <Label className="text-sm font-semibold text-slate-700">{service.accountLabel}</Label>
-                                        <Input
-                                            value={accountNumber}
-                                            onChange={e => setAccountNumber(e.target.value)}
-                                            placeholder={service.accountLabel}
-                                            className="mt-1.5 h-12 rounded-xl"
-                                        />
-                                        <p className="text-[11px] text-slate-400 mt-1">{service.accountHint}</p>
+                                {/* Both fields are inputs for ECG too. The provider is
+                                    asked by PHONE and answers with every meter on it,
+                                    so confirming the ONE the customer means requires
+                                    them to type it — the check then looks for it in
+                                    that answer. */}
+                                <div>
+                                    <Label className="text-sm font-semibold text-slate-700">
+                                        {isEcgService ? 'Meter number' : service.accountLabel}
+                                    </Label>
+                                    <Input
+                                        value={accountNumber}
+                                        onChange={e => { setAccountNumber(e.target.value); setAckUnlinkedMeter(false) }}
+                                        placeholder={isEcgService ? 'Meter number' : service.accountLabel}
+                                        className="mt-1.5 h-12 rounded-xl"
+                                    />
+                                    <p className="text-[11px] text-slate-400 mt-1">{service.accountHint}</p>
+                                </div>
+
+                                {/* Offered only once a check has run and come back
+                                    without confirming the meter — either it is new to
+                                    this phone or the phone has none yet. ECG links it
+                                    on the first payment, so this is a real first-time
+                                    customer rather than an error. The tick is what makes
+                                    paying an unconfirmed meter a choice rather than an
+                                    accident, and it clears whenever the meter is edited. */}
+                                {isEcgService && lookedUpKey === lookupKey && !lookupLoading
+                                    && accountNumber.trim() && !lookup?.accountName && (
+                                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                                        <p className="text-xs text-amber-800">
+                                            We could not confirm meter{' '}
+                                            <span className="font-mono font-bold">{accountNumber.trim()}</span> on{' '}
+                                            <span className="font-bold">{phone}</span>. If it is new, ECG links it on
+                                            the first payment.
+                                        </p>
+                                        <label className="flex items-start gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={ackUnlinkedMeter}
+                                                onChange={e => setAckUnlinkedMeter(e.target.checked)}
+                                                className="mt-0.5 w-4 h-4 shrink-0"
+                                            />
+                                            <span className="text-[11px] text-amber-900">
+                                                ECG will link this meter to{' '}
+                                                <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
+                                            </span>
+                                        </label>
                                     </div>
-                                )}
-
-                                {isEcgService && (
-                                    <>
-                                        <Button
-                                            type="button"
-                                            onClick={runLookup}
-                                            disabled={lookupLoading || !/^0\d{9}$/.test(phone.replace(/\s+/g, ''))}
-                                            className="w-full h-12 rounded-xl font-bold"
-                                        >
-                                            {lookupLoading
-                                                ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                                                : null}
-                                            Find my meters
-                                            {!lookupLoading && <ArrowRight className="w-4 h-4 ml-2" />}
-                                        </Button>
-
-                                        {/* The slip road. Picking off the list is verified
-                                            by the provider; typing a number is not, so it
-                                            is collapsed rather than offered alongside. */}
-                                        <div className="border border-slate-200 rounded-xl">
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowManualMeter(v => !v)}
-                                                className="w-full flex items-center gap-2 px-3 py-3 text-sm"
-                                            >
-                                                <Pencil className="w-4 h-4 text-slate-400 shrink-0" />
-                                                <span className="flex-1 text-left text-slate-700">Enter meter number manually</span>
-                                                <ChevronRight className={cn('w-4 h-4 text-slate-400 transition-transform', showManualMeter && 'rotate-90')} />
-                                            </button>
-
-                                            {showManualMeter && (
-                                                <div className="border-t border-slate-200 p-3 space-y-3">
-                                                    <div>
-                                                        <Label className="text-sm font-semibold text-slate-700">Meter number</Label>
-                                                        <Input
-                                                            value={accountNumber}
-                                                            onChange={e => { setAccountNumber(e.target.value); setAckUnlinkedMeter(false) }}
-                                                            placeholder="Meter number"
-                                                            inputMode="numeric"
-                                                            className="mt-1.5 h-12 rounded-xl"
-                                                        />
-                                                    </div>
-
-                                                    {/* Nothing has verified whose meter this
-                                                        is, and a bill payment cannot be
-                                                        reversed — so this names the phone it
-                                                        will be linked to and clears on edit. */}
-                                                    <label className="flex items-start gap-2 cursor-pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={ackUnlinkedMeter}
-                                                            onChange={e => setAckUnlinkedMeter(e.target.checked)}
-                                                            className="mt-0.5 w-4 h-4 shrink-0"
-                                                        />
-                                                        <span className="text-[11px] text-slate-600">
-                                                            ECG will link this meter to{' '}
-                                                            <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
-                                                        </span>
-                                                    </label>
-
-                                                    {/* Without this the Pay button just
-                                                        goes dead and says nothing. Only
-                                                        shown once there is something to
-                                                        object to. */}
-                                                    {accountNumber.trim() && !ackUnlinkedMeter && (
-                                                        <p className="text-[11px] text-amber-700">
-                                                            {meterMismatch
-                                                                ? 'That meter is not on this phone yet. Tick the box to pay it anyway, or pick one from the list above.'
-                                                                : 'Tick the box to continue with this meter.'}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </>
                                 )}
 
                                 {lookupLoading && (
