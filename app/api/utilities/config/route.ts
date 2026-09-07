@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { UTILITY_SERVICES, UTILITY_SERVICE_KEYS } from '@/lib/hubtel-utility-service'
-import { isUtilityVisibleTo, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-intent'
+import { isUtilitySurfaceOpen, utilitySurfaceSettingKeys, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-intent'
 
 /**
  * What the utilities form needs to render: which services are on, and what each
@@ -27,7 +27,7 @@ export async function GET() {
 
         const supabase = createServerClient() as any
 
-        const keys: string[] = ['page_access_utilities', UTILITY_LAUNCH_KEY]
+        const keys: string[] = ['page_access_utilities', UTILITY_LAUNCH_KEY, ...utilitySurfaceSettingKeys()]
         for (const service of UTILITY_SERVICE_KEYS) {
             keys.push(
                 `utility_enabled_${service}`,
@@ -74,7 +74,7 @@ export async function GET() {
             pageEnabled: settings['page_access_utilities'] !== 'false',
             // The page is live in production before it is open — see
             // isUtilityVisibleTo. The dashboard shows Coming Soon on this alone.
-            comingSoon: !isUtilityVisibleTo(profile?.role, settings),
+            comingSoon: !isUtilitySurfaceOpen('dashboard', profile?.role, settings),
             role,
             defaultPhone: profile?.phone_number || null,
             defaultEmail: profile?.email || null,

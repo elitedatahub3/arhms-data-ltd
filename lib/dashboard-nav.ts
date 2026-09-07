@@ -5,6 +5,7 @@ import {
     ShoppingCart,
     Smartphone,
     Banknote,
+    Receipt,
     type LucideIcon,
 } from 'lucide-react'
 
@@ -23,6 +24,7 @@ export const shopNavItems: NavItem[] = [
     { href: '/dashboard/shop/setup', label: 'Shop Setup', icon: Settings },
     { href: '/dashboard/shop/pricing', label: 'Pricing', icon: Tag },
     { href: '/dashboard/shop/orders', label: 'Orders', icon: ShoppingCart },
+    { href: '/dashboard/shop/utilities', label: 'Bill Payments', icon: Receipt },
     { href: '/dashboard/shop/ussd', label: 'USSD Code', icon: Smartphone },
     { href: '/dashboard/shop/withdraw', label: 'Withdraw', icon: Banknote },
 ]
