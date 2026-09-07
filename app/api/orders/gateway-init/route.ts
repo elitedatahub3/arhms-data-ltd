@@ -317,27 +317,48 @@ export async function POST(request: NextRequest) {
                 )
             }
 
-            const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email: userEmail,
-                    amount: Math.round(totalAmount * 100), // pesewas
-                    reference,
-                    callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/data-packages?reference=${reference}`,
-                    metadata: { order_type: 'data_order', item_count: metadataItems.length },
-                }),
-            })
+            // No try/catch here used to mean a slow/unreachable Paystack, a timeout, or
+            // a non-JSON response threw straight past this branch into the route's
+            // generic catch-all, leaving the wallet_payments row stuck 'pending' and
+            // the customer with nothing but "Internal server error". Matches the
+            // hardening applied to the shop storefront's equivalent branch.
+            let paystackRes: Response
+            try {
+                paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: userEmail,
+                        amount: Math.round(totalAmount * 100), // pesewas
+                        reference,
+                        callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/data-packages?reference=${reference}`,
+                        metadata: { order_type: 'data_order', item_count: metadataItems.length },
+                    }),
+                    signal: AbortSignal.timeout(15_000),
+                })
+            } catch (err: any) {
+                console.error('[DataGatewayInit] Paystack init request failed:', err?.message || err)
+                await supabase.from('wallet_payments').update({ status: 'failed' }).eq('id', paymentId)
+                return NextResponse.json({ error: 'Could not reach the payment provider. Please try again shortly.' }, { status: 502 })
+            }
 
-            const paystackData = await paystackRes.json()
+            const paystackText = await paystackRes.text()
+            let paystackData: any
+            try {
+                paystackData = JSON.parse(paystackText)
+            } catch (parseErr) {
+                console.error('[DataGatewayInit] Unparseable Paystack response. Status:', paystackRes.status, 'Body:', paystackText.slice(0, 500))
+                await supabase.from('wallet_payments').update({ status: 'failed' }).eq('id', paymentId)
+                return NextResponse.json({ error: 'Payment gateway returned an unexpected response. Please try again shortly.' }, { status: 502 })
+            }
 
             if (!paystackData.status) {
                 console.error('[DataGatewayInit] Paystack init failed:', paystackData?.message)
                 await supabase.from('wallet_payments').update({ status: 'failed' }).eq('id', paymentId)
-                return NextResponse.json({ error: 'Payment gateway initialization failed' }, { status: 500 })
+                return NextResponse.json({ error: paystackData?.message || 'Payment gateway initialization failed' }, { status: 500 })
             }
 
             return NextResponse.json({
