@@ -36,6 +36,8 @@ import {
     Phone,
     Receipt,
     Package,
+    GraduationCap,
+    IdCard,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatDate, cn } from '@/lib/utils'
@@ -100,8 +102,8 @@ const COMMISSION_KEY_SAMPLE = 'kf_cs_live_your_commission_key_here'
 const KEY_META: Record<KeyKind, { title: string; blurb: string; empty: string; icon: React.ElementType }> = {
     standard: {
         title: 'Standard API Key',
-        blurb: 'For data bundle endpoints. Orders are charged to your main wallet.',
-        empty: 'Generate a standard key to start selling data bundles over the API.',
+        blurb: 'For data, airtime, result checker and AFA endpoints. Orders are charged to your main wallet.',
+        empty: 'Generate a standard key to start selling data, airtime, result checkers and AFA over the API.',
         icon: ShoppingCart,
     },
     commission: {
@@ -200,12 +202,34 @@ const STANDARD_ENDPOINTS: Endpoint[] = [
         body: { network: 'MTN', amount: 10, recipient: '0551617309', reference: 'air_001' },
     },
     {
+        icon: GraduationCap, method: 'GET', path: '/api/v2/results-checker/types', label: 'Checker catalogue',
+        desc: 'WAEC and BECE checkers with your role price, bulk tiers and live stock. Vouchers are sold from stock we hold, so `available: 0` means a purchase will fail rather than back-order.',
+    },
+    {
+        icon: GraduationCap, method: 'POST', path: '/api/v2/results-checker/purchase', label: 'Buy checkers',
+        desc: 'Settles immediately — the PINs are in the response, no polling. Up to 50 per request. Out of stock returns 409 and your wallet is untouched.',
+        body: { type_id: 'a3f1c2d4-5e6f-7081-92a3-b4c5d6e7f809', quantity: 2, reference: 'rc_001' },
+    },
+    {
+        icon: IdCard, method: 'GET', path: '/api/v2/afa/pricing', label: 'AFA price & fields',
+        desc: 'What a registration costs you, plus the accepted ID types with their formats and the valid regions. Build your form from this rather than hardcoding the lists.',
+    },
+    {
+        icon: IdCard, method: 'POST', path: '/api/v2/afa/register', label: 'Register AFA',
+        desc: 'MTN AFA 30-day registration. Charges your wallet and files the application — there is no upstream API, an agent completes it by hand, so `status` stays pending until then. Applicant must be 18+ and the id_number must match the id_type format.',
+        body: {
+            full_name: 'Kwame Mensah', phone: '0551617309',
+            id_type: 'Ghana Card', id_number: 'GHA-123456789-0', date_of_birth: '1996-04-12',
+            region: 'Ashanti', location: 'Kumasi', reference: 'afa_001',
+        },
+    },
+    {
         icon: Wallet, method: 'GET', path: '/api/v2/wallet/balance', label: 'Wallet balance',
         desc: 'Your spending balance in GHS. Top up from the dashboard wallet page.',
     },
     {
         icon: Clock, method: 'GET', path: '/api/v2/orders/order_001', label: 'Order status',
-        desc: 'Data and airtime orders — the `type` field says which you got. Bill payments have their own endpoint on the Commission API tab. Status flows pending → processing → completed | failed.',
+        desc: 'Data, airtime, AFA and result checker orders — the `type` field says which you got. Bill payments have their own endpoint on the Commission API tab. Status flows pending → processing → completed | failed; a completed checker order returns its PINs again.',
     },
 ]
 

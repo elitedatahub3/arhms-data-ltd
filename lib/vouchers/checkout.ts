@@ -42,10 +42,20 @@ export async function purchaseWithWallet(params: {
     shopId?: string
     shopName?: string
     shopOwnerId?: string
+    /**
+     * Caller-supplied reference, used instead of the generated one.
+     *
+     * The v2 API takes it as an idempotency key, so it has to reach the row —
+     * a generated reference could not be looked up again on a retry. Unique
+     * table-wide, so a collision surfaces as ORDER_CREATION_FAILED.
+     */
+    referenceCode?: string
+    /** API key that placed the order. Null for dashboard and sub-agent purchases. */
+    apiKeyId?: string
 }): Promise<WalletPurchaseResult> {
     const {
         userId, userRole, typeId, quantity, customerName, customerEmail, customerPhone,
-        unitPriceOverride, shopId, shopName, shopOwnerId,
+        unitPriceOverride, shopId, shopName, shopOwnerId, referenceCode: clientReference, apiKeyId,
     } = params
     const supabase = createServerClient()
 
@@ -104,7 +114,7 @@ export async function purchaseWithWallet(params: {
     // purchases landing in the same millisecond used to fail order creation
     // outright; now it also keys the Lead's credit, where a collision would
     // silently drop the second payment as "already credited".
-    const referenceCode = `RC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const referenceCode = clientReference || `RC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const { data: order, error: orderError } = await (supabase
         .from('results_checker_orders') as any)
         .insert({
@@ -127,6 +137,7 @@ export async function purchaseWithWallet(params: {
             status: 'pending',
             payment_status: 'pending',
             reference_code: referenceCode,
+            api_key_id: apiKeyId ?? null,
         })
         .select()
         .single()
