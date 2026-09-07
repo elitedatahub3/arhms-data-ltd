@@ -278,10 +278,24 @@ export default function StorefrontUtilities({
                     </div>
                 )}
 
-                {/* ECG: the phone lookup is the main road and this is the slip road.
-                    Collapsed because most customers should pick from their own meters
-                    — choosing off that list is verified, typing one is not — but it
-                    stays reachable for a first-time meter the lookup cannot know. */}
+                {/* The lookup comes FIRST and manual entry sits under it. Choosing off
+                    the returned list is verified — the provider said the meter is on
+                    this phone — while typing one is not, so the verified route is the
+                    one offered first and the other stays a deliberate detour. */}
+                <button
+                    type="button"
+                    onClick={verify}
+                    disabled={verifying || (isEcg ? !phone : !account)}
+                    className="w-full rounded-xl py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                    style={{ backgroundColor: accent }}
+                >
+                    {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    {/* For ECG this fetches a LIST and confirms nothing about any one
+                        account, so "Verify account" promised what it cannot deliver. */}
+                    {isEcg ? 'Find my meters' : 'Verify account'}
+                    {!verifying && <ArrowRight className="w-4 h-4" />}
+                </button>
+
                 {isEcg && (
                     <div className="rounded-xl border border-gray-200 dark:border-gray-700">
                         <button
@@ -291,7 +305,7 @@ export default function StorefrontUtilities({
                         >
                             <Pencil className="w-4 h-4 text-gray-400 shrink-0" />
                             <span className="flex-1 text-left">Enter meter number manually</span>
-                            <ChevronDown className={cn('w-4 h-4 text-gray-400 transition-transform', showManual && 'rotate-180')} />
+                            <ChevronRight className={cn('w-4 h-4 text-gray-400 transition-transform', showManual && 'rotate-90')} />
                         </button>
 
                         {showManual && (
@@ -339,18 +353,6 @@ export default function StorefrontUtilities({
                     </div>
                 )}
 
-                <button
-                    type="button"
-                    onClick={verify}
-                    disabled={verifying || (isEcg ? !phone : !account)}
-                    className="w-full rounded-xl py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2"
-                    style={{ backgroundColor: accent }}
-                >
-                    {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Receipt className="w-4 h-4" />}
-                    {/* For ECG this fetches a list rather than confirming one account,
-                        so calling it "Verify account" promised something it cannot do. */}
-                    {isEcg ? 'Find my meters' : 'Verify account'}
-                </button>
             </div>
 
             {error && (
