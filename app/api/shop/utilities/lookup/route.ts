@@ -6,6 +6,7 @@ import { UTILITY_SERVICES, isUtilityService } from '@/lib/hubtel-utility-service
 import { queryUtilityAccount } from '@/lib/utility-provider'
 import { isUtilitySurfaceOpen, UTILITY_LAUNCH_KEY, utilitySettingKeys, utilitySurfaceSettingKeys } from '@/lib/utility-order-intent'
 import { computeUtilityMarkup } from '@/lib/utility-shop-pricing'
+import { lookupFailureStatus } from '@/lib/api-v2-billers'
 
 /**
  * Storefront account lookup, for guests.
@@ -125,24 +126,20 @@ export async function POST(request: NextRequest) {
             phone: def.requiresPhone ? cleanPhone : undefined,
         })
 
-        if (!lookup.success) {
-            return NextResponse.json({ error: lookup.error || 'That account could not be verified.' }, { status: 400 })
-        }
-
-        // Quote only when an amount was given — the first call usually just resolves
-        // the name, and the customer types the amount afterwards.
+        // Priced before the verification result is even consulted, because the price
+        // depends only on the shop, the biller and the amount — never on whose
+        // account it is. That matters for the ECG branch below, which returns a
+        // payable answer without a verified account and still needs a total.
         let quote: any = null
         const billAmount = Number(amount)
         if (Number.isFinite(billAmount) && billAmount > 0) {
             const ownerRole = (owner as any)?.role === 'agent' ? 'agent' : 'customer'
-            const platformRate = parseFloat(settings[`utility_fee_${service}_${ownerRole}`] || '2')
             const markup = await computeUtilityMarkup(db, {
                 shopId: shop.id,
                 service,
                 ownerRole,
                 billAmount,
             })
-            const platformFee = Math.round(billAmount * platformRate) / 100
             quote = {
                 bill_amount: billAmount,
                 platform_fee: markup.platformAmount,
@@ -150,10 +147,42 @@ export async function POST(request: NextRequest) {
                 total_fee: markup.totalFee,
                 total: Math.round((billAmount + markup.totalFee) * 100) / 100,
                 total_fee_percent: markup.totalPercent,
-                // A gateway charge may still be added at checkout depending on the
-                // provider, exactly as the dashboard flow warns.
-                _platformFeeRaw: platformFee,
             }
+        }
+
+        if (!lookup.success) {
+            // For ECG, "this phone has no meters" is an ANSWER, not a failure. It is
+            // what a first-time customer looks like, and ECG links the meter to the
+            // paying number on first payment — so the storefront needs the biller's
+            // limits and fee rules back in order to offer that, rather than a dead
+            // end. An empty meter list plus no name says exactly that.
+            //
+            // Only when the provider actually answered. lookupFailureStatus returns
+            // 502 when we never got a reply, and dressing an outage up as "no meters
+            // registered" would send customers off to re-register a working meter.
+            if (isEcg && lookupFailureStatus(lookup) === 404) {
+                return NextResponse.json({
+                    success: true,
+                    shop: { id: shop.id, name: shop.shop_name },
+                    service,
+                    label: def.label,
+                    account_label: def.accountLabel,
+                    requires_phone: def.requiresPhone,
+                    requires_email: def.requiresEmail,
+                    account_name: null,
+                    amount_due: null,
+                    meters: [],
+                    unverified: true,
+                    min_amount: Number(settings[`utility_min_amount_${service}`] ?? 1),
+                    max_amount: Number(settings[`utility_max_amount_${service}`] ?? 1000),
+                    quote,
+                })
+            }
+            const status = lookupFailureStatus(lookup)
+            return NextResponse.json(
+                { error: lookup.error || 'That account could not be verified.' },
+                { status: status === 502 ? 502 : 400 }
+            )
         }
 
         return NextResponse.json({

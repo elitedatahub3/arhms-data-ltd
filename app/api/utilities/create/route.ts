@@ -63,7 +63,11 @@ export async function POST(request: NextRequest) {
         }
 
         // ── Validate + verify + price (all server-side) ───────────────────────
-        const built = await buildUtilityIntent({ service, accountNumber, amount, phone, email }, settings, userRole)
+        const built = await buildUtilityIntent(
+            { service, accountNumber, amount, phone, email, acknowledgeUnlinkedMeter: body?.acknowledgeUnlinkedMeter === true },
+            settings,
+            userRole
+        )
         if (!built.ok) {
             return NextResponse.json({ error: built.error }, { status: built.status })
         }

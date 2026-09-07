@@ -18,7 +18,7 @@
  * can carry several meters and paying the wrong one is unrecoverable.
  */
 import { useState } from 'react'
-import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight } from 'lucide-react'
+import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight, Phone, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const BILLERS = [
@@ -69,6 +69,14 @@ export default function StorefrontUtilities({
 
     const [lookup, setLookup] = useState<LookupResult | null>(null)
     const [chosenMeter, setChosenMeter] = useState<string>('')
+    // ECG only. Ticked by the customer to pay a meter the lookup does not know,
+    // which ECG links to the paying number on first payment. Cleared on every input
+    // change so it can never carry over to a meter it was not shown for.
+    const [ackUnlinked, setAckUnlinked] = useState(false)
+    // True once a check has actually run for the values now in the fields. The
+    // acknowledgement is only offered after one, so a customer cannot wave through a
+    // meter nobody has tried to confirm.
+    const [checked, setChecked] = useState(false)
     const [quote, setQuote] = useState<Quote | null>(null)
 
     const [verifying, setVerifying] = useState(false)
@@ -82,7 +90,10 @@ export default function StorefrontUtilities({
     const def = BILLERS.find(b => b.id === biller)!
     const isEcg = biller === 'ecg'
 
-    const reset = () => { setLookup(null); setQuote(null); setChosenMeter(''); setError(null) }
+    const reset = () => {
+        setLookup(null); setQuote(null); setChosenMeter(''); setError(null)
+        setAckUnlinked(false); setChecked(false)
+    }
 
     const verify = async () => {
         setError(null); setVerifying(true); setQuote(null)
@@ -93,24 +104,28 @@ export default function StorefrontUtilities({
                 body: JSON.stringify({ shopSlug, service: biller, accountNumber: account, phone }),
             })
             const json = await res.json()
-            if (!res.ok) { setError(json.error || 'Could not verify that account'); setLookup(null); return }
+            if (!res.ok) {
+                // For ECG a failed check is not the end of the road — the meter may
+                // simply be new to this phone — so keep the typed number and let the
+                // acknowledgement below carry it.
+                setError(json.error || 'Could not verify that account')
+                setLookup(null)
+                if (isEcg) setChecked(true)
+                return
+            }
             setLookup(json)
-            // ECG returns every meter on the phone. Honour one the customer typed
-            // themselves when it is genuinely on that phone, and only fall back to
-            // preselecting the first — overwriting a typed meter would silently pay
-            // a different one, and a bill payment cannot be reversed.
-            if (json.meters?.length) {
+            setChecked(true)
+
+            // ECG answers by phone with every meter on it, so confirming the ONE the
+            // customer typed means finding it in that answer. A meter that is not
+            // there is left unchosen rather than swapped for another — paying a
+            // different meter than the one typed is unrecoverable.
+            if (isEcg) {
                 const typed = account.replace(/\s+/g, '').toLowerCase()
-                const match = json.meters.find(
+                const match = (json.meters || []).find(
                     (m: Meter) => m.meterNumber.replace(/\s+/g, '').toLowerCase() === typed
                 )
-                if (match) setChosenMeter(match.meterNumber)
-                else if (!typed) setChosenMeter(json.meters[0].meterNumber)
-                // Typed a meter that is not on this phone: select nothing and make
-                // them choose. Falling back to the first meter here would pay a
-                // DIFFERENT customer's bill than the one they typed, and there is no
-                // way to reverse it.
-                else setChosenMeter('')
+                setChosenMeter(match ? match.meterNumber : '')
             }
         } catch {
             setError('Something went wrong. Please try again.')
@@ -156,7 +171,11 @@ export default function StorefrontUtilities({
                 body: JSON.stringify({
                     shopSlug,
                     service: biller,
-                    accountNumber: isEcg ? chosenMeter : account,
+                    // With no listed meter chosen, the typed one is what ECG is asked
+                    // to credit — and the flag below is what lets the server accept a
+                    // meter its lookup did not return.
+                    accountNumber: isEcg ? (chosenMeter || account) : account,
+                    acknowledgeUnlinkedMeter: isEcg && !chosenMeter && ackUnlinked,
                     amount: Number(amount),
                     phone,
                     email,
@@ -184,7 +203,19 @@ export default function StorefrontUtilities({
     const amountNum = Number(amount)
     const belowMin = lookup && Number.isFinite(amountNum) && amountNum > 0 && amountNum < lookup.min_amount
     const aboveMax = lookup && Number.isFinite(amountNum) && amountNum > lookup.max_amount
-    const canPay = !!lookup && !!quote && !belowMin && !aboveMax && (!isEcg || !!chosenMeter)
+    /**
+     * An ECG meter the lookup never returned is still payable, because ECG links it
+     * to the paying number on first payment — but only once the customer has ticked
+     * the acknowledgement, since nothing has verified whose meter it is.
+     */
+    const payingUnlinkedMeter = isEcg && checked && !chosenMeter && !!account.trim() && ackUnlinked
+
+    // Everything except ECG still requires a successful lookup: for those billers the
+    // provider confirms the exact account asked about, so a failed check means the
+    // number is wrong.
+    const accountReady = payingUnlinkedMeter || (!!lookup && (!isEcg || !!chosenMeter))
+
+    const canPay = accountReady && !!quote && !belowMin && !aboveMax
         && (!lookup.requires_email || !!email) && !paying
 
     return (
@@ -219,49 +250,99 @@ export default function StorefrontUtilities({
             <div className="space-y-3">
                 {(isEcg || def.id === 'ghanawater') && (
                     <div>
-                        <label className="block text-sm font-medium mb-1">Phone number linked to the account</label>
+                        <label className="block text-sm font-medium mb-1">
+                            {isEcg ? 'ECG phone number' : 'Phone number linked to the account'}
+                        </label>
+                        <div className="relative">
+                            <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input
+                                value={phone}
+                                onChange={e => { setPhone(e.target.value); reset() }}
+                                placeholder="0XXXXXXXXX"
+                                inputMode="numeric"
+                                className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 pl-9 pr-3 py-2.5 text-sm"
+                            />
+                        </div>
+                        {isEcg && (
+                            <p className="text-[11px] text-gray-400 mt-1">
+                                The number the meter is paid on.
+                            </p>
+                        )}
+                    </div>
+                )}
+
+                {/* Non-ECG billers confirm the exact account asked about, so the
+                    number is the primary input and there is nothing to disclose. */}
+                {!isEcg && (
+                    <div>
+                        <label className="block text-sm font-medium mb-1">{def.hint}</label>
                         <input
-                            value={phone}
-                            onChange={e => { setPhone(e.target.value); reset() }}
-                            placeholder="0XXXXXXXXX"
+                            value={account}
+                            onChange={e => { setAccount(e.target.value); reset() }}
+                            placeholder={def.hint}
                             inputMode="numeric"
                             className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
                         />
                     </div>
                 )}
 
-                {/* Shown for ECG too, matching the dashboard. Hiding it forced a
-                    customer who already knows their meter number through a phone
-                    lookup they did not need — and a phone with no meters registered
-                    then looks like a broken shop rather than the wrong number. */}
-                <div>
-                    <label className="block text-sm font-medium mb-1">
-                        {isEcg ? 'Meter Number' : def.hint}
-                    </label>
-                    <input
-                        value={account}
-                        onChange={e => { setAccount(e.target.value); reset() }}
-                        placeholder={isEcg ? 'Meter Number' : def.hint}
-                        inputMode="numeric"
-                        className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
-                    />
-                    {isEcg && (
-                        <p className="text-[11px] text-gray-400 mt-1">
-                            Type it, or pick one of the meters on your ECG Power App number.
-                        </p>
-                    )}
-                </div>
+                {/* ECG asks the provider by PHONE and gets back every meter on it, so
+                    a specific meter can only be confirmed by looking for it in that
+                    answer. Both fields are therefore inputs, and the check below is
+                    what tells the customer whose meter they are about to pay. */}
+                {isEcg && (
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Meter number</label>
+                        <input
+                            value={account}
+                            onChange={e => { setAccount(e.target.value); reset() }}
+                            placeholder="Meter number"
+                            inputMode="numeric"
+                            className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                        />
+                    </div>
+                )}
 
                 <button
                     type="button"
                     onClick={verify}
-                    disabled={verifying || (isEcg ? !phone : !account)}
+                    disabled={verifying || (isEcg ? (!phone.trim() || !account.trim()) : !account.trim())}
                     className="w-full rounded-xl py-2.5 text-sm font-bold text-white disabled:opacity-50 flex items-center justify-center gap-2"
                     style={{ backgroundColor: accent }}
                 >
-                    {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Receipt className="w-4 h-4" />}
-                    Verify account
+                    {verifying ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Check meter
+                    {!verifying && <ArrowRight className="w-4 h-4" />}
                 </button>
+
+                {/* Shown only after a check that could not confirm the meter — either
+                    it is new to this phone or the phone has none yet. ECG links it on
+                    first payment, so this is a real first-time customer rather than an
+                    error; the tick is what makes paying an unconfirmed meter a choice
+                    instead of an accident, and it clears on every edit. */}
+                {isEcg && checked && !chosenMeter && account.trim() && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-2">
+                        <p className="text-xs text-amber-800 dark:text-amber-300">
+                            We could not confirm meter{' '}
+                            <span className="font-mono font-bold">{account.trim()}</span> on{' '}
+                            <span className="font-bold">{phone}</span>. If it is new, ECG links it on
+                            the first payment.
+                        </p>
+                        <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={ackUnlinked}
+                                onChange={e => setAckUnlinked(e.target.checked)}
+                                className="mt-0.5 w-4 h-4 shrink-0"
+                            />
+                            <span className="text-[11px] text-amber-900 dark:text-amber-200">
+                                ECG will link this meter to{' '}
+                                <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
+                            </span>
+                        </label>
+                    </div>
+                )}
+
             </div>
 
             {error && (
@@ -271,14 +352,17 @@ export default function StorefrontUtilities({
                 </div>
             )}
 
-            {/* Verified */}
-            {lookup && (
+            {/* Verified, OR an acknowledged meter the lookup never returned. The
+                second case is a first-time ECG customer: the phone has no meters yet,
+                so there is nothing to verify against and the tick is what carries it. */}
+            {(lookup || payingUnlinkedMeter) && (
                 <div className="space-y-4">
                     {lookup.meters.length > 0 ? (
                         <div>
-                            {/* Only when they typed a meter that is not on this phone.
-                                Says which, rather than quietly selecting another one. */}
-                            {account.trim() && !chosenMeter && (
+                            {/* Only when they typed a meter that is not on this phone
+                                AND have not knowingly accepted that. Says which meter,
+                                rather than quietly selecting a different one. */}
+                            {account.trim() && !chosenMeter && !ackUnlinked && (
                                 <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
                                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                                     <span>

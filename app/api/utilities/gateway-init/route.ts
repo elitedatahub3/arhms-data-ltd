@@ -123,7 +123,11 @@ export async function POST(request: NextRequest) {
         const gateway: PaymentProvider = resolveProviderForScope(settings.active_payment_provider_web, 'web')
 
         // â”€â”€ Validate + verify + price (all server-side) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        const built = await buildUtilityIntent({ service, accountNumber, amount, phone, email }, settings, userRole)
+        const built = await buildUtilityIntent(
+            { service, accountNumber, amount, phone, email, acknowledgeUnlinkedMeter: body?.acknowledgeUnlinkedMeter === true },
+            settings,
+            userRole
+        )
         if (!built.ok) {
             return NextResponse.json({ error: built.error }, { status: built.status })
         }

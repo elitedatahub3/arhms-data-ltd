@@ -99,6 +99,19 @@ export interface UtilityIntentInput {
     amount: unknown
     phone?: unknown
     email?: unknown
+    /**
+     * ECG only. Pay a meter that is not (yet) registered to the phone.
+     *
+     * ECG links the meter to the paying number on first payment, so refusing an
+     * unlisted meter blocks a legitimate first-time customer. The rejection stays
+     * the default because the lookup is the only thing that can tell a mistyped
+     * meter from a real one, and a bill payment cannot be reversed — so the caller
+     * has to say, explicitly and per payment, that the customer was shown whose
+     * meter this is and accepted it.
+     *
+     * Never inferred. A missing flag means "check normally".
+     */
+    acknowledgeUnlinkedMeter?: unknown
 }
 
 export interface UtilityIntent {
@@ -190,22 +203,50 @@ export async function buildUtilityIntent(
         phone: def.requiresPhone ? phoneRaw : undefined,
     })
 
-    if (!lookup.success) {
-        return { ok: false, status: 400, error: lookup.error || `That ${def.accountLabel} could not be verified.` }
-    }
+    // ECG links a meter to the paying number on first payment, so a meter the
+    // lookup does not know is not necessarily wrong — it may simply be new to this
+    // phone. The caller opts into that per payment, having shown the customer what
+    // they are about to pay; everything else still fails closed.
+    const allowUnlinked = def.kind === 'meter-by-phone' && input.acknowledgeUnlinkedMeter === true
 
-    // ECG answers with every meter on the phone number rather than confirming the
-    // one asked for, so the check is that the requested meter is actually in the list.
-    if (def.kind === 'meter-by-phone') {
+    // Starts as whatever the provider returned and is narrowed below, because for
+    // ECG the top-level name is the first meter's owner rather than the one asked
+    // about — only correct once the meter has actually been matched.
+    let verifiedName: string | null = lookup.accountName ?? null
+
+    if (!lookup.success) {
+        if (!allowUnlinked) {
+            return { ok: false, status: 400, error: lookup.error || `That ${def.accountLabel} could not be verified.` }
+        }
+        // A phone with no meters at all answers as a failed lookup, which is exactly
+        // the first-time customer this flag exists for. Proceed with no name: ECG
+        // validates the meter itself and rejects one that does not exist, and that
+        // rejection arrives before any money moves.
+        console.warn(`[UtilityIntent] ECG meter ${accountNumber} unverified (${lookup.error}) — proceeding on explicit acknowledgement.`)
+    } else if (def.kind === 'meter-by-phone') {
+        // ECG answers with every meter on the phone rather than confirming the one
+        // asked for, so the check is that the requested meter is in that list.
         const match = (lookup.meters || []).find(
             m => m.meterNumber.replace(/\s+/g, '').toLowerCase() === accountNumber.toLowerCase()
         )
-        if (!match) {
+        if (!match && !allowUnlinked) {
             return {
                 ok: false,
                 status: 400,
                 error: `Meter ${accountNumber} is not linked to ${phoneRaw}. Look up the number again and pick a meter from the list.`,
             }
+        }
+        if (!match) {
+            console.warn(`[UtilityIntent] ECG meter ${accountNumber} not linked to ${phoneRaw} — proceeding on explicit acknowledgement.`)
+            // The name on the lookup belongs to a DIFFERENT meter on this phone, not
+            // the one being paid. Putting it on the order would print a stranger's
+            // name on the receipt and make an unverified payment look verified.
+            verifiedName = null
+        } else {
+            // The provider packs "NAME (METER)" into one label, and the top-level
+            // accountName is only the FIRST meter's owner — so take the name off the
+            // meter actually matched, not off the response.
+            verifiedName = (/^(.*?)\s*\(/.exec(match.label)?.[1] || match.label || '').trim() || null
         }
     }
 
@@ -224,7 +265,7 @@ export async function buildUtilityIntent(
             service,
             label: def.label,
             accountNumber,
-            accountName: lookup.accountName ?? null,
+            accountName: verifiedName,
             destination: resolveDestination(service, accountNumber, phoneRaw || null),
             customerPhone: phoneRaw || null,
             customerEmail: def.requiresEmail ? email : (email || null),

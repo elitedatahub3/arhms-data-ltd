@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
     }
 
     const built = await buildUtilityIntent(
-        { service, accountNumber: cleanAccount, amount: parsedAmount, phone: cleanPhone, email },
+        { service, accountNumber: cleanAccount, amount: parsedAmount, phone: cleanPhone, email, acknowledgeUnlinkedMeter: body?.acknowledge_unlinked_meter === true },
         settings,
         'api'
     )
