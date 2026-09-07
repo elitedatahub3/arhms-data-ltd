@@ -5,10 +5,10 @@ import {
 } from '@/lib/api-auth'
 
 /**
- * Status of a data or airtime order, by reference.
+ * Status of a data, airtime, AFA or result checker order, by reference.
  *
- * v1 only knew about the `orders` table; airtime lives in its own, so one reference
- * has two places to look and the `type` field says which was found.
+ * v1 only knew about the `orders` table; each product since has its own, so one
+ * reference has four places to look and the `type` field says which was found.
  *
  * Standard key only. Bill payments are deliberately NOT reachable here — they have
  * their own endpoint at /api/v2/utilities/orders/:reference, gated on the commission
@@ -105,6 +105,61 @@ export async function GET(
             note:           airtimeOrder.fulfillment_note,
             created_at:     airtimeOrder.created_at,
             updated_at:     airtimeOrder.updated_at,
+        })
+    }
+
+    const afaOrder = await lookup(
+        'afa_orders',
+        'id, reference_code, status, payment_status, full_name, phone, region, payment_amount, created_at, updated_at'
+    )
+
+    if (afaOrder) {
+        logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'GET', statusCode: 200, responseTimeMs: Date.now() - startTime, ip })
+        return apiSuccessV2({
+            type:           'afa',
+            order_id:       afaOrder.id,
+            reference:      afaOrder.reference_code,
+            status:         afaOrder.status,
+            payment_status: afaOrder.payment_status,
+            applicant:      afaOrder.full_name,
+            phone:          afaOrder.phone,
+            region:         afaOrder.region,
+            amount_paid:    afaOrder.payment_amount,
+            // Restated on every poll: `completed` here means an agent finished the
+            // registration by hand, not that anything was dispatched upstream.
+            fulfillment:    'manual',
+            created_at:     afaOrder.created_at,
+            updated_at:     afaOrder.updated_at,
+        })
+    }
+
+    const rcOrder = await lookup(
+        'results_checker_orders',
+        'id, reference_code, status, payment_status, type_name, quantity, unit_price, total_paid, inventory_ids, created_at, updated_at'
+    )
+
+    if (rcOrder) {
+        // The PINs are returned again rather than only at purchase: a partner whose
+        // process died mid-response would otherwise have paid for vouchers they can
+        // never read back, and they are already sold to this order.
+        const { data: vouchers } = await (supabase.from('results_checker_inventory') as any)
+            .select('pin, serial_number')
+            .in('id', rcOrder.inventory_ids || [])
+
+        logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'GET', statusCode: 200, responseTimeMs: Date.now() - startTime, ip })
+        return apiSuccessV2({
+            type:           'results_checker',
+            order_id:       rcOrder.id,
+            reference:      rcOrder.reference_code,
+            status:         rcOrder.status,
+            payment_status: rcOrder.payment_status,
+            type_name:      rcOrder.type_name,
+            quantity:       rcOrder.quantity,
+            unit_price:     rcOrder.unit_price,
+            total_paid:     rcOrder.total_paid,
+            vouchers:       ((vouchers as any[]) || []).map(v => ({ pin: v.pin, serial: v.serial_number })),
+            created_at:     rcOrder.created_at,
+            updated_at:     rcOrder.updated_at,
         })
     }
 
