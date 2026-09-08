@@ -148,12 +148,13 @@ const QUICK_AMOUNTS = [1, 2, 5, 10, 20, 50, 100]
 // ─── Service tile icons ───────────────────────────────────────────────────────
 // The provider marks live in /public/images/storefront. A tile keeps its lucide
 // glyph as the fallback, so a missing or broken PNG leaves a recognisable icon
-// rather than an empty chip. DATA has no mark of its own and always falls back.
+// rather than an empty chip. DATA, AIRTIME and PAY BILLS have no single brand
+// (they cover every network, or five different billers) and always fall back;
+// AFA reuses the app's own MtnMark rather than a fetched image, since AFA
+// registration is an MTN product and NetworkLogo already draws that mark
+// correctly-coloured for the network selector just below this grid.
 const TILE_LOGO: Record<string, string> = {
-    airtime: '/images/storefront/airtime.png',
     results_checker: '/images/storefront/results-checker.png',
-    afa: '/images/storefront/afa.png',
-    utilities: '/images/storefront/utility-bills.png',
 }
 
 function TileIcon({ tab, icon: Icon, active, fillActive = false }: {
@@ -164,6 +165,17 @@ function TileIcon({ tab, icon: Icon, active, fillActive = false }: {
 }) {
     const logo = TILE_LOGO[tab]
     const [failed, setFailed] = useState(false)
+
+    if (tab === 'afa') {
+        return (
+            <div className={cn(
+                "w-12 h-12 rounded-full overflow-hidden ring-1 transition-colors",
+                active ? "ring-emerald-400" : "ring-black/5 dark:ring-white/10"
+            )}>
+                <NetworkLogo id="MTN" />
+            </div>
+        )
+    }
 
     // A brand mark carries its own colour, so it sits on a white chip in both
     // themes instead of being tinted by the active state - the card's border and

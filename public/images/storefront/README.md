@@ -1,14 +1,13 @@
 Service tile marks for the shop storefront (ShopStorefront.tsx).
 
-Drop these four files in, exactly these names (PNG, white or transparent
-background, roughly square, 128-256px):
+results-checker.png is the WAEC seal (fetched from Wikimedia Commons). Only
+one file lives here: DATA, AIRTIME and PAY BILLS cover every network or five
+different billers, so there is no single brand to show and they keep their
+lucide glyph. AFA does not need a file — it reuses the app's own MtnMark via
+NetworkLogo (lib/networks.tsx), since AFA registration is an MTN product and
+that mark is already drawn correctly-coloured for the network selector on
+this same page.
 
-    airtime.png
-    results-checker.png
-    afa.png
-    utility-bills.png
-
-DATA has no logo of its own — it always shows the Zap glyph. Referenced by
-TILE_LOGO in app/shop/[shopSlug]/ShopStorefront.tsx. A missing or broken file
-is not fatal: TileIcon falls back to the lucide glyph, so a tile never shows
-an empty chip.
+Referenced by TILE_LOGO in app/shop/[shopSlug]/ShopStorefront.tsx. A missing
+or broken file is not fatal: TileIcon falls back to the lucide glyph, so a
+tile never shows an empty chip.
