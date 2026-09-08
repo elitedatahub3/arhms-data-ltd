@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, type ElementType } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -144,6 +144,54 @@ const networkColors: Record<string, { bgClass: string; textClass: string; border
 }
 
 const QUICK_AMOUNTS = [1, 2, 5, 10, 20, 50, 100]
+
+// ─── Service tile icons ───────────────────────────────────────────────────────
+// The provider marks live in /public/images/storefront. A tile keeps its lucide
+// glyph as the fallback, so a missing or broken PNG leaves a recognisable icon
+// rather than an empty chip. DATA has no mark of its own and always falls back.
+const TILE_LOGO: Record<string, string> = {
+    airtime: '/images/storefront/airtime.png',
+    results_checker: '/images/storefront/results-checker.png',
+    afa: '/images/storefront/afa.png',
+    utilities: '/images/storefront/utility-bills.png',
+}
+
+function TileIcon({ tab, icon: Icon, active, fillActive = false }: {
+    tab: string
+    icon: ElementType
+    active: boolean
+    fillActive?: boolean
+}) {
+    const logo = TILE_LOGO[tab]
+    const [failed, setFailed] = useState(false)
+
+    // A brand mark carries its own colour, so it sits on a white chip in both
+    // themes instead of being tinted by the active state - the card's border and
+    // fill already say which tile is selected. Only the ring picks up the accent.
+    if (logo && !failed) {
+        return (
+            <div className={cn(
+                "w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center bg-white transition-colors ring-1",
+                active ? "ring-emerald-400" : "ring-black/5 dark:ring-white/10"
+            )}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                    src={logo}
+                    alt=""
+                    aria-hidden
+                    className="w-full h-full object-contain p-1"
+                    onError={() => setFailed(true)}
+                />
+            </div>
+        )
+    }
+
+    return (
+        <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", active ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
+            <Icon className={cn("w-6 h-6", active ? cn("text-white", fillActive && "fill-white") : "text-gray-400")} />
+        </div>
+    )
+}
 
 // ─── Checkout field styling ───────────────────────────────────────────────────
 // Lifted out of the data checkout sheet so the AFA registration form renders in
@@ -1367,7 +1415,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     // Four services wrap to a 2x2 rather than squeezing into one row —
                     // the tiles get unreadably narrow on a phone otherwise.
                     (() => {
-                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled].filter(Boolean).length
+                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled, !!shop.utilities_enabled].filter(Boolean).length
                         if (count >= 4) return "grid-cols-2"
                         if (count === 3) return "grid-cols-3"
                         if (count === 2) return "grid-cols-2"
@@ -1384,9 +1432,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                         )}
                     >
-                        <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'data' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                            <Zap className={cn("w-6 h-6", activeTab === 'data' ? "text-white fill-white" : "text-gray-400")} />
-                        </div>
+                        <TileIcon tab="data" icon={Zap} active={activeTab === 'data'} fillActive />
                         <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase">DATA</span>
                     </button>
 
@@ -1401,9 +1447,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'airtime' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <Smartphone className={cn("w-6 h-6", activeTab === 'airtime' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <TileIcon tab="airtime" icon={Smartphone} active={activeTab === 'airtime'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase">AIRTIME</span>
                         </button>
                     )}
@@ -1419,9 +1463,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'results_checker' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <GraduationCap className={cn("w-6 h-6", activeTab === 'results_checker' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <TileIcon tab="results_checker" icon={GraduationCap} active={activeTab === 'results_checker'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">RESULTS CHECKER</span>
                         </button>
                     )}
@@ -1437,9 +1479,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'afa' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <BadgeCheck className={cn("w-6 h-6", activeTab === 'afa' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <TileIcon tab="afa" icon={BadgeCheck} active={activeTab === 'afa'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">AFA REGISTRATION</span>
                         </button>
                     )}
@@ -1455,9 +1495,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'utilities' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <Receipt className={cn("w-6 h-6", activeTab === 'utilities' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <TileIcon tab="utilities" icon={Receipt} active={activeTab === 'utilities'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">PAY BILLS</span>
                         </button>
                     )}
