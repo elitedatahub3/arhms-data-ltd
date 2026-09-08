@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react'
 import {
     Tv, Zap, Droplets, CheckCircle2, Loader2, Wallet, AlertTriangle,
-    Search, ArrowRight, History, Copy, RefreshCw, Info, Phone,
+    ArrowRight, History, Copy, RefreshCw, Info, Phone, ChevronDown,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { useSearchParams } from 'next/navigation'
@@ -69,19 +69,14 @@ const SERVICE_STYLE: Record<string, {
     icon: React.ElementType
     logo: string
     gradient: string
-    tile: string
     badge?: string
 }> = {
-    dstv:       { icon: Tv,       logo: '/images/utilities/dstv.png',       gradient: 'from-[#0057b8] to-[#0091ea]', tile: 'bg-[#e8f1fd]' },
-    gotv:       { icon: Tv,       logo: '/images/utilities/gotv.png',       gradient: 'from-[#43a047] to-[#7cb342]', tile: 'bg-[#e9f7ec]' },
-    startimes:  { icon: Tv,       logo: '/images/utilities/startimes.png',  gradient: 'from-[#e65100] to-[#fb8c00]', tile: 'bg-[#fdeceb]' },
-    ecg:        { icon: Zap,      logo: '/images/utilities/ecg.png',        gradient: 'from-[#f9a825] to-[#fdd835]', tile: 'bg-[#f1eefc]', badge: 'Prepaid' },
-    ghanawater: { icon: Droplets, logo: '/images/utilities/ghanawater.png', gradient: 'from-[#0277bd] to-[#4fc3f7]', tile: 'bg-[#eaf3fb]' },
+    dstv:       { icon: Tv,       logo: '/images/utilities/dstv.png',       gradient: 'from-[#0057b8] to-[#0091ea]' },
+    gotv:       { icon: Tv,       logo: '/images/utilities/gotv.png',       gradient: 'from-[#43a047] to-[#7cb342]' },
+    startimes:  { icon: Tv,       logo: '/images/utilities/startimes.png',  gradient: 'from-[#e65100] to-[#fb8c00]' },
+    ecg:        { icon: Zap,      logo: '/images/utilities/ecg.png',        gradient: 'from-[#f9a825] to-[#fdd835]', badge: 'Prepaid' },
+    ghanawater: { icon: Droplets, logo: '/images/utilities/ghanawater.png', gradient: 'from-[#0277bd] to-[#4fc3f7]' },
 }
-
-// Brand logos are drawn for white paper. On the true-black dark surface the
-// pastel tile would swallow them, so the chip flips to near-white rather than
-// dimming - the mark keeps its own colours in both themes.
 function ServiceLogo({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' }) {
     const style = SERVICE_STYLE[id] || SERVICE_STYLE.dstv
     const [failed, setFailed] = useState(false)
@@ -96,18 +91,18 @@ function ServiceLogo({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' }) {
         )
     }
 
+    // object-cover, not contain: most of these marks are wide wordmarks on their
+    // own solid background, and filling the square crops the edges rather than
+    // letterboxing white bars top and bottom — the source already carries its
+    // real colour, so no extra background chip is layered behind it either.
     return (
-        <div className={cn(
-            box,
-            'shrink-0 flex items-center justify-center overflow-hidden ring-1 ring-black/[0.05] dark:ring-white/10 dark:!bg-white/90',
-            style.tile,
-        )}>
+        <div className={cn(box, 'shrink-0 overflow-hidden ring-1 ring-black/[0.05] dark:ring-white/10 bg-card')}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
                 src={style.logo}
                 alt=""
                 aria-hidden
-                className="w-full h-full object-contain p-1.5"
+                className="w-full h-full object-cover"
                 onError={() => setFailed(true)}
             />
         </div>
@@ -115,6 +110,28 @@ function ServiceLogo({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' }) {
 }
 
 const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500]
+
+// A native <select> rather than the Radix Select used in the form: the four
+// of these sit in a horizontally-scrolling row, and a portal-based listbox
+// fights that scroll container in a way a plain select never does.
+function FilterPill({ value, onChange, options }: {
+    value: string
+    onChange: (v: string) => void
+    options: { value: string; label: string }[]
+}) {
+    return (
+        <div className="relative shrink-0">
+            <select
+                value={value}
+                onChange={e => onChange(e.target.value)}
+                className="appearance-none h-9 pl-3.5 pr-8 rounded-full border border-border bg-surface-2 text-xs font-bold text-foreground cursor-pointer"
+            >
+                {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        </div>
+    )
+}
 
 function StatusBadge({ status }: { status: string }) {
     // Alpha fills, not the 100-step solids: on the true-black dark surface a
@@ -177,7 +194,7 @@ function SuccessModal({ order, label, onClose, onPayAnother }: {
                 </div>
 
                 <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1 rounded-xl h-11" onClick={onClose}>View History</Button>
+                    <Button variant="outline" className="flex-1 rounded-xl h-11" onClick={onClose}>Done</Button>
                     <Button className="flex-1 rounded-xl bg-accent-solid hover:bg-accent-strong text-accent-contrast h-11" onClick={onPayAnother}>
                         Pay Another
                     </Button>
@@ -193,7 +210,6 @@ function UtilitiesPageInner() {
     const { dbUser } = useAuth()
     const searchParams = useSearchParams()
 
-    const [activeTab, setActiveTab] = useState<'pay' | 'history'>('pay')
     const [configLoading, setConfigLoading] = useState(true)
     // Live in production before it is open to customers — the server decides this,
     // not the client, and enforces it again on every route that costs money.
@@ -231,10 +247,14 @@ function UtilitiesPageInner() {
     const [showConfirm, setShowConfirm] = useState(false)
     const [successOrder, setSuccessOrder] = useState<UtilityOrder | null>(null)
 
-    // History
+    // Recent payments — the page is one continuous scroll now, not a Pay/History
+    // tab split, so this list loads alongside the config rather than on tab switch.
     const [orders, setOrders] = useState<UtilityOrder[]>([])
     const [historyLoading, setHistoryLoading] = useState(false)
-    const [searchQuery, setSearchQuery] = useState('')
+    const [billerFilter, setBillerFilter] = useState('all')
+    const [statusFilter, setStatusFilter] = useState('all')
+    const [sourceFilter, setSourceFilter] = useState('all')
+    const [dateFilter, setDateFilter] = useState('all')
 
     const service = useMemo(() => services.find(s => s.id === serviceId) || null, [services, serviceId])
     const needsMomoDetails = isMomoPromptProvider(webPaymentProvider)
@@ -291,9 +311,17 @@ function UtilitiesPageInner() {
         }
     }, [])
 
-    useEffect(() => {
-        if (activeTab === 'history') fetchHistory()
-    }, [activeTab, fetchHistory])
+    useEffect(() => { fetchHistory() }, [fetchHistory])
+
+    // The floating refresh button reloads both live numbers on the page: the
+    // wallet strip and the payments list below it.
+    const refreshAll = useCallback(async () => {
+        fetchHistory()
+        if (dbUser) {
+            const { data } = await supabase.from('wallets').select('balance').eq('user_id', dbUser.id).single()
+            if (data) setWalletBalance((data as any).balance || 0)
+        }
+    }, [fetchHistory, dbUser])
 
     // ── Direct-pay polling ───────────────────────────────────────────────────
     useEffect(() => {
@@ -597,14 +625,18 @@ function UtilitiesPageInner() {
     const handleConfirm = () => payFromGateway()
 
     const filteredOrders = useMemo(() => {
-        const q = searchQuery.toLowerCase()
-        if (!q) return orders
+        const now = Date.now()
+        const dateCutoff = dateFilter === 'today' ? new Date().setHours(0, 0, 0, 0)
+            : dateFilter === '7d' ? now - 7 * 86400000
+            : dateFilter === '30d' ? now - 30 * 86400000
+            : null
         return orders.filter(o =>
-            o.account_number.toLowerCase().includes(q) ||
-            o.reference_code.toLowerCase().includes(q) ||
-            (o.account_name || '').toLowerCase().includes(q)
+            (billerFilter === 'all' || o.service === billerFilter) &&
+            (statusFilter === 'all' || o.status === statusFilter) &&
+            (sourceFilter === 'all' || o.payment_method === sourceFilter) &&
+            (dateCutoff === null || new Date(o.created_at).getTime() >= dateCutoff)
         )
-    }, [orders, searchQuery])
+    }, [orders, billerFilter, statusFilter, sourceFilter, dateFilter])
 
     const serviceLabelFor = (id: string) => services.find(s => s.id === id)?.label || id
 
@@ -645,41 +677,22 @@ function UtilitiesPageInner() {
                 </p>
             </div>
 
-            {/* Tabs */}
-            <div className="flex gap-2 mb-6 bg-surface-2 p-1 rounded-2xl w-fit">
-                {(['pay', 'history'] as const).map(tab => (
-                    <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className={cn(
-                            'px-5 py-2 rounded-xl text-sm font-bold capitalize transition',
-                            activeTab === tab ? 'bg-card text-foreground shadow-e1 ring-1 ring-border' : 'text-muted-foreground hover:text-foreground'
-                        )}
-                    >
-                        {tab === 'pay' ? 'Pay a Bill' : 'History'}
-                    </button>
-                ))}
-            </div>
-
-            {activeTab === 'pay' ? (
-                <div className="space-y-5">
-                    {/* Wallet strip */}
-                    <div className="flex items-center justify-between rounded-2xl px-5 py-4 text-white shadow-e2 bg-[image:var(--gradient-brand)]">
-                        <div className="flex items-center gap-3">
-                            <Wallet className="w-5 h-5 opacity-70" />
-                            <div>
-                                <p className="text-xs opacity-60">Wallet balance</p>
-                                <p className="text-lg font-black">
-                                    GHS {walletBalance !== null ? walletBalance.toFixed(2) : '—'}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Service picker */}
+            <div className="space-y-5">
+                {/* Wallet strip */}
+                <div className="flex items-center gap-3 rounded-2xl px-5 py-4 bg-surface-1 border border-border shadow-e1">
+                    <Wallet className="w-5 h-5 text-muted-foreground" />
                     <div>
-                        <Label className="text-sm font-bold text-foreground mb-2 block">Choose a service</Label>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <p className="text-xs text-muted-foreground">Wallet balance</p>
+                        <p className="text-lg font-black text-foreground">
+                            GHS {walletBalance !== null ? walletBalance.toFixed(2) : '—'}
+                        </p>
+                    </div>
+                </div>
+
+                {/* Service picker */}
+                <div>
+                    <p className="text-xs font-black uppercase tracking-[0.15em] text-muted-foreground mb-3">Pay a bill</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                             {services.map(s => {
                                 const style = SERVICE_STYLE[s.id] || SERVICE_STYLE.dstv
                                 const active = serviceId === s.id
@@ -966,23 +979,57 @@ function UtilitiesPageInner() {
                             </div>
                         </>
                     )}
-                </div>
-            ) : (
-                /* ── History ─────────────────────────────────────────────── */
-                <div className="space-y-4">
-                    <div className="flex gap-2">
-                        <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/70" />
-                            <Input
-                                value={searchQuery}
-                                onChange={e => setSearchQuery(e.target.value)}
-                                placeholder="Search account, name or reference"
-                                className="pl-9 h-11 rounded-xl"
-                            />
-                        </div>
-                        <Button variant="outline" className="h-11 rounded-xl" onClick={fetchHistory} disabled={historyLoading}>
-                            <RefreshCw className={cn('w-4 h-4', historyLoading && 'animate-spin')} />
-                        </Button>
+
+                {/* ── Recent payments ─────────────────────────────────────────── */}
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <p className="text-xs font-black uppercase tracking-[0.15em] text-muted-foreground">Recent payments</p>
+                        <button
+                            onClick={fetchHistory}
+                            disabled={historyLoading}
+                            className="w-7 h-7 rounded-full bg-surface-2 border border-border flex items-center justify-center hover:bg-surface-3 transition-colors"
+                        >
+                            <RefreshCw className={cn('w-3.5 h-3.5 text-muted-foreground', historyLoading && 'animate-spin')} />
+                        </button>
+                    </div>
+
+                    <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                        <FilterPill
+                            value={billerFilter}
+                            onChange={setBillerFilter}
+                            options={[{ value: 'all', label: 'All billers' }, ...services.map(s => ({ value: s.id, label: s.label }))]}
+                        />
+                        <FilterPill
+                            value={statusFilter}
+                            onChange={setStatusFilter}
+                            options={[
+                                { value: 'all', label: 'All statuses' },
+                                { value: 'pending', label: 'Pending' },
+                                { value: 'processing', label: 'Processing' },
+                                { value: 'completed', label: 'Completed' },
+                                { value: 'failed', label: 'Failed' },
+                                { value: 'refunded', label: 'Refunded' },
+                            ]}
+                        />
+                        <FilterPill
+                            value={sourceFilter}
+                            onChange={setSourceFilter}
+                            options={[
+                                { value: 'all', label: 'All sources' },
+                                { value: 'wallet', label: 'Wallet' },
+                                { value: 'gateway', label: 'Mobile Money' },
+                            ]}
+                        />
+                        <FilterPill
+                            value={dateFilter}
+                            onChange={setDateFilter}
+                            options={[
+                                { value: 'all', label: 'All time' },
+                                { value: 'today', label: 'Today' },
+                                { value: '7d', label: 'Last 7 days' },
+                                { value: '30d', label: 'Last 30 days' },
+                            ]}
+                        />
                     </div>
 
                     {historyLoading ? (
@@ -990,10 +1037,16 @@ function UtilitiesPageInner() {
                             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground/70" />
                         </div>
                     ) : filteredOrders.length === 0 ? (
-                        <div className="text-center py-16">
-                            <History className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
-                            <p className="text-muted-foreground font-semibold">No bill payments yet</p>
-                            <p className="text-sm text-muted-foreground/70 mt-1">Your DSTV, ECG and water payments will show up here.</p>
+                        <div className="text-center py-12 rounded-2xl border border-dashed border-border">
+                            <History className="w-8 h-8 text-muted-foreground/40 mx-auto mb-3" />
+                            <p className="text-foreground font-semibold text-sm">
+                                {orders.length === 0 ? 'No bills paid yet' : 'No payments match these filters'}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1 max-w-[26rem] mx-auto">
+                                {orders.length === 0
+                                    ? <>Your ECG, water and TV payments will appear here with <span className="text-accent-solid">live delivery status</span>.</>
+                                    : 'Try clearing a filter above.'}
+                            </p>
                         </div>
                     ) : (
                         <div className="space-y-2.5">
@@ -1035,7 +1088,15 @@ function UtilitiesPageInner() {
                         </div>
                     )}
                 </div>
-            )}
+            </div>
+
+            {/* Floating refresh — reloads the wallet strip and the payments list */}
+            <button
+                onClick={refreshAll}
+                className="fixed bottom-24 right-4 z-30 w-12 h-12 rounded-full bg-surface-2 border border-border shadow-e2 flex items-center justify-center hover:bg-surface-3 transition-colors md:bottom-8"
+            >
+                <RefreshCw className={cn('w-5 h-5 text-foreground', historyLoading && 'animate-spin')} />
+            </button>
 
             {/* Confirm dialog */}
             <Dialog open={showConfirm} onOpenChange={open => { if (!open && !isSubmitting) setShowConfirm(false) }}>
@@ -1106,8 +1167,8 @@ function UtilitiesPageInner() {
             <SuccessModal
                 order={successOrder}
                 label={successOrder ? serviceLabelFor(successOrder.service) : ''}
-                onClose={() => { setSuccessOrder(null); setActiveTab('history') }}
-                onPayAnother={() => { setSuccessOrder(null); setActiveTab('pay') }}
+                onClose={() => setSuccessOrder(null)}
+                onPayAnother={() => { setSuccessOrder(null); setServiceId(null) }}
             />
         </div>
     )
