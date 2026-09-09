@@ -187,23 +187,23 @@ function ConfirmSheet({ open, onCancel, onConfirm, isLoading, details }: {
 }) {
     if (!open) return null
     return (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-slate-700 to-slate-900 rounded-t-3xl" />
                 <div className="p-6">
                     <h3 className="text-lg font-bold text-slate-900 mb-1">Confirm Payment</h3>
                     <p className="text-sm text-slate-500 mb-5">Please review before proceeding</p>
                     <div className="space-y-2.5 mb-6">
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Network</span><span className="font-semibold">{details.network}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Recipient</span><span className="font-semibold">{details.phone}</span></div>
+                        <div className="flex justify-between gap-4 text-sm"><span className="text-slate-500 shrink-0">Network</span><span className="font-semibold text-slate-900 text-right">{details.network || '—'}</span></div>
+                        <div className="flex justify-between gap-4 text-sm"><span className="text-slate-500 shrink-0">Recipient</span><span className="font-semibold text-slate-900 text-right font-mono">{details.phone || '—'}</span></div>
                         {details.orderType === 'mashup' && details.preference && (
-                            <div className="flex justify-between text-sm"><span className="text-slate-500">Bundle Pref</span><span className="font-semibold text-amber-600 capitalize">{details.preference === 'data' ? 'Data Focus' : details.preference === 'voice' ? 'Voice Focus' : 'Balanced'}</span></div>
+                            <div className="flex justify-between gap-4 text-sm"><span className="text-slate-500 shrink-0">Bundle Pref</span><span className="font-semibold text-amber-600 capitalize text-right">{details.preference === 'data' ? 'Data Focus' : details.preference === 'voice' ? 'Voice Focus' : 'Balanced'}</span></div>
                         )}
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">{details.orderType === 'mashup' ? 'Bundle Value' : 'Airtime to send'}</span><span className="font-semibold text-emerald-600">GHS {details.airtime.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Service fee</span><span className="font-semibold">GHS {details.fee.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm border-t border-slate-100 pt-2.5 mt-1">
-                            <span className="font-bold text-slate-800">Total to Pay</span>
-                            <span className="font-bold text-lg text-slate-900">GHS {details.total.toFixed(2)}</span>
+                        <div className="flex justify-between gap-4 text-sm"><span className="text-slate-500 shrink-0">{details.orderType === 'mashup' ? 'Bundle Value' : 'Airtime to send'}</span><span className="font-semibold text-emerald-600 text-right">GHS {details.airtime.toFixed(2)}</span></div>
+                        <div className="flex justify-between gap-4 text-sm"><span className="text-slate-500 shrink-0">Service fee</span><span className="font-semibold text-slate-900 text-right">GHS {details.fee.toFixed(2)}</span></div>
+                        <div className="flex justify-between gap-4 text-sm border-t border-slate-100 pt-2.5 mt-1">
+                            <span className="font-bold text-slate-800 shrink-0">Total to Pay</span>
+                            <span className="font-bold text-lg text-slate-900 text-right">GHS {details.total.toFixed(2)}</span>
                         </div>
                     </div>
                     <div className="flex gap-3">
@@ -379,7 +379,7 @@ function AirtimePageInner() {
     const isPhoneValid = /^0\d{9}$/.test(phone)
     const isAmountValid = parsedAmount >= (settings?.min_amount || 1) && parsedAmount <= (settings?.max_amount || 500)
     const hasEnoughBalance = walletBalance !== null && totalPaid > 0 && walletBalance >= totalPaid
-    const canProceed = selectedNetwork && isPhoneValid && isAmountValid && hasEnoughBalance && !isSubmitting
+    const canProceed = selectedNetwork && isPhoneValid && isAmountValid && hasEnoughBalance && useExact && !isSubmitting
 
     const handlePhoneChange = (val: string) => {
         const clean = val.replace(/\D/g, '')
@@ -707,9 +707,9 @@ function AirtimePageInner() {
                                 Pay processing fee separately (Beneficiary receives exactly this amount)
                             </h4>
                             <p className="text-[11.5px] text-slate-500 dark:text-slate-400 leading-relaxed font-semibold">
-                                {useExact 
-                                    ? "Perfect for sending round numbers. The service fee will be added to your total payment." 
-                                    : "Standard Mode: The service fee will be deducted from whatever amount you type."}
+                                {useExact
+                                    ? "Perfect for sending round numbers. The service fee will be added to your total payment."
+                                    : "Turn this on to continue — the beneficiary receives the exact amount you type and the service fee is added to your total."}
                             </p>
                         </div>
                     </div>
@@ -740,7 +740,7 @@ function AirtimePageInner() {
                                             </span>
                                             <span className="font-black text-amber-700 dark:text-amber-400">GHS {airtimeAmount.toFixed(2)}</span>
                                         </div>
-                                        <p className="text-[11px] text-amber-600 dark:text-amber-500 font-black uppercase tracking-tight px-1">Fee deducted — enable "Pay separately" to avoid this</p>
+                                        <p className="text-[11px] text-amber-600 dark:text-amber-500 font-black uppercase tracking-tight px-1">Turn on "Pay processing fee separately" above to continue</p>
                                         <div className="flex justify-between border-t border-slate-200 dark:border-slate-600 pt-2.5 mt-1">
                                             <span className="font-black text-slate-800 dark:text-white uppercase tracking-tight">You pay</span>
                                             <span className="font-black text-lg text-slate-900 dark:text-white">GHS {totalPaid.toFixed(2)} ✓</span>
@@ -759,6 +759,17 @@ function AirtimePageInner() {
                                 <p className="text-xs text-red-500 font-semibold">You need GHS {totalPaid.toFixed(2)} but have GHS {walletBalance.toFixed(2)}. Please top up.</p>
                             </div>
                         </div>
+                    ) : !useExact ? (
+                        <button
+                            onClick={() => setUseExact(true)}
+                            className="w-full rounded-2xl border-2 border-dashed border-amber-400 bg-amber-50 dark:bg-amber-950/20 p-4 text-left flex items-center gap-3 transition-all hover:bg-amber-100 dark:hover:bg-amber-950/30"
+                        >
+                            <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                            <div>
+                                <p className="text-sm font-bold text-amber-700 dark:text-amber-400">Turn on exact-amount mode to continue</p>
+                                <p className="text-xs text-amber-600 dark:text-amber-500 font-semibold">Tap here to enable it. The beneficiary receives exactly what you type and the fee is added to your total.</p>
+                            </div>
+                        </button>
                     ) : (
                         <Button
                             className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-lg font-black shadow-lg transition-all"
