@@ -6,20 +6,19 @@
  * hit before that product moved to lib/kingflexy-utility-service.ts. This is the
  * airtime equivalent of that swap.
  *
- * Authenticates with the STANDARD kf_live_ key (KINGFLEXY_API_KEY), the same one
- * lib/kingflexy-service.ts uses for data purchases — per KingFlexy's docs, airtime v2
- * "uses the same standard key as your data endpoints." This is deliberately NOT
- * KINGFLEXY_COMMISSION_KEY (kf_cs_live_), which is for bill payments only and would be
- * rejected here. Because it shares a key with the data client, an airtime outage and a
- * data outage could in principle both stem from the same key problem — but each still
- * gets its own circuit breaker so one being unwell doesn't stop the other from trying.
+ * Authenticates with the Commission Services key (KINGFLEXY_COMMISSION_KEY,
+ * kf_cs_live_) — same one lib/kingflexy-utility-service.ts uses for bill payments.
+ * KingFlexy's Airtime v2 docs are explicit that this endpoint "only accepts a
+ * Commission Services key... a standard key is rejected with 403," so this is
+ * deliberately NOT KINGFLEXY_API_KEY (kf_live_), which is for the v1 data endpoints
+ * and would be rejected here.
  *
  * The retry/deadline/breaker shape is copied from lib/kingflexy-utility-service.ts,
  * which already solved the stalled-supplier problem for this same host.
  */
 import { sanitizeForLog } from '@/lib/safe-log'
 
-const KF_API_KEY = process.env.KINGFLEXY_API_KEY || ''
+const KF_COMMISSION_KEY = process.env.KINGFLEXY_COMMISSION_KEY || ''
 const KF_V2_URL = process.env.KINGFLEXY_API_V2_URL || 'https://api.kingflexygh.com/api/v2'
 
 // ─── Circuit Breaker ─────────────────────────────────────────────────────────
@@ -92,7 +91,7 @@ async function kfRequest(
                 headers: {
                     Accept: 'application/json',
                     // No "Bearer" prefix — their API takes the raw key.
-                    Authorization: KF_API_KEY,
+                    Authorization: KF_COMMISSION_KEY,
                     ...(body ? { 'Content-Type': 'application/json' } : {}),
                 },
                 ...(body ? { body: JSON.stringify(body) } : {}),
@@ -143,16 +142,16 @@ async function kfRequest(
  * Guards against the two configuration mistakes that look like provider outages.
  *
  * The precise reason is LOGGED, never returned — callers surface this straight to an
- * admin note or push, and "KINGFLEXY_API_KEY is not configured" has no business
- * appearing there.
+ * admin note or push, and "KINGFLEXY_COMMISSION_KEY is not configured" has no
+ * business appearing there.
  */
 function configError(): string | null {
-    if (!KF_API_KEY) {
-        console.error('[KingFlexyAirtime] KINGFLEXY_API_KEY is not configured.')
+    if (!KF_COMMISSION_KEY) {
+        console.error('[KingFlexyAirtime] KINGFLEXY_COMMISSION_KEY is not configured.')
         return 'Airtime provider is temporarily unavailable.'
     }
-    if (!KF_API_KEY.startsWith('kf_live_')) {
-        console.error('[KingFlexyAirtime] KINGFLEXY_API_KEY does not look like a standard kf_live_ key.')
+    if (!KF_COMMISSION_KEY.startsWith('kf_cs_live_')) {
+        console.error('[KingFlexyAirtime] KINGFLEXY_COMMISSION_KEY does not look like a Commission Services key (expected the kf_cs_live_ prefix).')
         return 'Airtime provider is temporarily unavailable.'
     }
     return null
