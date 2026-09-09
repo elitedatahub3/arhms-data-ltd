@@ -128,8 +128,8 @@ function SuccessModal({ order, onClose, onBuyMore }: { order: AirtimeOrder | nul
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-300">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto overscroll-contain bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-sm my-auto max-h-[85dvh] overflow-y-auto animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-emerald-400 to-green-500" />
                 <div className="p-6 text-center">
                     <div className="w-16 h-16 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border-2 border-emerald-200 dark:border-emerald-800 flex items-center justify-center mx-auto mb-4 animate-in zoom-in duration-500">
@@ -187,8 +187,8 @@ function ConfirmSheet({ open, onCancel, onConfirm, isLoading, details }: {
 }) {
     if (!open) return null
     return (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-sm animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto overscroll-contain bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-sm my-auto max-h-[85dvh] overflow-y-auto animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-slate-700 to-slate-900 rounded-t-3xl" />
                 <div className="p-6">
                     <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Confirm Payment</h3>
@@ -269,6 +269,14 @@ function AirtimePageInner() {
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [showConfirm, setShowConfirm] = useState(false)
     const [successOrder, setSuccessOrder] = useState<AirtimeOrder | null>(null)
+
+    // Freeze the page behind an open overlay so the sheet can't scroll away on mobile
+    useEffect(() => {
+        if (!showConfirm && !successOrder) return
+        const previous = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        return () => { document.body.style.overflow = previous }
+    }, [showConfirm, successOrder])
 
     // Handle query params
     useEffect(() => {
