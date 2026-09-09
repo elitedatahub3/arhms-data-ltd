@@ -187,8 +187,12 @@ function ConfirmSheet({ open, onCancel, onConfirm, isLoading, details }: {
 }) {
     if (!open) return null
     return (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-sm animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            {/* Bottom-sheet style (items-end) put this behind the mobile bottom nav — same
+                z-40 as MobileBottomNav, and the nav wins paint order — so the Confirm & Pay
+                button ended up hidden below the fold on a phone. Centering it, above the nav's
+                z-40, keeps it fully on screen on any viewport. */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-sm max-h-[calc(100vh-2rem)] overflow-y-auto animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-slate-700 to-slate-900 rounded-t-3xl" />
                 <div className="p-6">
                     <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Confirm Payment</h3>
