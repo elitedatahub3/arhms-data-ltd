@@ -154,6 +154,13 @@ export async function GET(request: NextRequest) {
                                 throw new Error(utilResult.error || 'Utility bill processing failed')
                             }
                             console.log(`[CronHubtel] ✅ Utility bill ${payment.reference} settled`)
+                        } else if (payment.reference.startsWith('AIRPAY-')) {
+                            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                            const airResult = await processAirtimeDirectOrder(payment.reference)
+                            if (!airResult.success && !airResult.alreadyProcessed) {
+                                throw new Error(airResult.error || 'Airtime order processing failed')
+                            }
+                            console.log(`[CronHubtel] ✅ Airtime order ${payment.reference} settled`)
                         } else if (payment.reference.startsWith('BOOST-')) {
                             const { processBoostPayment } = await import('@/lib/classifieds-payments')
                             const boostResult = await processBoostPayment(payment.reference, mappedEventData)

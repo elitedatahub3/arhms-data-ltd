@@ -82,6 +82,16 @@ export async function GET(request: NextRequest) {
                             } else {
                                 console.error(`[CronMoolre] ❌ Utility bill ${payment.reference} failed:`, utilResult.error)
                             }
+                        } else if (payment.reference.startsWith('AIRPAY-')) {
+                            // Direct-pay airtime top-ups
+                            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                            const airResult = await processAirtimeDirectOrder(payment.reference)
+                            if (airResult.success || airResult.alreadyProcessed) {
+                                results.walletCredited++
+                                console.log(`[CronMoolre] ✅ Airtime order ${payment.reference} settled`)
+                            } else {
+                                console.error(`[CronMoolre] ❌ Airtime order ${payment.reference} failed:`, airResult.error)
+                            }
                         } else if (payment.reference.startsWith('BOOST-')) {
                             // Process boost payments
                             results.boostChecked++

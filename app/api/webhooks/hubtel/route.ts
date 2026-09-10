@@ -174,6 +174,16 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ received: true })
         }
 
+        // ── AIRTIME (Direct Pay) ─────────────────────────────────────────────────
+        // AIRPAY-, not AIR- — the latter is a Hubtel airtime fulfillment leg going
+        // OUT, which this webhook must not confuse with money coming IN.
+        if (ClientReference.startsWith('AIRPAY-')) {
+            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+            console.log('[HubtelWebhook] Routing direct-pay airtime order:', ClientReference)
+            await processAirtimeDirectOrder(ClientReference)
+            return NextResponse.json({ received: true })
+        }
+
         // ── CLASSIFIEDS BOOST ─────────────────────────────────────────────────────
         if (ClientReference.startsWith('BOOST-')) {
             const { processBoostPayment } = await import('@/lib/classifieds-payments')
