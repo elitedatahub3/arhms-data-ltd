@@ -1687,11 +1687,19 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     </div>
 
                                     <button
-                                        onClick={handleBuyAirtime} disabled={loading || !detectedNetwork || parseFloat(airtimeAmount || '0') <= 0}
+                                        onClick={handleBuyAirtime} disabled={loading || !detectedNetwork || parseFloat(airtimeAmount || '0') <= 0 || !useExact}
                                         className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-base uppercase tracking-widest shadow-lg flex justify-center items-center gap-3 transition-transform active:scale-95 disabled:opacity-50 disabled:active:scale-100"
                                     >
                                         {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> {pollingRef ? 'Waiting for Approval...' : 'Processing...'}</> : <><Smartphone className="w-5 h-5"/> Recharge Airtime</>}
                                     </button>
+                                    {/* "Pay separately" is required, not optional — Standard mode silently
+                                        shorts the recipient by the fee amount, so checkout stays blocked
+                                        until the toggle above is on. */}
+                                    {!useExact && detectedNetwork && parseFloat(airtimeAmount || '0') > 0 && (
+                                        <p className="text-center text-[10px] text-amber-600 dark:text-amber-500 font-bold -mt-2">
+                                            Turn on "Pay processing fee separately" above to continue
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                         </div>

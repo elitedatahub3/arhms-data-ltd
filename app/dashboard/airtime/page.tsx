@@ -129,35 +129,35 @@ function SuccessModal({ order, onClose, onBuyMore }: { order: AirtimeOrder | nul
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-300">
+            <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-emerald-400 to-green-500" />
                 <div className="p-6 text-center">
-                    <div className="w-16 h-16 rounded-full bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center mx-auto mb-4 animate-in zoom-in duration-500">
+                    <div className="w-16 h-16 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border-2 border-emerald-200 dark:border-emerald-800 flex items-center justify-center mx-auto mb-4 animate-in zoom-in duration-500">
                         <CheckCircle className="w-8 h-8 text-emerald-500" />
                     </div>
-                    <h2 className="text-xl font-bold text-slate-900 mb-0.5">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-0.5">
                         {order.type === 'mashup' ? 'Mashup Order Placed! 🎯' : 'Order Placed!'}
                     </h2>
-                    <p className="text-slate-500 text-[13px] mb-4">
+                    <p className="text-slate-500 dark:text-slate-400 text-[13px] mb-4">
                         {order.type === 'mashup'
                             ? 'Your MTN Bundle request is pending — admin will fulfil via My MTN App'
                             : 'Your airtime is being processed'}
                     </p>
 
-                    <div className="bg-slate-50 rounded-2xl p-4 mb-4 text-left space-y-2.5">
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Network</span><span className="font-semibold text-slate-900">{order.network}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Recipient</span><span className="font-semibold text-slate-900">{order.beneficiary_phone}</span></div>
+                    <div className="bg-slate-50 dark:bg-slate-800 rounded-2xl p-4 mb-4 text-left space-y-2.5">
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Network</span><span className="font-semibold text-slate-900 dark:text-white">{order.network}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Recipient</span><span className="font-semibold text-slate-900 dark:text-white">{order.beneficiary_phone}</span></div>
                         {order.type === 'mashup' && order.bundle_preference && (
-                            <div className="flex justify-between text-sm"><span className="text-slate-500">Preference</span><span className="font-semibold text-amber-600 capitalize">{order.bundle_preference === 'data' ? 'Data Focus 📊' : order.bundle_preference === 'voice' ? 'Voice Focus 🎙️' : 'Balanced ⚖️'}</span></div>
+                            <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Preference</span><span className="font-semibold text-amber-600 dark:text-amber-400 capitalize">{order.bundle_preference === 'data' ? 'Data Focus 📊' : order.bundle_preference === 'voice' ? 'Voice Focus 🎙️' : 'Balanced ⚖️'}</span></div>
                         )}
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">{order.type === 'mashup' ? 'Bundle Value' : 'Airtime'}</span><span className="font-semibold text-emerald-600">GHS {order.airtime_amount.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm border-t border-slate-200 pt-2.5 mt-1"><span className="text-slate-500 font-medium">You Paid</span><span className="font-bold text-slate-900">GHS {order.total_paid.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{order.type === 'mashup' ? 'Bundle Value' : 'Airtime'}</span><span className="font-semibold text-emerald-600 dark:text-emerald-400">GHS {order.airtime_amount.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm border-t border-slate-200 dark:border-slate-700 pt-2.5 mt-1"><span className="text-slate-500 dark:text-slate-400 font-medium">You Paid</span><span className="font-bold text-slate-900 dark:text-white">GHS {order.total_paid.toFixed(2)}</span></div>
                     </div>
 
-                    <button onClick={copy} className="w-full flex items-center justify-between bg-slate-100 hover:bg-slate-200 rounded-xl px-4 py-3 mb-4 transition-colors group">
+                    <button onClick={copy} className="w-full flex items-center justify-between bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl px-4 py-3 mb-4 transition-colors group">
                         <div className="text-left">
                             <p className="text-xs text-slate-400 mb-0.5">Reference Code</p>
-                            <p className="font-mono font-bold text-slate-800 text-sm">{order.reference_code}</p>
+                            <p className="font-mono font-bold text-slate-800 dark:text-slate-200 text-sm">{order.reference_code}</p>
                         </div>
                         <Copy className={cn('w-4 h-4 transition-colors', copied ? 'text-emerald-500' : 'text-slate-400 group-hover:text-slate-600')} />
                     </button>
@@ -188,22 +188,22 @@ function ConfirmSheet({ open, onCancel, onConfirm, isLoading, details }: {
     if (!open) return null
     return (
         <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm animate-in slide-in-from-bottom-4 duration-300">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-sm animate-in slide-in-from-bottom-4 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-slate-700 to-slate-900 rounded-t-3xl" />
                 <div className="p-6">
-                    <h3 className="text-lg font-bold text-slate-900 mb-1">Confirm Payment</h3>
-                    <p className="text-sm text-slate-500 mb-5">Please review before proceeding</p>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Confirm Payment</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Please review before proceeding</p>
                     <div className="space-y-2.5 mb-6">
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Network</span><span className="font-semibold">{details.network}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Recipient</span><span className="font-semibold">{details.phone}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Network</span><span className="font-semibold dark:text-white">{details.network}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Recipient</span><span className="font-semibold dark:text-white">{details.phone}</span></div>
                         {details.orderType === 'mashup' && details.preference && (
-                            <div className="flex justify-between text-sm"><span className="text-slate-500">Bundle Pref</span><span className="font-semibold text-amber-600 capitalize">{details.preference === 'data' ? 'Data Focus' : details.preference === 'voice' ? 'Voice Focus' : 'Balanced'}</span></div>
+                            <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Bundle Pref</span><span className="font-semibold text-amber-600 dark:text-amber-400 capitalize">{details.preference === 'data' ? 'Data Focus' : details.preference === 'voice' ? 'Voice Focus' : 'Balanced'}</span></div>
                         )}
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">{details.orderType === 'mashup' ? 'Bundle Value' : 'Airtime to send'}</span><span className="font-semibold text-emerald-600">GHS {details.airtime.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Service fee</span><span className="font-semibold">GHS {details.fee.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm border-t border-slate-100 pt-2.5 mt-1">
-                            <span className="font-bold text-slate-800">Total to Pay</span>
-                            <span className="font-bold text-lg text-slate-900">GHS {details.total.toFixed(2)}</span>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{details.orderType === 'mashup' ? 'Bundle Value' : 'Airtime to send'}</span><span className="font-semibold text-emerald-600 dark:text-emerald-400">GHS {details.airtime.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Service fee</span><span className="font-semibold dark:text-white">GHS {details.fee.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm border-t border-slate-100 dark:border-slate-700 pt-2.5 mt-1">
+                            <span className="font-bold text-slate-800 dark:text-slate-200">Total to Pay</span>
+                            <span className="font-bold text-lg text-slate-900 dark:text-white">GHS {details.total.toFixed(2)}</span>
                         </div>
                     </div>
                     <div className="flex gap-3">
@@ -379,7 +379,10 @@ function AirtimePageInner() {
     const isPhoneValid = /^0\d{9}$/.test(phone)
     const isAmountValid = parsedAmount >= (settings?.min_amount || 1) && parsedAmount <= (settings?.max_amount || 500)
     const hasEnoughBalance = walletBalance !== null && totalPaid > 0 && walletBalance >= totalPaid
-    const canProceed = selectedNetwork && isPhoneValid && isAmountValid && hasEnoughBalance && !isSubmitting
+    // "Pay processing fee separately" must be turned on before checkout — the deduct-from-amount
+    // mode silently shorts the beneficiary, which is exactly what the amber warning below the
+    // toggle is nagging about. Requiring it removes the trap instead of just flagging it.
+    const canProceed = selectedNetwork && isPhoneValid && isAmountValid && hasEnoughBalance && useExact && !isSubmitting
 
     const handlePhoneChange = (val: string) => {
         const clean = val.replace(/\D/g, '')
@@ -740,7 +743,7 @@ function AirtimePageInner() {
                                             </span>
                                             <span className="font-black text-amber-700 dark:text-amber-400">GHS {airtimeAmount.toFixed(2)}</span>
                                         </div>
-                                        <p className="text-[11px] text-amber-600 dark:text-amber-500 font-black uppercase tracking-tight px-1">Fee deducted — enable "Pay separately" to avoid this</p>
+                                        <p className="text-[11px] text-amber-600 dark:text-amber-500 font-black uppercase tracking-tight px-1">Fee deducted — turn on "Pay separately" above to continue</p>
                                         <div className="flex justify-between border-t border-slate-200 dark:border-slate-600 pt-2.5 mt-1">
                                             <span className="font-black text-slate-800 dark:text-white uppercase tracking-tight">You pay</span>
                                             <span className="font-black text-lg text-slate-900 dark:text-white">GHS {totalPaid.toFixed(2)} ✓</span>
@@ -760,13 +763,20 @@ function AirtimePageInner() {
                             </div>
                         </div>
                     ) : (
-                        <Button
-                            className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-lg font-black shadow-lg transition-all"
-                            disabled={!canProceed}
-                            onClick={() => setShowConfirm(true)}
-                        >
-                            Proceed to Payment <ArrowRight className="w-5 h-5 ml-2" />
-                        </Button>
+                        <>
+                            <Button
+                                className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-lg font-black shadow-lg transition-all"
+                                disabled={!canProceed}
+                                onClick={() => setShowConfirm(true)}
+                            >
+                                Proceed to Payment <ArrowRight className="w-5 h-5 ml-2" />
+                            </Button>
+                            {!useExact && selectedNetwork && isPhoneValid && isAmountValid && (
+                                <p className="text-center text-[11px] text-amber-600 dark:text-amber-500 font-bold -mt-3">
+                                    Turn on "Pay processing fee separately" above to continue
+                                </p>
+                            )}
+                        </>
                     )}
                 </div>
             )}
