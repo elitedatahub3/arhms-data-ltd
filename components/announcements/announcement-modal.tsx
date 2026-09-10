@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { AlertTriangle, ArrowRight, Megaphone, MessagesSquare, Store, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Megaphone, MessagesSquare, RefreshCw, Store, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getTone, type AnnouncementTone } from '@/lib/announcement-tones'
 
@@ -25,8 +25,10 @@ interface AnnouncementModalProps {
     /** Optional WhatsApp / community link shown as the secondary action. */
     communityLink?: string | null
     dismissLabel?: string
-    /** Fires on the primary button, the X, Esc and the backdrop alike. */
+    /** Fires on the primary button, Esc and the backdrop alike. */
     onDismiss?: () => void
+    /** Re-fetches the announcement in place. Omit for a component with no refresh affordance. */
+    onRefresh?: () => void | Promise<void>
 }
 
 export function AnnouncementModal({
@@ -39,13 +41,25 @@ export function AnnouncementModal({
     communityLink,
     dismissLabel = 'Got it, thanks',
     onDismiss,
+    onRefresh,
 }: AnnouncementModalProps) {
     const t = getTone(tone)
     const Icon = TONE_ICONS[tone] ?? Megaphone
+    const [refreshing, setRefreshing] = React.useState(false)
 
     const close = () => {
         onDismiss?.()
         onOpenChange(false)
+    }
+
+    const refresh = async () => {
+        if (!onRefresh || refreshing) return
+        setRefreshing(true)
+        try {
+            await onRefresh()
+        } finally {
+            setRefreshing(false)
+        }
     }
 
     return (
@@ -61,32 +75,41 @@ export function AnnouncementModal({
 
                 <DialogPrimitive.Content
                     className={cn(
-                        'fixed left-1/2 top-1/2 z-[101] w-[calc(100%-2rem)] max-w-[26rem] -translate-x-1/2 -translate-y-1/2',
-                        'overflow-hidden rounded-[28px] border border-gray-200/80 dark:border-white/10',
-                        'bg-white dark:bg-[#0f1524] shadow-[0_40px_90px_-30px_rgba(2,6,23,0.6)]',
+                        'sheet-maxh fixed inset-x-0 bottom-0 z-[101] mx-auto flex w-full flex-col sm:bottom-6 sm:max-w-[26rem]',
+                        'overflow-hidden rounded-t-[28px] border border-gray-200/80 dark:border-white/10 sm:rounded-b-[28px]',
+                        'bg-white dark:bg-[#0f1524] shadow-[0_-20px_60px_-20px_rgba(2,6,23,0.35)] sm:shadow-[0_40px_90px_-30px_rgba(2,6,23,0.6)]',
                         'duration-300 data-[state=open]:animate-in data-[state=closed]:animate-out',
                         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
-                        'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
-                        'data-[state=open]:slide-in-from-bottom-4',
+                        'data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
                     )}
                 >
+                    {/* Drag handle — decorative; signals "swipe down to dismiss" like a native sheet. */}
+                    <div className="flex shrink-0 justify-center pb-1 pt-2.5">
+                        <div className="h-1 w-10 rounded-full bg-gray-300/70 dark:bg-white/20" />
+                    </div>
+
                     {/* Tone hairline — the first thing the eye reads as "which kind of notice is this". */}
-                    <div className={cn('h-1 w-full', t.bar)} />
+                    <div className={cn('h-1 w-full shrink-0', t.bar)} />
 
                     {/* ── Header: wash + orbs, icon on the left, badge and title stacked beside it ── */}
-                    <div className="relative overflow-hidden px-5 pb-5 pt-6 sm:px-6">
+                    <div className="relative shrink-0 overflow-hidden px-5 pb-5 pt-7 sm:px-6">
                         <div className={cn('pointer-events-none absolute inset-0', t.wash)} />
                         <div className={cn('pointer-events-none absolute -left-10 -top-14 h-32 w-32 rounded-full blur-3xl', t.orbA)} />
                         <div className={cn('pointer-events-none absolute -right-8 -top-6 h-24 w-24 rounded-full blur-2xl', t.orbB)} />
 
-                        <DialogPrimitive.Close
-                            className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-gray-900/5 text-gray-500 transition-colors hover:bg-gray-900/10 hover:text-gray-900 dark:bg-white/5 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
-                            aria-label="Close announcement"
-                        >
-                            <X className="h-4 w-4" />
-                        </DialogPrimitive.Close>
+                        {onRefresh && (
+                            <button
+                                type="button"
+                                onClick={refresh}
+                                aria-label="Refresh announcement"
+                                className="absolute -top-3 right-5 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-white text-gray-500 shadow-md ring-1 ring-black/5 transition-transform active:scale-95 disabled:opacity-60 dark:bg-[#0f1524] dark:text-gray-400 dark:ring-white/10"
+                                disabled={refreshing}
+                            >
+                                <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+                            </button>
+                        )}
 
-                        <div className="relative z-[1] flex items-start gap-4 pr-8">
+                        <div className="relative z-[1] flex items-start gap-4">
                             <div className="relative shrink-0">
                                 <span className={cn('absolute inset-0 animate-ping rounded-2xl opacity-60', t.halo)} style={{ animationDuration: '2.6s' }} />
                                 <div className={cn('relative flex h-14 w-14 items-center justify-center rounded-2xl', t.tile)}>
@@ -106,11 +129,11 @@ export function AnnouncementModal({
                         </div>
                     </div>
 
-                    {/* ── Message: spine-marked panel, scrolls on its own with a fade at the seam ── */}
-                    <div className="px-5 sm:px-6">
+                    {/* ── Message: spine-marked panel, scrolls on its own within the sheet's flex layout ── */}
+                    <div className="min-h-0 flex-1 overflow-y-auto px-5 sm:px-6">
                         <div className={cn('relative overflow-hidden rounded-2xl', t.panel)}>
                             <div className={cn('absolute inset-y-0 left-0 w-1', t.spine)} />
-                            <div className="announcement-scroll max-h-[42vh] overflow-y-auto py-4 pl-5 pr-4">
+                            <div className="announcement-scroll py-4 pl-5 pr-4">
                                 <DialogPrimitive.Description className="whitespace-pre-wrap break-words text-[13.5px] font-medium leading-relaxed text-gray-600 dark:text-gray-300 sm:text-sm">
                                     {message}
                                 </DialogPrimitive.Description>
@@ -119,7 +142,7 @@ export function AnnouncementModal({
                     </div>
 
                     {/* ── Actions ── */}
-                    <div className="flex flex-col gap-2.5 p-5 sm:p-6">
+                    <div className="safe-b flex shrink-0 flex-col gap-2.5 p-5 sm:p-6">
                         <button
                             type="button"
                             onClick={close}

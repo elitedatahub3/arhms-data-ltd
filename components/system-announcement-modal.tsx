@@ -75,6 +75,7 @@ export function SystemAnnouncementModal({ initialAnnouncement = null }: { initia
             title={announcement.title}
             message={announcement.message}
             onDismiss={handleDismiss}
+            onRefresh={fetchAndCheck}
         />
     )
 }
