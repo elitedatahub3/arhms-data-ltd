@@ -239,6 +239,14 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ received: true })
             }
 
+            // o. AIRTIME: References starting with AIRPAY- are direct-pay airtime top-ups
+            if (reference && reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                console.log('[PaystackWebhook] Routing direct-pay airtime order:', reference)
+                await processAirtimeDirectOrder(reference)
+                return NextResponse.json({ received: true })
+            }
+
             // o. BOOST PAYMENTS: References starting with BOOST- are classified listing boosts
             if (reference && reference.startsWith('BOOST-')) {
                 const { processBoostPayment } = await import('@/lib/classifieds-payments')

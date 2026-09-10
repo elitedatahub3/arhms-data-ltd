@@ -165,6 +165,10 @@ export async function GET(request: NextRequest) {
                         const { processUtilityDirectOrder } = await import('@/lib/utility-order-payments')
                         const r = await processUtilityDirectOrder(payment.reference)
                         if (!r.success && !r.alreadyProcessed) throw new Error(r.error || 'Utility bill processing failed')
+                    } else if (payment.reference.startsWith('AIRPAY-')) {
+                        const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                        const r = await processAirtimeDirectOrder(payment.reference)
+                        if (!r.success && !r.alreadyProcessed) throw new Error(r.error || 'Airtime order processing failed')
                     } else if (payment.reference.startsWith('BOOST-')) {
                         const { processBoostPayment } = await import('@/lib/classifieds-payments')
                         const r = await processBoostPayment(payment.reference, mappedEventData)
