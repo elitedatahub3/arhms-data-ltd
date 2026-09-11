@@ -18,15 +18,15 @@
  * can carry several meters and paying the wrong one is unrecoverable.
  */
 import { useState } from 'react'
-import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight, Phone, ArrowRight } from 'lucide-react'
+import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight, Phone, ArrowRight, Tv, Zap, Droplets } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const BILLERS = [
-    { id: 'dstv',       label: 'DSTV',       hint: 'Smartcard / IUC number' },
-    { id: 'gotv',       label: 'GOtv',       hint: 'IUC number' },
-    { id: 'startimes',  label: 'StarTimes',  hint: 'Account number' },
-    { id: 'ecg',        label: 'ECG Prepaid', hint: 'Looked up by phone number' },
-    { id: 'ghanawater', label: 'Ghana Water', hint: 'Meter number' },
+    { id: 'dstv',       label: 'DSTV',       hint: 'Smartcard / IUC number',    icon: Tv,       gradient: 'from-[#0057b8] to-[#0091ea]' },
+    { id: 'gotv',       label: 'GOtv',       hint: 'IUC number',                icon: Tv,       gradient: 'from-[#43a047] to-[#7cb342]' },
+    { id: 'startimes',  label: 'StarTimes',  hint: 'Account number',            icon: Tv,       gradient: 'from-[#e65100] to-[#fb8c00]' },
+    { id: 'ecg',        label: 'ECG Prepaid', hint: 'Looked up by phone number', icon: Zap,      gradient: 'from-[#f9a825] to-[#fdd835]' },
+    { id: 'ghanawater', label: 'Ghana Water', hint: 'Meter number',              icon: Droplets, gradient: 'from-[#0277bd] to-[#4fc3f7]' },
 ] as const
 
 type BillerId = typeof BILLERS[number]['id']
@@ -222,27 +222,37 @@ export default function StorefrontUtilities({
         <div className="space-y-4">
             {/* Biller */}
             <div>
-                <label className="block text-sm font-semibold mb-2">Choose a biller</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {BILLERS.map(b => (
-                        <button
-                            key={b.id}
-                            type="button"
-                            onClick={() => { setBiller(b.id); setAccount(''); reset() }}
-                            className={cn(
-                                'rounded-xl border px-3 py-2.5 text-left transition-colors',
-                                biller === b.id
-                                    ? 'border-transparent text-white'
-                                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
-                            )}
-                            style={biller === b.id ? { backgroundColor: accent } : undefined}
-                        >
-                            <span className="block text-sm font-bold">{b.label}</span>
-                            <span className={cn('block text-[11px]', biller === b.id ? 'text-white/80' : 'text-gray-500')}>
-                                {b.hint}
-                            </span>
-                        </button>
-                    ))}
+                <label className="block text-sm font-bold mb-2 text-foreground">Choose a service</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {BILLERS.map(b => {
+                        const Icon = b.icon
+                        const active = biller === b.id
+                        return (
+                            <button
+                                key={b.id}
+                                type="button"
+                                onClick={() => { setBiller(b.id); setAccount(''); reset() }}
+                                className={cn(
+                                    'relative rounded-2xl border-2 p-4 text-left transition',
+                                    active
+                                        ? 'bg-muted'
+                                        : 'border-border hover:border-border-strong'
+                                )}
+                                // The shop's own brand colour marks the selection, so the
+                                // card still belongs to the storefront it is sitting on.
+                                style={active ? { borderColor: accent } : undefined}
+                            >
+                                <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center mb-2', b.gradient)}>
+                                    <Icon className="w-5 h-5 text-white" />
+                                </div>
+                                <p className="font-bold text-sm text-foreground">{b.label}</p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">{b.hint}</p>
+                                {active && (
+                                    <CheckCircle2 className="absolute top-3 right-3 w-4 h-4" style={{ color: accent }} />
+                                )}
+                            </button>
+                        )
+                    })}
                 </div>
             </div>
 
@@ -254,17 +264,17 @@ export default function StorefrontUtilities({
                             {isEcg ? 'ECG phone number' : 'Phone number linked to the account'}
                         </label>
                         <div className="relative">
-                            <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                             <input
                                 value={phone}
                                 onChange={e => { setPhone(e.target.value); reset() }}
                                 placeholder="0XXXXXXXXX"
                                 inputMode="numeric"
-                                className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 pl-9 pr-3 py-2.5 text-sm"
+                                className="w-full rounded-xl border border-border bg-card pl-9 pr-3 py-2.5 text-sm"
                             />
                         </div>
                         {isEcg && (
-                            <p className="text-[11px] text-gray-400 mt-1">
+                            <p className="text-[11px] text-muted-foreground mt-1">
                                 The number the meter is paid on.
                             </p>
                         )}
@@ -281,7 +291,7 @@ export default function StorefrontUtilities({
                             onChange={e => { setAccount(e.target.value); reset() }}
                             placeholder={def.hint}
                             inputMode="numeric"
-                            className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                            className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
                         />
                     </div>
                 )}
@@ -298,7 +308,7 @@ export default function StorefrontUtilities({
                             onChange={e => { setAccount(e.target.value); reset() }}
                             placeholder="Meter number"
                             inputMode="numeric"
-                            className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                            className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
                         />
                     </div>
                 )}
@@ -321,7 +331,7 @@ export default function StorefrontUtilities({
                     error; the tick is what makes paying an unconfirmed meter a choice
                     instead of an accident, and it clears on every edit. */}
                 {isEcg && checked && !chosenMeter && account.trim() && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-2">
+                    <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-2">
                         <p className="text-xs text-amber-800 dark:text-amber-300">
                             We could not confirm meter{' '}
                             <span className="font-mono font-bold">{account.trim()}</span> on{' '}
@@ -346,7 +356,7 @@ export default function StorefrontUtilities({
             </div>
 
             {error && (
-                <div className="rounded-xl border border-red-200 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex gap-2">
+                <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex gap-2">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{error}</span>
                 </div>
@@ -363,7 +373,7 @@ export default function StorefrontUtilities({
                                 AND have not knowingly accepted that. Says which meter,
                                 rather than quietly selecting a different one. */}
                             {account.trim() && !chosenMeter && !ackUnlinked && (
-                                <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
+                                <div className="mb-2 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
                                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                                     <span>
                                         Meter <span className="font-mono font-bold">{account.trim()}</span> is not
@@ -384,28 +394,28 @@ export default function StorefrontUtilities({
                                             'w-full rounded-xl border px-3 py-2.5 text-left flex items-center gap-2',
                                             chosenMeter === m.meterNumber
                                                 ? 'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20'
-                                                : 'border-gray-200 dark:border-gray-700'
+                                                : 'border-border'
                                         )}
                                     >
                                         <div className="flex-1 min-w-0">
                                             <p className="text-sm font-bold truncate">{m.name}</p>
-                                            <p className="text-xs text-gray-500 font-mono">{m.meterNumber}</p>
+                                            <p className="text-xs text-muted-foreground font-mono">{m.meterNumber}</p>
                                         </div>
                                         {chosenMeter === m.meterNumber && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
                                     </button>
                                 ))}
                             </div>
-                            <p className="text-[11px] text-gray-500 mt-2">
+                            <p className="text-[11px] text-muted-foreground mt-2">
                                 One phone number can have several meters. Check this is the right one — a bill
                                 payment cannot be reversed.
                             </p>
                         </div>
                     ) : (
-                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 p-3">
+                        <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-900/20 p-3">
                             <p className="text-[11px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Account holder</p>
                             <p className="text-base font-bold">{lookup.account_name}</p>
                             {lookup.amount_due != null && (
-                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                                <p className="text-xs text-muted-foreground mt-0.5">
                                     {lookup.amount_due < 0
                                         ? `In credit: GHS ${Math.abs(lookup.amount_due).toFixed(2)}`
                                         : `Amount due: GHS ${lookup.amount_due.toFixed(2)}`}
@@ -425,7 +435,7 @@ export default function StorefrontUtilities({
                                 onChange={e => setEmail(e.target.value)}
                                 placeholder="you@example.com"
                                 type="email"
-                                className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
                             />
                         </div>
                     )}
@@ -437,7 +447,7 @@ export default function StorefrontUtilities({
                             onChange={e => requote(e.target.value)}
                             placeholder="0.00"
                             inputMode="decimal"
-                            className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                            className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
                         />
                         <div className="flex gap-1.5 mt-2 flex-wrap">
                             {[10, 20, 50, 100, 200].filter(v => v >= lookup.min_amount && v <= lookup.max_amount).map(v => (
@@ -445,26 +455,26 @@ export default function StorefrontUtilities({
                                     key={v}
                                     type="button"
                                     onClick={() => requote(String(v))}
-                                    className="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1 text-xs font-semibold"
+                                    className="rounded-full border border-border px-3 py-1 text-xs font-semibold"
                                 >{v}</button>
                             ))}
                         </div>
-                        <p className="text-[11px] text-gray-500 mt-1.5">
+                        <p className="text-[11px] text-muted-foreground mt-1.5">
                             Min GHS {lookup.min_amount.toFixed(2)} · Max GHS {lookup.max_amount.toFixed(2)}
                         </p>
-                        {belowMin && <p className="text-xs text-red-600 mt-1">Minimum is GHS {lookup.min_amount.toFixed(2)}.</p>}
-                        {aboveMax && <p className="text-xs text-red-600 mt-1">Maximum is GHS {lookup.max_amount.toFixed(2)}.</p>}
+                        {belowMin && <p className="text-xs text-red-600 dark:text-red-400 mt-1">Minimum is GHS {lookup.min_amount.toFixed(2)}.</p>}
+                        {aboveMax && <p className="text-xs text-red-600 dark:text-red-400 mt-1">Maximum is GHS {lookup.max_amount.toFixed(2)}.</p>}
                     </div>
 
                     {/* Quote. Server-computed, so the customer sees exactly what the
                         charge will be rather than a browser-side estimate. */}
-                    {quoting && <p className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Working out the total…</p>}
+                    {quoting && <p className="text-xs text-muted-foreground flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Working out the total…</p>}
                     {quote && !quoting && (
-                        <div className="rounded-xl bg-gray-50 dark:bg-gray-800/60 p-3 text-sm space-y-1">
-                            <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Bill amount</span><span className="font-semibold">GHS {quote.bill_amount.toFixed(2)}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Service fee ({quote.total_fee_percent.toFixed(2)}%)</span><span className="font-semibold">GHS {quote.total_fee.toFixed(2)}</span></div>
-                            <div className="flex justify-between border-t border-gray-200 dark:border-gray-700 pt-1 mt-1"><span className="font-bold">Total</span><span className="font-bold">GHS {quote.total.toFixed(2)}</span></div>
-                            <p className="text-[11px] text-gray-500 pt-1">A gateway charge may be added at checkout, depending on the provider.</p>
+                        <div className="rounded-xl bg-muted bg-card/60 p-3 text-sm space-y-1">
+                            <div className="flex justify-between"><span className="text-muted-foreground">Bill amount</span><span className="font-semibold">GHS {quote.bill_amount.toFixed(2)}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">Service fee ({quote.total_fee_percent.toFixed(2)}%)</span><span className="font-semibold">GHS {quote.total_fee.toFixed(2)}</span></div>
+                            <div className="flex justify-between border-t border-border pt-1 mt-1"><span className="font-bold">Total</span><span className="font-bold">GHS {quote.total.toFixed(2)}</span></div>
+                            <p className="text-[11px] text-muted-foreground pt-1">A gateway charge may be added at checkout, depending on the provider.</p>
                         </div>
                     )}
 
@@ -477,7 +487,7 @@ export default function StorefrontUtilities({
                                 onChange={e => setMomoPhone(e.target.value)}
                                 placeholder={phone || '0XXXXXXXXX'}
                                 inputMode="numeric"
-                                className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
                             />
                         </div>
                         <div>
@@ -485,7 +495,7 @@ export default function StorefrontUtilities({
                             <select
                                 value={momoNetwork}
                                 onChange={e => setMomoNetwork(e.target.value)}
-                                className="w-full rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 px-3 py-2.5 text-sm"
+                                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
                             >
                                 <option value="MTN">MTN</option>
                                 <option value="Telecel">Telecel</option>

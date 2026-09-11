@@ -74,14 +74,14 @@ const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500]
 
 function StatusBadge({ status }: { status: string }) {
     const map: Record<string, string> = {
-        pending: 'bg-amber-100 text-amber-700 border-amber-200',
-        processing: 'bg-blue-100 text-blue-700 border-blue-200',
-        completed: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-        failed: 'bg-red-100 text-red-700 border-red-200',
-        refunded: 'bg-slate-100 text-slate-700 border-slate-300',
+        pending: 'bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-900/50',
+        processing: 'bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900/50',
+        completed: 'bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50',
+        failed: 'bg-red-100 dark:bg-red-950/30 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/50',
+        refunded: 'bg-muted text-foreground border-border-strong',
     }
     return (
-        <span className={cn('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border capitalize', map[status] || 'bg-slate-100 text-slate-600 border-slate-200')}>
+        <span className={cn('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border capitalize', map[status] || 'bg-muted text-muted-foreground border-border')}>
             {status}
         </span>
     )
@@ -96,35 +96,35 @@ function SuccessModal({ order, label, onClose, onPayAnother }: {
     if (!order) return null
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl">
+            <div className="bg-card rounded-3xl w-full max-w-md p-6 shadow-2xl">
                 <div className="flex flex-col items-center text-center mb-5">
-                    <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mb-3">
-                        <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+                    <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-950/30 flex items-center justify-center mb-3">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
                     </div>
-                    <h3 className="text-xl font-black text-slate-900">Payment Submitted</h3>
-                    <p className="text-sm text-slate-500 mt-1">
+                    <h3 className="text-xl font-black text-foreground">Payment Submitted</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
                         We are paying your {label} bill now. You will be notified the moment it lands.
                     </p>
                 </div>
 
                 <div className="space-y-2.5 mb-6">
-                    <div className="flex justify-between text-sm"><span className="text-slate-500">Service</span><span className="font-semibold">{label}</span></div>
-                    <div className="flex justify-between text-sm"><span className="text-slate-500">Account</span><span className="font-semibold">{order.account_number}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service</span><span className="font-semibold">{label}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Account</span><span className="font-semibold">{order.account_number}</span></div>
                     {order.account_name && (
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Name</span><span className="font-semibold">{order.account_name}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Name</span><span className="font-semibold">{order.account_name}</span></div>
                     )}
-                    <div className="flex justify-between text-sm"><span className="text-slate-500">Bill amount</span><span className="font-semibold text-emerald-600">GHS {Number(order.bill_amount).toFixed(2)}</span></div>
-                    <div className="flex justify-between text-sm"><span className="text-slate-500">Service fee</span><span className="font-semibold">GHS {Number(order.fee_amount).toFixed(2)}</span></div>
-                    <div className="flex justify-between text-sm border-t border-slate-100 pt-2.5 mt-1">
-                        <span className="font-bold text-slate-800">Total paid</span>
-                        <span className="font-bold text-lg text-slate-900">GHS {Number(order.total_paid).toFixed(2)}</span>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bill amount</span><span className="font-semibold text-emerald-600 dark:text-emerald-400">GHS {Number(order.bill_amount).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service fee</span><span className="font-semibold">GHS {Number(order.fee_amount).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-sm border-t border-border pt-2.5 mt-1">
+                        <span className="font-bold text-foreground">Total paid</span>
+                        <span className="font-bold text-lg text-foreground">GHS {Number(order.total_paid).toFixed(2)}</span>
                     </div>
                     <button
                         onClick={() => { navigator.clipboard.writeText(order.reference_code); toast.success('Reference copied') }}
-                        className="w-full flex items-center justify-between text-xs bg-slate-50 rounded-xl px-3 py-2 mt-2 hover:bg-slate-100"
+                        className="w-full flex items-center justify-between text-xs bg-muted rounded-xl px-3 py-2 mt-2 hover:bg-surface-3"
                     >
-                        <span className="text-slate-500">Reference</span>
-                        <span className="font-mono font-semibold text-slate-700 flex items-center gap-1.5">
+                        <span className="text-muted-foreground">Reference</span>
+                        <span className="font-mono font-semibold text-foreground flex items-center gap-1.5">
                             {order.reference_code} <Copy className="w-3 h-3" />
                         </span>
                     </button>
@@ -132,7 +132,7 @@ function SuccessModal({ order, label, onClose, onPayAnother }: {
 
                 <div className="flex gap-3">
                     <Button variant="outline" className="flex-1 rounded-xl h-11" onClick={onClose}>View History</Button>
-                    <Button className="flex-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-white h-11" onClick={onPayAnother}>
+                    <Button className="flex-1 rounded-xl bg-primary hover:bg-accent-strong text-primary-foreground h-11" onClick={onPayAnother}>
                         Pay Another
                     </Button>
                 </div>
@@ -394,6 +394,11 @@ function UtilitiesPageInner() {
             if (!res.ok) {
                 setLookupError(data.error || 'Account could not be verified')
                 setLookup(null)
+                // For ECG a failed check is not the end of the road — the meter may
+                // simply be new to this phone, and ECG links it on first payment. Record
+                // the attempt so the acknowledgement below is offered; every other biller
+                // still fails closed, because there a failed check means a wrong number.
+                if (service.kind === 'meter-by-phone') setLookedUpKey(lookupKey)
                 return
             }
 
@@ -469,6 +474,17 @@ function UtilitiesPageInner() {
         && ackUnlinkedMeter
         && !!accountNumber.trim()
         && /^0\d{9}$/.test(phone.replace(/\s+/g, ''))
+
+    /**
+     * A check has run for these inputs and came back without confirming the typed
+     * meter — so the customer is being offered the acknowledgement rather than an
+     * error. Drives both the amber panel and the silencing of the red one.
+     */
+    const offerUnlinkedAck = !!isEcgService
+        && lookedUpKey === lookupKey
+        && !lookupLoading
+        && !!accountNumber.trim()
+        && (!lookup?.accountName || meterMismatch)
 
     const canSubmit = !!service
         && (!!lookup?.accountName || payingUnlinkedMeter)
@@ -566,7 +582,7 @@ function UtilitiesPageInner() {
     if (configLoading) {
         return (
             <div className="flex items-center justify-center min-h-[60vh]">
-                <div className="w-8 h-8 rounded-full border-4 border-slate-200 border-t-slate-800 animate-spin" />
+                <div className="w-8 h-8 rounded-full border-4 border-border border-t-accent-solid animate-spin" />
             </div>
         )
     }
@@ -574,13 +590,13 @@ function UtilitiesPageInner() {
     if (comingSoon) {
         return (
             <div className="max-w-lg mx-auto pb-24 pt-10 text-center">
-                <div className="flex items-center justify-center gap-3 text-slate-300 mb-6">
+                <div className="flex items-center justify-center gap-3 text-muted-foreground/50 mb-6">
                     <Tv className="w-7 h-7" />
                     <Zap className="w-7 h-7" />
                     <Droplets className="w-7 h-7" />
                 </div>
-                <h1 className="text-2xl font-black text-slate-900">Pay Bills — coming soon</h1>
-                <p className="text-sm text-slate-500 mt-3 leading-relaxed">
+                <h1 className="text-2xl font-black text-foreground">Pay Bills — coming soon</h1>
+                <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
                     You will soon be able to pay DSTV, GOtv, StarTimes, ECG and Ghana Water bills
                     straight from here, with Mobile Money. We are putting it through its final
                     checks — it will open shortly.
@@ -593,21 +609,21 @@ function UtilitiesPageInner() {
         <div className="max-w-3xl mx-auto pb-24">
             {/* Header */}
             <div className="mb-6">
-                <h1 className="text-2xl font-black text-slate-900">Pay Bills</h1>
-                <p className="text-sm text-slate-500 mt-1">
+                <h1 className="text-2xl font-black text-foreground">Pay Bills</h1>
+                <p className="text-sm text-muted-foreground mt-1">
                     DSTV, GOtv, StarTimes, ECG and Ghana Water — paid instantly by Mobile Money.
                 </p>
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-6 bg-slate-100 p-1 rounded-2xl w-fit">
+            <div className="flex gap-2 mb-6 bg-muted p-1 rounded-2xl w-fit">
                 {(['pay', 'history'] as const).map(tab => (
                     <button
                         key={tab}
                         onClick={() => setActiveTab(tab)}
                         className={cn(
                             'px-5 py-2 rounded-xl text-sm font-bold capitalize transition',
-                            activeTab === tab ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+                            activeTab === tab ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'
                         )}
                     >
                         {tab === 'pay' ? 'Pay a Bill' : 'History'}
@@ -618,7 +634,7 @@ function UtilitiesPageInner() {
             {activeTab === 'pay' ? (
                 <div className="space-y-5">
                     {/* Wallet strip */}
-                    <div className="flex items-center justify-between bg-slate-900 text-white rounded-2xl px-5 py-4">
+                    <div className="flex items-center justify-between bg-accent-solid text-accent-contrast rounded-2xl px-5 py-4">
                         <div className="flex items-center gap-3">
                             <Wallet className="w-5 h-5 opacity-70" />
                             <div>
@@ -632,7 +648,7 @@ function UtilitiesPageInner() {
 
                     {/* Service picker */}
                     <div>
-                        <Label className="text-sm font-bold text-slate-700 mb-2 block">Choose a service</Label>
+                        <Label className="text-sm font-bold text-foreground mb-2 block">Choose a service</Label>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                             {services.map(s => {
                                 const style = SERVICE_STYLE[s.id] || SERVICE_STYLE.dstv
@@ -645,18 +661,18 @@ function UtilitiesPageInner() {
                                         onClick={() => { setServiceId(s.id); resetForm() }}
                                         className={cn(
                                             'relative rounded-2xl border-2 p-4 text-left transition',
-                                            active ? 'border-slate-900 bg-slate-50' : 'border-slate-200 hover:border-slate-300',
+                                            active ? 'border-accent-solid bg-accent-soft' : 'border-border hover:border-border-strong',
                                             !s.enabled && 'opacity-40 cursor-not-allowed'
                                         )}
                                     >
                                         <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center mb-2', style.gradient)}>
                                             <Icon className="w-5 h-5 text-white" />
                                         </div>
-                                        <p className="font-bold text-sm text-slate-900">{s.label}</p>
-                                        <p className="text-[11px] text-slate-500 mt-0.5">
+                                        <p className="font-bold text-sm text-foreground">{s.label}</p>
+                                        <p className="text-[11px] text-muted-foreground mt-0.5">
                                             {s.enabled ? `${s.feeRate}% fee` : 'Unavailable'}
                                         </p>
-                                        {active && <CheckCircle2 className="absolute top-3 right-3 w-4 h-4 text-slate-900" />}
+                                        {active && <CheckCircle2 className="absolute top-3 right-3 w-4 h-4 text-accent-solid" />}
                                     </button>
                                 )
                             })}
@@ -666,14 +682,14 @@ function UtilitiesPageInner() {
                     {service && (
                         <>
                             {/* Account details */}
-                            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
+                            <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
                                 {service.requiresPhone && (
                                     <div>
-                                        <Label className="text-sm font-semibold text-slate-700">
+                                        <Label className="text-sm font-semibold text-foreground">
                                             {isEcgService ? 'ECG phone number' : 'Your phone number'}
                                         </Label>
                                         <div className="relative mt-1.5">
-                                            <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                                             <Input
                                                 value={phone}
                                                 onChange={e => setPhone(e.target.value)}
@@ -684,7 +700,7 @@ function UtilitiesPageInner() {
                                             />
                                         </div>
                                         {isEcgService && (
-                                            <p className="text-[11px] text-slate-400 mt-1">
+                                            <p className="text-[11px] text-muted-foreground mt-1">
                                                 The number the meter is paid on.
                                             </p>
                                         )}
@@ -697,7 +713,7 @@ function UtilitiesPageInner() {
                                     them to type it — the check then looks for it in
                                     that answer. */}
                                 <div>
-                                    <Label className="text-sm font-semibold text-slate-700">
+                                    <Label className="text-sm font-semibold text-foreground">
                                         {isEcgService ? 'Meter number' : service.accountLabel}
                                     </Label>
                                     <Input
@@ -706,7 +722,7 @@ function UtilitiesPageInner() {
                                         placeholder={isEcgService ? 'Meter number' : service.accountLabel}
                                         className="mt-1.5 h-12 rounded-xl"
                                     />
-                                    <p className="text-[11px] text-slate-400 mt-1">{service.accountHint}</p>
+                                    <p className="text-[11px] text-muted-foreground mt-1">{service.accountHint}</p>
                                 </div>
 
                                 {/* Offered only once a check has run and come back
@@ -716,10 +732,9 @@ function UtilitiesPageInner() {
                                     customer rather than an error. The tick is what makes
                                     paying an unconfirmed meter a choice rather than an
                                     accident, and it clears whenever the meter is edited. */}
-                                {isEcgService && lookedUpKey === lookupKey && !lookupLoading
-                                    && accountNumber.trim() && !lookup?.accountName && (
-                                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
-                                        <p className="text-xs text-amber-800">
+                                {offerUnlinkedAck && (
+                                    <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2">
+                                        <p className="text-xs text-amber-800 dark:text-amber-300">
                                             We could not confirm meter{' '}
                                             <span className="font-mono font-bold">{accountNumber.trim()}</span> on{' '}
                                             <span className="font-bold">{phone}</span>. If it is new, ECG links it on
@@ -732,16 +747,23 @@ function UtilitiesPageInner() {
                                                 onChange={e => setAckUnlinkedMeter(e.target.checked)}
                                                 className="mt-0.5 w-4 h-4 shrink-0"
                                             />
-                                            <span className="text-[11px] text-amber-900">
+                                            <span className="text-[11px] text-amber-900 dark:text-amber-200">
                                                 ECG will link this meter to{' '}
                                                 <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
                                             </span>
                                         </label>
+                                        <button
+                                            type="button"
+                                            onClick={retryLookup}
+                                            className="text-[11px] font-bold underline underline-offset-2 text-amber-800 dark:text-amber-300"
+                                        >
+                                            Check again
+                                        </button>
                                     </div>
                                 )}
 
                                 {lookupLoading && (
-                                    <div className="flex items-center gap-2 text-sm text-slate-500">
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                         <Loader2 className="w-4 h-4 animate-spin" />
                                         <span>Checking account…</span>
                                     </div>
@@ -749,8 +771,8 @@ function UtilitiesPageInner() {
 
                                 {/* A failed lookup is not retried on its own, so this
                                     is the way back from a provider blip. */}
-                                {lookupError && !lookupLoading && (
-                                    <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl p-3">
+                                {lookupError && !lookupLoading && !offerUnlinkedAck && (
+                                    <div className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/40 rounded-xl p-3">
                                         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                                         <span className="flex-1">{lookupError}</span>
                                         <button
@@ -765,7 +787,7 @@ function UtilitiesPageInner() {
                                 {/* ECG meter picker */}
                                 {lookup?.meters && lookup.meters.length > 0 && (
                                     <div>
-                                        <Label className="text-sm font-semibold text-slate-700">Meter</Label>
+                                        <Label className="text-sm font-semibold text-foreground">Meter</Label>
                                         <Select value={accountNumber} onValueChange={setAccountNumber}>
                                             <SelectTrigger className="mt-1.5 h-12 rounded-xl">
                                                 <SelectValue placeholder="Select a meter" />
@@ -782,21 +804,21 @@ function UtilitiesPageInner() {
                                 )}
 
                                 {/* The confirmation that gates the whole form */}
-                                {lookup?.accountName && (
-                                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                                {lookup?.accountName && !meterMismatch && (
+                                    <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50 rounded-xl p-4">
                                         <div className="flex items-start gap-2.5">
-                                            <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
+                                            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                                             <div className="min-w-0">
-                                                <p className="text-xs text-emerald-700 font-semibold uppercase tracking-wide">Account holder</p>
-                                                <p className="font-black text-slate-900 truncate">{lookup.accountName}</p>
+                                                <p className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold uppercase tracking-wide">Account holder</p>
+                                                <p className="font-black text-foreground truncate">{lookup.accountName}</p>
                                                 {lookup.amountDue != null && (
-                                                    <p className="text-xs text-slate-600 mt-1">
+                                                    <p className="text-xs text-muted-foreground mt-1">
                                                         {lookup.amountDue < 0
                                                             ? `In credit: GHS ${Math.abs(lookup.amountDue).toFixed(2)}`
                                                             : `Amount due: GHS ${lookup.amountDue.toFixed(2)}`}
                                                     </p>
                                                 )}
-                                                <p className="text-[11px] text-emerald-700 mt-1.5">
+                                                <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mt-1.5">
                                                     Check this is the right person before you pay — bill payments cannot be reversed.
                                                 </p>
                                             </div>
@@ -806,7 +828,7 @@ function UtilitiesPageInner() {
 
                                 {service.requiresEmail && (
                                     <div>
-                                        <Label className="text-sm font-semibold text-slate-700">Email for the receipt</Label>
+                                        <Label className="text-sm font-semibold text-foreground">Email for the receipt</Label>
                                         <Input
                                             type="email"
                                             value={email}
@@ -814,15 +836,15 @@ function UtilitiesPageInner() {
                                             placeholder="you@example.com"
                                             className="mt-1.5 h-12 rounded-xl"
                                         />
-                                        <p className="text-[11px] text-slate-400 mt-1">{service.label} requires an email address.</p>
+                                        <p className="text-[11px] text-muted-foreground mt-1">{service.label} requires an email address.</p>
                                     </div>
                                 )}
                             </div>
 
                             {/* Amount + payment */}
-                            <div className={cn('bg-white border border-slate-200 rounded-2xl p-5 space-y-4', !lookup?.accountName && 'opacity-50 pointer-events-none')}>
+                            <div className={cn('bg-card border border-border rounded-2xl p-5 space-y-4', (!lookup?.accountName || meterMismatch) && !payingUnlinkedMeter && 'opacity-50 pointer-events-none')}>
                                 <div>
-                                    <Label className="text-sm font-semibold text-slate-700">Amount to pay (GHS)</Label>
+                                    <Label className="text-sm font-semibold text-foreground">Amount to pay (GHS)</Label>
                                     <Input
                                         value={amount}
                                         onChange={e => setAmount(e.target.value.replace(/[^\d.]/g, ''))}
@@ -835,7 +857,7 @@ function UtilitiesPageInner() {
                                             <button
                                                 key={a}
                                                 onClick={() => setAmount(String(a))}
-                                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-sm font-semibold text-slate-700"
+                                                className="px-3 py-1.5 rounded-lg bg-muted hover:bg-surface-3 text-sm font-semibold text-foreground"
                                             >
                                                 {a}
                                             </button>
@@ -843,13 +865,13 @@ function UtilitiesPageInner() {
                                         {lookup?.amountDue != null && lookup.amountDue > 0 && (
                                             <button
                                                 onClick={() => setAmount(lookup.amountDue!.toFixed(2))}
-                                                className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm font-semibold"
+                                                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold"
                                             >
                                                 Pay full bill
                                             </button>
                                         )}
                                     </div>
-                                    <p className="text-[11px] text-slate-400 mt-2">
+                                    <p className="text-[11px] text-muted-foreground mt-2">
                                         Min GHS {service.minAmount.toFixed(2)} · Max GHS {service.maxAmount.toFixed(2)}
                                     </p>
                                 </div>
@@ -857,7 +879,7 @@ function UtilitiesPageInner() {
                                 {needsMomoDetails && (
                                     <div className="grid sm:grid-cols-2 gap-3">
                                         <div>
-                                            <Label className="text-sm font-semibold text-slate-700">MoMo number</Label>
+                                            <Label className="text-sm font-semibold text-foreground">MoMo number</Label>
                                             <Input
                                                 value={momoPhone}
                                                 onChange={e => setMomoPhone(e.target.value)}
@@ -868,7 +890,7 @@ function UtilitiesPageInner() {
                                             />
                                         </div>
                                         <div>
-                                            <Label className="text-sm font-semibold text-slate-700">Network</Label>
+                                            <Label className="text-sm font-semibold text-foreground">Network</Label>
                                             <Select value={momoNetwork} onValueChange={setMomoNetwork}>
                                                 <SelectTrigger className="mt-1.5 h-12 rounded-xl">
                                                     <SelectValue placeholder="Select network" />
@@ -885,20 +907,20 @@ function UtilitiesPageInner() {
 
                                 {/* Breakdown */}
                                 {parsedAmount > 0 && (
-                                    <div className="bg-slate-50 rounded-xl p-4 space-y-2">
+                                    <div className="bg-muted rounded-xl p-4 space-y-2">
                                         <div className="flex justify-between text-sm">
-                                            <span className="text-slate-500">Bill amount</span>
+                                            <span className="text-muted-foreground">Bill amount</span>
                                             <span className="font-semibold">GHS {parsedAmount.toFixed(2)}</span>
                                         </div>
                                         <div className="flex justify-between text-sm">
-                                            <span className="text-slate-500">Service fee ({service.feeRate}%)</span>
+                                            <span className="text-muted-foreground">Service fee ({service.feeRate}%)</span>
                                             <span className="font-semibold">GHS {feeAmount.toFixed(2)}</span>
                                         </div>
-                                        <div className="flex justify-between border-t border-slate-200 pt-2">
-                                            <span className="font-bold text-slate-800">Total</span>
-                                            <span className="font-black text-slate-900">GHS {totalPayable.toFixed(2)}</span>
+                                        <div className="flex justify-between border-t border-border pt-2">
+                                            <span className="font-bold text-foreground">Total</span>
+                                            <span className="font-black text-foreground">GHS {totalPayable.toFixed(2)}</span>
                                         </div>
-                                        <p className="text-[11px] text-slate-400 flex items-start gap-1.5 pt-1">
+                                        <p className="text-[11px] text-muted-foreground flex items-start gap-1.5 pt-1">
                                             <Info className="w-3 h-3 mt-0.5 shrink-0" />
                                             A gateway charge may be added at checkout, depending on the provider.
                                         </p>
@@ -906,7 +928,7 @@ function UtilitiesPageInner() {
                                 )}
 
                                 <Button
-                                    className="w-full h-12 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold"
+                                    className="w-full h-12 rounded-xl bg-primary hover:bg-accent-strong text-primary-foreground font-bold"
                                     disabled={!canSubmit || isSubmitting}
                                     onClick={() => setShowConfirm(true)}
                                 >
@@ -923,7 +945,7 @@ function UtilitiesPageInner() {
                 <div className="space-y-4">
                     <div className="flex gap-2">
                         <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                             <Input
                                 value={searchQuery}
                                 onChange={e => setSearchQuery(e.target.value)}
@@ -938,13 +960,13 @@ function UtilitiesPageInner() {
 
                     {historyLoading ? (
                         <div className="flex justify-center py-12">
-                            <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+                            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                         </div>
                     ) : filteredOrders.length === 0 ? (
                         <div className="text-center py-16">
-                            <History className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                            <p className="text-slate-500 font-semibold">No bill payments yet</p>
-                            <p className="text-sm text-slate-400 mt-1">Your DSTV, ECG and water payments will show up here.</p>
+                            <History className="w-10 h-10 text-muted-foreground/50 mx-auto mb-3" />
+                            <p className="text-muted-foreground font-semibold">No bill payments yet</p>
+                            <p className="text-sm text-muted-foreground mt-1">Your DSTV, ECG and water payments will show up here.</p>
                         </div>
                     ) : (
                         <div className="space-y-2.5">
@@ -952,7 +974,7 @@ function UtilitiesPageInner() {
                                 const style = SERVICE_STYLE[order.service] || SERVICE_STYLE.dstv
                                 const Icon = style.icon
                                 return (
-                                    <div key={order.id} className="bg-white border border-slate-200 rounded-2xl p-4">
+                                    <div key={order.id} className="bg-card border border-border rounded-2xl p-4">
                                         <div className="flex items-start gap-3">
                                             <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0', style.gradient)}>
                                                 <Icon className="w-5 h-5 text-white" />
@@ -960,25 +982,25 @@ function UtilitiesPageInner() {
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-start justify-between gap-2">
                                                     <div className="min-w-0">
-                                                        <p className="font-bold text-slate-900 text-sm">
+                                                        <p className="font-bold text-foreground text-sm">
                                                             {serviceLabelFor(order.service)} · {order.account_number}
                                                         </p>
                                                         {order.account_name && (
-                                                            <p className="text-xs text-slate-500 truncate">{order.account_name}</p>
+                                                            <p className="text-xs text-muted-foreground truncate">{order.account_name}</p>
                                                         )}
                                                     </div>
                                                     <StatusBadge status={order.status} />
                                                 </div>
                                                 <div className="flex items-center justify-between mt-2">
-                                                    <span className="text-xs text-slate-400">
+                                                    <span className="text-xs text-muted-foreground">
                                                         {format(parseISO(order.created_at), 'dd MMM yyyy, HH:mm')}
                                                     </span>
-                                                    <span className="font-black text-slate-900 text-sm">
+                                                    <span className="font-black text-foreground text-sm">
                                                         GHS {Number(order.bill_amount).toFixed(2)}
                                                     </span>
                                                 </div>
                                                 {order.fulfillment_note && (
-                                                    <p className="text-[11px] text-slate-500 bg-slate-50 rounded-lg p-2 mt-2">
+                                                    <p className="text-[11px] text-muted-foreground bg-muted rounded-lg p-2 mt-2">
                                                         {order.fulfillment_note}
                                                     </p>
                                                 )}
@@ -998,22 +1020,29 @@ function UtilitiesPageInner() {
                     <DialogHeader>
                         <DialogTitle>Confirm this bill payment</DialogTitle>
                         <DialogDescription>
-                            Bill payments cannot be reversed once the provider accepts them. Check the name and account below.
+                            Bill payments cannot be reversed once the provider accepts them.{' '}
+                            {payingUnlinkedMeter
+                                ? 'Nobody has confirmed this meter — check the number below very carefully.'
+                                : 'Check the name and account below.'}
                         </DialogDescription>
                     </DialogHeader>
 
                     <div className="space-y-2.5 py-2">
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Service</span><span className="font-semibold">{service?.label}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Account</span><span className="font-semibold">{accountNumber}</span></div>
-                        <div className="flex justify-between text-sm">
-                            <span className="text-slate-500">Name</span>
-                            <span className="font-black text-slate-900">{lookup?.accountName}</span>
+                        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service</span><span className="font-semibold">{service?.label}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Account</span><span className="font-semibold">{accountNumber}</span></div>
+                        <div className="flex justify-between text-sm gap-3">
+                            <span className="text-muted-foreground shrink-0">Name</span>
+                            {lookup?.accountName && !meterMismatch ? (
+                                <span className="font-black text-foreground text-right">{lookup.accountName}</span>
+                            ) : (
+                                <span className="font-bold text-amber-700 dark:text-amber-300 text-right">Not verified</span>
+                            )}
                         </div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Bill amount</span><span className="font-semibold">GHS {parsedAmount.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Service fee</span><span className="font-semibold">GHS {feeAmount.toFixed(2)}</span></div>
-                        <div className="flex justify-between border-t border-slate-100 pt-2.5">
-                            <span className="font-bold text-slate-800">Total</span>
-                            <span className="font-black text-lg text-slate-900">GHS {totalPayable.toFixed(2)}</span>
+                        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bill amount</span><span className="font-semibold">GHS {parsedAmount.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service fee</span><span className="font-semibold">GHS {feeAmount.toFixed(2)}</span></div>
+                        <div className="flex justify-between border-t border-border pt-2.5">
+                            <span className="font-bold text-foreground">Total</span>
+                            <span className="font-black text-lg text-foreground">GHS {totalPayable.toFixed(2)}</span>
                         </div>
                     </div>
 
@@ -1021,7 +1050,7 @@ function UtilitiesPageInner() {
                         <Button variant="outline" className="rounded-xl flex-1" onClick={() => setShowConfirm(false)} disabled={isSubmitting}>
                             Cancel
                         </Button>
-                        <Button className="rounded-xl flex-1 bg-slate-900 hover:bg-slate-800 text-white" onClick={handleConfirm} disabled={isSubmitting}>
+                        <Button className="rounded-xl flex-1 bg-primary hover:bg-accent-strong text-primary-foreground" onClick={handleConfirm} disabled={isSubmitting}>
                             {isSubmitting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processing…</> : 'Confirm & Pay'}
                         </Button>
                     </DialogFooter>
@@ -1044,7 +1073,7 @@ function UtilitiesPageInner() {
                     />
                     <DialogFooter>
                         <Button
-                            className="w-full rounded-xl bg-slate-900 hover:bg-slate-800 text-white h-11"
+                            className="w-full rounded-xl bg-primary hover:bg-accent-strong text-primary-foreground h-11"
                             disabled={!otpCode.trim() || isSubmitting}
                             onClick={() => {
                                 setOtpRequired(false)
@@ -1071,7 +1100,7 @@ function UtilitiesPageInner() {
 // ─── Suspense wrapper (required by Next.js 15 for useSearchParams) ────────────
 export default function UtilitiesPage() {
     return (
-        <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh]"><div className="w-8 h-8 rounded-full border-4 border-slate-200 border-t-slate-800 animate-spin" /></div>}>
+        <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh]"><div className="w-8 h-8 rounded-full border-4 border-border border-t-accent-solid animate-spin" /></div>}>
             <UtilitiesPageInner />
         </Suspense>
     )
