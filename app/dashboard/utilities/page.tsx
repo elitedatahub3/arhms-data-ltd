@@ -74,10 +74,10 @@ const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500]
 
 function StatusBadge({ status }: { status: string }) {
     const map: Record<string, string> = {
-        pending: 'bg-amber-100 text-amber-700 border-amber-200',
-        processing: 'bg-blue-100 text-blue-700 border-blue-200',
-        completed: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-        failed: 'bg-red-100 text-red-700 border-red-200',
+        pending: 'bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-900/50',
+        processing: 'bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900/50',
+        completed: 'bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/50',
+        failed: 'bg-red-100 dark:bg-red-950/30 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/50',
         refunded: 'bg-muted text-foreground border-border-strong',
     }
     return (
@@ -98,8 +98,8 @@ function SuccessModal({ order, label, onClose, onPayAnother }: {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="bg-card rounded-3xl w-full max-w-md p-6 shadow-2xl">
                 <div className="flex flex-col items-center text-center mb-5">
-                    <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mb-3">
-                        <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+                    <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-950/30 flex items-center justify-center mb-3">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
                     </div>
                     <h3 className="text-xl font-black text-foreground">Payment Submitted</h3>
                     <p className="text-sm text-muted-foreground mt-1">
@@ -113,7 +113,7 @@ function SuccessModal({ order, label, onClose, onPayAnother }: {
                     {order.account_name && (
                         <div className="flex justify-between text-sm"><span className="text-muted-foreground">Name</span><span className="font-semibold">{order.account_name}</span></div>
                     )}
-                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bill amount</span><span className="font-semibold text-emerald-600">GHS {Number(order.bill_amount).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bill amount</span><span className="font-semibold text-emerald-600 dark:text-emerald-400">GHS {Number(order.bill_amount).toFixed(2)}</span></div>
                     <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service fee</span><span className="font-semibold">GHS {Number(order.fee_amount).toFixed(2)}</span></div>
                     <div className="flex justify-between text-sm border-t border-border pt-2.5 mt-1">
                         <span className="font-bold text-foreground">Total paid</span>
@@ -718,8 +718,8 @@ function UtilitiesPageInner() {
                                     accident, and it clears whenever the meter is edited. */}
                                 {isEcgService && lookedUpKey === lookupKey && !lookupLoading
                                     && accountNumber.trim() && !lookup?.accountName && (
-                                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
-                                        <p className="text-xs text-amber-800">
+                                    <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2">
+                                        <p className="text-xs text-amber-800 dark:text-amber-300">
                                             We could not confirm meter{' '}
                                             <span className="font-mono font-bold">{accountNumber.trim()}</span> on{' '}
                                             <span className="font-bold">{phone}</span>. If it is new, ECG links it on
@@ -732,7 +732,7 @@ function UtilitiesPageInner() {
                                                 onChange={e => setAckUnlinkedMeter(e.target.checked)}
                                                 className="mt-0.5 w-4 h-4 shrink-0"
                                             />
-                                            <span className="text-[11px] text-amber-900">
+                                            <span className="text-[11px] text-amber-900 dark:text-amber-200">
                                                 ECG will link this meter to{' '}
                                                 <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
                                             </span>
@@ -750,7 +750,7 @@ function UtilitiesPageInner() {
                                 {/* A failed lookup is not retried on its own, so this
                                     is the way back from a provider blip. */}
                                 {lookupError && !lookupLoading && (
-                                    <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl p-3">
+                                    <div className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/40 rounded-xl p-3">
                                         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                                         <span className="flex-1">{lookupError}</span>
                                         <button
@@ -783,11 +783,11 @@ function UtilitiesPageInner() {
 
                                 {/* The confirmation that gates the whole form */}
                                 {lookup?.accountName && (
-                                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                                    <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50 rounded-xl p-4">
                                         <div className="flex items-start gap-2.5">
-                                            <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
+                                            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                                             <div className="min-w-0">
-                                                <p className="text-xs text-emerald-700 font-semibold uppercase tracking-wide">Account holder</p>
+                                                <p className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold uppercase tracking-wide">Account holder</p>
                                                 <p className="font-black text-foreground truncate">{lookup.accountName}</p>
                                                 {lookup.amountDue != null && (
                                                     <p className="text-xs text-muted-foreground mt-1">
@@ -796,7 +796,7 @@ function UtilitiesPageInner() {
                                                             : `Amount due: GHS ${lookup.amountDue.toFixed(2)}`}
                                                     </p>
                                                 )}
-                                                <p className="text-[11px] text-emerald-700 mt-1.5">
+                                                <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mt-1.5">
                                                     Check this is the right person before you pay — bill payments cannot be reversed.
                                                 </p>
                                             </div>

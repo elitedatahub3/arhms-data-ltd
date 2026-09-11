@@ -331,7 +331,7 @@ export default function StorefrontUtilities({
                     error; the tick is what makes paying an unconfirmed meter a choice
                     instead of an accident, and it clears on every edit. */}
                 {isEcg && checked && !chosenMeter && account.trim() && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-2">
+                    <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-2">
                         <p className="text-xs text-amber-800 dark:text-amber-300">
                             We could not confirm meter{' '}
                             <span className="font-mono font-bold">{account.trim()}</span> on{' '}
@@ -356,7 +356,7 @@ export default function StorefrontUtilities({
             </div>
 
             {error && (
-                <div className="rounded-xl border border-red-200 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex gap-2">
+                <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex gap-2">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{error}</span>
                 </div>
@@ -373,7 +373,7 @@ export default function StorefrontUtilities({
                                 AND have not knowingly accepted that. Says which meter,
                                 rather than quietly selecting a different one. */}
                             {account.trim() && !chosenMeter && !ackUnlinked && (
-                                <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
+                                <div className="mb-2 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300 flex gap-2">
                                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                                     <span>
                                         Meter <span className="font-mono font-bold">{account.trim()}</span> is not
@@ -411,7 +411,7 @@ export default function StorefrontUtilities({
                             </p>
                         </div>
                     ) : (
-                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 p-3">
+                        <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-900/20 p-3">
                             <p className="text-[11px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Account holder</p>
                             <p className="text-base font-bold">{lookup.account_name}</p>
                             {lookup.amount_due != null && (
@@ -462,8 +462,8 @@ export default function StorefrontUtilities({
                         <p className="text-[11px] text-muted-foreground mt-1.5">
                             Min GHS {lookup.min_amount.toFixed(2)} · Max GHS {lookup.max_amount.toFixed(2)}
                         </p>
-                        {belowMin && <p className="text-xs text-red-600 mt-1">Minimum is GHS {lookup.min_amount.toFixed(2)}.</p>}
-                        {aboveMax && <p className="text-xs text-red-600 mt-1">Maximum is GHS {lookup.max_amount.toFixed(2)}.</p>}
+                        {belowMin && <p className="text-xs text-red-600 dark:text-red-400 mt-1">Minimum is GHS {lookup.min_amount.toFixed(2)}.</p>}
+                        {aboveMax && <p className="text-xs text-red-600 dark:text-red-400 mt-1">Maximum is GHS {lookup.max_amount.toFixed(2)}.</p>}
                     </div>
 
                     {/* Quote. Server-computed, so the customer sees exactly what the
