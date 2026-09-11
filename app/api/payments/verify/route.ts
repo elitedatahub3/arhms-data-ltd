@@ -165,6 +165,17 @@ export async function GET(request: NextRequest) {
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
             }
 
+            if (reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                const result = await processAirtimeDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
             if (reference.startsWith('BOOST-')) {
                 const { processBoostPayment } = await import('@/lib/classifieds-payments')
                 const boostResult = await processBoostPayment(reference)
@@ -274,6 +285,17 @@ export async function GET(request: NextRequest) {
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
             }
 
+            if (reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                const result = await processAirtimeDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
             // fall through to process payment below
         }
 
@@ -339,6 +361,17 @@ export async function GET(request: NextRequest) {
                 }
                 if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
+            }
+
+            if (reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                const result = await processAirtimeDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
             }
 
             // BOOST- has the same problem: the Moolre tail below would reject it.
@@ -423,6 +456,17 @@ export async function GET(request: NextRequest) {
             }
             if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
+        }
+
+        if (reference.startsWith('AIRPAY-')) {
+            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+            const result = await processAirtimeDirectOrder(reference, user.id)
+            if (!result.success) {
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
+            }
+            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
         }
 
         // For BOOST- references, delegate to the boost processor

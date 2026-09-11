@@ -212,6 +212,13 @@ export async function POST(request: NextRequest) {
             return ack()
         }
 
+        if (reference.startsWith('AIRPAY-')) {
+            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+            console.log('[PayswitchWebhook] Routing direct-pay airtime order:', reference)
+            await processAirtimeDirectOrder(reference)
+            return ack()
+        }
+
         if (reference.startsWith('BOOST-')) {
             const { processBoostPayment } = await import('@/lib/classifieds-payments')
             console.log('[PayswitchWebhook] Routing listing boost payment:', reference)

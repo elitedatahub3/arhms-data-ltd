@@ -118,6 +118,15 @@ export async function GET(request: NextRequest) {
                         } else {
                             console.error(`[CronPayswitch] Utility bill ${payment.reference} failed:`, utilResult.error)
                         }
+                    } else if (payment.reference.startsWith('AIRPAY-')) {
+                        const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                        const airResult = await processAirtimeDirectOrder(payment.reference)
+                        if (airResult.success || airResult.alreadyProcessed) {
+                            results.walletCredited++
+                            console.log(`[CronPayswitch] Airtime order ${payment.reference} settled`)
+                        } else {
+                            console.error(`[CronPayswitch] Airtime order ${payment.reference} failed:`, airResult.error)
+                        }
                     } else if (payment.reference.startsWith('BOOST-')) {
                         const { processBoostPayment } = await import('@/lib/classifieds-payments')
                         const boostResult = await processBoostPayment(payment.reference)
