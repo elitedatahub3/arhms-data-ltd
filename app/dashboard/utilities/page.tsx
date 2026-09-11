@@ -394,6 +394,11 @@ function UtilitiesPageInner() {
             if (!res.ok) {
                 setLookupError(data.error || 'Account could not be verified')
                 setLookup(null)
+                // For ECG a failed check is not the end of the road — the meter may
+                // simply be new to this phone, and ECG links it on first payment. Record
+                // the attempt so the acknowledgement below is offered; every other biller
+                // still fails closed, because there a failed check means a wrong number.
+                if (service.kind === 'meter-by-phone') setLookedUpKey(lookupKey)
                 return
             }
 
@@ -469,6 +474,17 @@ function UtilitiesPageInner() {
         && ackUnlinkedMeter
         && !!accountNumber.trim()
         && /^0\d{9}$/.test(phone.replace(/\s+/g, ''))
+
+    /**
+     * A check has run for these inputs and came back without confirming the typed
+     * meter — so the customer is being offered the acknowledgement rather than an
+     * error. Drives both the amber panel and the silencing of the red one.
+     */
+    const offerUnlinkedAck = !!isEcgService
+        && lookedUpKey === lookupKey
+        && !lookupLoading
+        && !!accountNumber.trim()
+        && (!lookup?.accountName || meterMismatch)
 
     const canSubmit = !!service
         && (!!lookup?.accountName || payingUnlinkedMeter)
@@ -716,8 +732,7 @@ function UtilitiesPageInner() {
                                     customer rather than an error. The tick is what makes
                                     paying an unconfirmed meter a choice rather than an
                                     accident, and it clears whenever the meter is edited. */}
-                                {isEcgService && lookedUpKey === lookupKey && !lookupLoading
-                                    && accountNumber.trim() && !lookup?.accountName && (
+                                {offerUnlinkedAck && (
                                     <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2">
                                         <p className="text-xs text-amber-800 dark:text-amber-300">
                                             We could not confirm meter{' '}
@@ -737,6 +752,13 @@ function UtilitiesPageInner() {
                                                 <span className="font-bold">{phone || 'this phone number'}</span>. I understand.
                                             </span>
                                         </label>
+                                        <button
+                                            type="button"
+                                            onClick={retryLookup}
+                                            className="text-[11px] font-bold underline underline-offset-2 text-amber-800 dark:text-amber-300"
+                                        >
+                                            Check again
+                                        </button>
                                     </div>
                                 )}
 
@@ -749,7 +771,7 @@ function UtilitiesPageInner() {
 
                                 {/* A failed lookup is not retried on its own, so this
                                     is the way back from a provider blip. */}
-                                {lookupError && !lookupLoading && (
+                                {lookupError && !lookupLoading && !offerUnlinkedAck && (
                                     <div className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/40 rounded-xl p-3">
                                         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                                         <span className="flex-1">{lookupError}</span>
@@ -782,7 +804,7 @@ function UtilitiesPageInner() {
                                 )}
 
                                 {/* The confirmation that gates the whole form */}
-                                {lookup?.accountName && (
+                                {lookup?.accountName && !meterMismatch && (
                                     <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50 rounded-xl p-4">
                                         <div className="flex items-start gap-2.5">
                                             <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
@@ -820,7 +842,7 @@ function UtilitiesPageInner() {
                             </div>
 
                             {/* Amount + payment */}
-                            <div className={cn('bg-card border border-border rounded-2xl p-5 space-y-4', !lookup?.accountName && 'opacity-50 pointer-events-none')}>
+                            <div className={cn('bg-card border border-border rounded-2xl p-5 space-y-4', (!lookup?.accountName || meterMismatch) && !payingUnlinkedMeter && 'opacity-50 pointer-events-none')}>
                                 <div>
                                     <Label className="text-sm font-semibold text-foreground">Amount to pay (GHS)</Label>
                                     <Input
@@ -998,16 +1020,23 @@ function UtilitiesPageInner() {
                     <DialogHeader>
                         <DialogTitle>Confirm this bill payment</DialogTitle>
                         <DialogDescription>
-                            Bill payments cannot be reversed once the provider accepts them. Check the name and account below.
+                            Bill payments cannot be reversed once the provider accepts them.{' '}
+                            {payingUnlinkedMeter
+                                ? 'Nobody has confirmed this meter — check the number below very carefully.'
+                                : 'Check the name and account below.'}
                         </DialogDescription>
                     </DialogHeader>
 
                     <div className="space-y-2.5 py-2">
                         <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service</span><span className="font-semibold">{service?.label}</span></div>
                         <div className="flex justify-between text-sm"><span className="text-muted-foreground">Account</span><span className="font-semibold">{accountNumber}</span></div>
-                        <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">Name</span>
-                            <span className="font-black text-foreground">{lookup?.accountName}</span>
+                        <div className="flex justify-between text-sm gap-3">
+                            <span className="text-muted-foreground shrink-0">Name</span>
+                            {lookup?.accountName && !meterMismatch ? (
+                                <span className="font-black text-foreground text-right">{lookup.accountName}</span>
+                            ) : (
+                                <span className="font-bold text-amber-700 dark:text-amber-300 text-right">Not verified</span>
+                            )}
                         </div>
                         <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bill amount</span><span className="font-semibold">GHS {parsedAmount.toFixed(2)}</span></div>
                         <div className="flex justify-between text-sm"><span className="text-muted-foreground">Service fee</span><span className="font-semibold">GHS {feeAmount.toFixed(2)}</span></div>
