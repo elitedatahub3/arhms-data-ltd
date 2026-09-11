@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 
 /**
  * GET endpoint to fetch all users with phone numbers for SMS broadcast
@@ -29,12 +30,14 @@ export async function GET(request: NextRequest) {
         // Service role client to bypass RLS
         const supabase = createServerClient()
 
-        // Fetch all users with phone numbers
-        const { data: users, error: fetchError } = await supabase
+        // Fetch all users with phone numbers. Paged, because an unbounded select stops at
+        // PostgREST's 1000-row cap and the recipient count would silently under-report.
+        const { data: users, error: fetchError } = await fetchAllRows<any>(() => supabase
             .from('users')
             .select('id, first_name, last_name, phone_number, role, email')
             .not('phone_number', 'is', null)
             .order('first_name', { ascending: true })
+            .order('id', { ascending: true }))
 
         if (fetchError) {
             console.error('[SMSBroadcast] Error fetching users:', fetchError)
@@ -42,22 +45,30 @@ export async function GET(request: NextRequest) {
         }
 
         // Fetch all shops to get shop owners
-        const { data: shops, error: shopsError } = await supabase
+        const { data: shops, error: shopsError } = await fetchAllRows<any>(() => supabase
             .from('shop_profiles')
             .select('id, shop_name, owner_phone, owner_email')
             .not('owner_phone', 'is', null)
+            .order('id', { ascending: true }))
 
         let combinedUsers = users || []
 
         if (shops && !shopsError) {
-            const shopOwners = (shops as any[]).map(shop => ({
-                id: `shop_${shop.id}`,
-                first_name: 'Shop Owner:',
-                last_name: shop.shop_name,
-                phone_number: shop.owner_phone,
-                role: 'shop_owner',
-                email: shop.owner_email || ''
-            }))
+            // Most shop owners are also users. Drop those duplicates here so the count the
+            // admin sees matches the number of phones the broadcast actually reaches.
+            const normalisePhone = (phone: string) => (phone || '').replace(/\s+/g, '')
+            const userPhones = new Set(combinedUsers.map((u: any) => normalisePhone(u.phone_number)))
+
+            const shopOwners = (shops as any[])
+                .filter(shop => !userPhones.has(normalisePhone(shop.owner_phone)))
+                .map(shop => ({
+                    id: `shop_${shop.id}`,
+                    first_name: 'Shop Owner:',
+                    last_name: shop.shop_name,
+                    phone_number: shop.owner_phone,
+                    role: 'shop_owner',
+                    email: shop.owner_email || ''
+                }))
 
             combinedUsers = [...combinedUsers, ...shopOwners]
         }
