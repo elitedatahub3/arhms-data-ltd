@@ -24,6 +24,7 @@ import {
     ListChecks,
     Menu,
     Braces,
+    Radio,
     ShieldAlert,
 } from 'lucide-react'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
@@ -37,6 +38,7 @@ import {
     LANGS,
     STANDARD_ENDPOINTS,
     STANDARD_KEY_SAMPLE,
+    WEBHOOK_EVENTS,
     snippetsFor,
 } from '@/lib/api-docs'
 
@@ -69,6 +71,35 @@ const ERROR_CODES: { code: number; name: string; when: string; action: string }[
     { code: 500, name: 'Internal Server Error', when: 'Something failed on our side.', action: 'Check the order status before retrying a purchase — it may have gone through.' },
     { code: 503, name: 'Service Unavailable',  when: 'The API, v2, or a product (e.g. utility bills) is switched off.', action: 'Retry later. This is deliberate, not an outage on your side.' },
 ]
+
+const WEBHOOK_SAMPLE = `POST https://your-app.com/webhooks/arhms
+X-Arhms-Event: data.completed
+X-Arhms-Signature: sha256=<hmac>
+
+{
+  "event": "data.completed",
+  "reference": "order_001",
+  "order_id": "6faea706-…",
+  "status": "completed",
+  "network": "MTN",
+  "size": "1GB",
+  "recipient": "0551617309",
+  "price": 4.5,
+  "sent_at": "2026-09-17T03:31:16.058Z"
+}`
+
+const WEBHOOK_VERIFY = `const crypto = require('crypto')
+
+// Hash the RAW body, before any JSON parsing.
+const expected = 'sha256=' + crypto
+  .createHmac('sha256', process.env.ARHMS_WEBHOOK_SECRET)
+  .update(rawBody, 'utf8')
+  .digest('hex')
+
+const ok = crypto.timingSafeEqual(
+  Buffer.from(expected),
+  Buffer.from(req.headers['x-arhms-signature'])
+)`
 
 const SUCCESS_ENVELOPE = `{
   "success": true,
@@ -259,6 +290,7 @@ const SECTIONS = [
     { id: 'rate-limits',     title: 'Rate Limits',          icon: Gauge },
     { id: 'standard-api',    title: 'Standard API',         icon: BookOpen,   endpoints: STANDARD_ENDPOINTS },
     { id: 'commission-api',  title: 'Commission Services',  icon: ListChecks, endpoints: COMMISSION_ENDPOINTS },
+    { id: 'webhooks',        title: 'Webhooks',             icon: Radio },
     { id: 'error-codes',     title: 'Error Codes',          icon: AlertTriangle },
     { id: 'tips',            title: 'Tips & Best Practice', icon: Lightbulb },
 ] as const
@@ -579,10 +611,61 @@ export default function DocsClient() {
                         </section>
                     ))}
 
-                    {/* 6. Error codes */}
+{/* 6. Webhooks */}
                     <section className="space-y-4">
                         <SectionHeading
-                            id="error-codes" index={6} icon={AlertTriangle} title="Error Codes"
+                            id="webhooks" index={6} icon={Radio} title="Webhooks"
+                            lead="Register an HTTPS endpoint and we POST to it when an order settles, so you do not have to poll every order you place."
+                        />
+                        <p className="text-sm text-muted-foreground">
+                            Register it in your dashboard under Developer API → Webhooks. Each key kind has its own
+                            endpoint and its own signing secret, shown once when you save.
+                        </p>
+
+                        <div className="overflow-x-auto rounded-2xl border border-border bg-card">
+                            <table className="w-full min-w-[520px] text-left text-sm">
+                                <thead className="border-b border-border bg-muted">
+                                    <tr>
+                                        <th className="px-4 py-2.5 font-semibold text-foreground">Event</th>
+                                        <th className="px-4 py-2.5 font-semibold text-foreground">Key</th>
+                                        <th className="px-4 py-2.5 font-semibold text-foreground">Fires when</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {WEBHOOK_EVENTS.map(e => (
+                                        <tr key={e.event} className="border-b border-border last:border-0">
+                                            <td className="px-4 py-2.5 font-mono text-xs font-bold text-foreground">{e.event}</td>
+                                            <td className="px-4 py-2.5 text-xs text-muted-foreground">{e.keyKind === 'commission' ? 'Commission' : 'Standard'}</td>
+                                            <td className="px-4 py-2.5 text-muted-foreground">{e.when}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div className="grid gap-3 lg:grid-cols-2">
+                            <CodeBlock label="What we send" code={WEBHOOK_SAMPLE} />
+                            <CodeBlock label="Verify the signature (Node)" code={WEBHOOK_VERIFY} />
+                        </div>
+
+                        <p className="text-sm text-muted-foreground">
+                            Hash the <strong>raw</strong> body, before any JSON parsing — re-serialising changes the
+                            bytes and the signature will not match. Respond 2xx as soon as you have stored the event
+                            and do your own work afterwards. We retry three times with backoff on a timeout or 5xx; a
+                            4xx is treated as a permanent rejection and is not retried.
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                            Airtime and bill events are sent the instant the order settles. Data and AFA events are
+                            swept within about a minute. A webhook is a convenience, not a guarantee — if your endpoint
+                            was unreachable for every retry, the order status is still authoritative at
+                            <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-foreground">GET /api/v2/orders/{'{reference}'}</code>.
+                        </p>
+                    </section>
+
+                    {/* 7. Error codes */}
+                    <section className="space-y-4">
+                        <SectionHeading
+                            id="error-codes" index={7} icon={AlertTriangle} title="Error Codes"
                             lead="The error message is written to be read — it usually says exactly what to change."
                         />
                         <div className="space-y-2">
@@ -606,9 +689,9 @@ export default function DocsClient() {
                         </div>
                     </section>
 
-                    {/* 7. Tips */}
+                    {/* 8. Tips */}
                     <section className="space-y-4">
-                        <SectionHeading id="tips" index={7} icon={Lightbulb} title="Tips & Best Practice" />
+                        <SectionHeading id="tips" index={8} icon={Lightbulb} title="Tips & Best Practice" />
                         <div className="grid gap-3 sm:grid-cols-2">
                             {[
                                 { title: 'Always send a reference', body: 'Your reference is the idempotency key. If a request times out, send it again with the same reference — you get the existing order back instead of being charged twice.' },

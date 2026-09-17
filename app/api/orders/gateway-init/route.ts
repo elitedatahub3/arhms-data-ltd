@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { createServerClient } from '@/lib/supabase'
+import { checkMtnRegistrationBatch, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 import { calculatePaystackFee, generateReferenceCode } from '@/lib/utils'
 import { initiatePayment, MOOLRE_PAYMENT_CHANNEL_MAP } from '@/lib/moolre-payment-service'
 import { initiatePayment as hubtelInitiatePayment, HUBTEL_CHANNEL_MAP, calculateHubtelFee, toHubtelMsisdn } from '@/lib/hubtel-payment-service'
@@ -192,11 +193,26 @@ export async function POST(request: NextRequest) {
             })
         }
 
-        // NOTE: the MTN registration gate deliberately does NOT run here — see
-        // app/api/orders/purchase/route.ts for the reasoning. Nothing sets
-        // item.awaiting_registration any more, so lib/data-order-payments.ts reads it as
-        // false for every new payment; it still honours a true value so references
-        // initialized before this shipped settle correctly.
+        // MTN registration gate. Direct Pay takes money BEFORE any order row exists,
+        // so this has to refuse before the gateway prompt is sent — a refusal after the
+        // charge would need a manual refund. Skipped when an OTP is being submitted
+        // against a reference we already gated and charged for.
+        //
+        // Nothing sets item.awaiting_registration any more, so lib/data-order-payments.ts
+        // reads it as false for every new payment; it still honours a true value so
+        // references initialized before the gate shipped settle correctly.
+        if (!otpCode) {
+            const { unregistered } = await checkMtnRegistrationBatch(
+                supabase,
+                metadataItems.map((i: any) => ({ phoneNumber: i.phone_number, packageNetwork: i.network }))
+            )
+            if (unregistered.length > 0) {
+                return NextResponse.json(
+                    registrationRequiredBody(unregistered, metadataItems.length),
+                    { status: 409 }
+                )
+            }
+        }
 
         const subtotal = parseFloat(
             metadataItems.reduce((sum, i) => sum + Number(i.price), 0).toFixed(2)

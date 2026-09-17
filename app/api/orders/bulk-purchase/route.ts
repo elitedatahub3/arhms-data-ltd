@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkMtnRegistrationBatch, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 import { generateReferenceCode } from '@/lib/utils'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
@@ -162,9 +163,20 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: `Some packages are invalid: ${invalidOrders.map((o: any) => o.error).join(', ')}` }, { status: 400 })
         }
 
-        // NOTE: the MTN registration gate deliberately does NOT run here — see
-        // app/api/orders/purchase/route.ts for the reasoning. Unregistered lines go
-        // through like any other and are picked up by the auto-refulfill cron.
+        // MTN registration gate. One upstream round trip for the whole batch, before
+        // the wallet is touched. A single unregistered line refuses the WHOLE batch:
+        // charging for part of a paste the agent submitted as one unit would leave them
+        // reconciling which lines went through against which did not.
+        const { unregistered } = await checkMtnRegistrationBatch(
+            supabase,
+            validatedOrders.map((o: any) => ({ phoneNumber: o.phoneNumber, packageNetwork: o.network }))
+        )
+        if (unregistered.length > 0) {
+            return NextResponse.json(
+                registrationRequiredBody(unregistered, validatedOrders.length),
+                { status: 409 }
+            )
+        }
 
         // === 3. Calculate total and deduct atomically ===
         const totalCost = validatedOrders.reduce((sum, o: any) => sum + o.packagePrice, 0)

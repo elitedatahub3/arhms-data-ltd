@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Input } from '@/components/ui/input'
 import {
     Dialog,
     DialogContent,
@@ -31,6 +32,8 @@ import {
     ShoppingCart,
     Coins,
     Webhook,
+    Save,
+    ExternalLink,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatDate, cn } from '@/lib/utils'
@@ -47,6 +50,7 @@ import {
     snippetsFor,
     STANDARD_ENDPOINTS,
     COMMISSION_ENDPOINTS,
+    WEBHOOK_EVENTS,
 } from '@/lib/api-docs'
 
 type Tab = 'standard' | 'commission' | 'webhooks'
@@ -59,6 +63,8 @@ interface ApiKey {
     last_used_at: string | null
     created_at: string
     webhook_url: string | null
+    /** True when an endpoint has a signing secret. The secret itself never leaves the server. */
+    has_webhook_secret?: boolean
 }
 
 interface ApiLog {
@@ -70,6 +76,16 @@ interface ApiLog {
     ip_address: string
     error_message: string | null
     created_at: string
+}
+
+interface ApiUsage {
+    total: number
+    failed: number
+    succeeded: number
+    last24h: number
+    /** null when nothing has been called — never shown as 100%. */
+    successRate: number | null
+    lastCallAt: string | null
 }
 
 interface CommissionWallet {
@@ -119,6 +135,19 @@ const KEY_META: Record<KeyKind, { title: string; blurb: string; empty: string; i
     },
 }
 
+const WEBHOOK_CARD: Record<KeyKind, { title: string; blurb: string; keyLabel: string }> = {
+    standard: {
+        title: 'Data API Webhook',
+        blurb: 'Airtime orders settle asynchronously. Get told the moment one completes or fails, instead of polling GET /orders/{reference}.',
+        keyLabel: 'Standard API key',
+    },
+    commission: {
+        title: 'Commission Services Webhook',
+        blurb: 'Bill payments can take minutes to settle at the biller. Get told the moment one completes, fails or is refunded.',
+        keyLabel: 'Commission Services key',
+    },
+}
+
 export default function DeveloperApiPage() {
     const { dbUser } = useAuth()
     const router = useRouter()
@@ -126,6 +155,7 @@ export default function DeveloperApiPage() {
     const [keys, setKeys] = useState<ApiKey[] | undefined>(undefined)
     const [logs, setLogs] = useState<ApiLog[]>([])
     const [logsLoading, setLogsLoading] = useState(true)
+    const [usage, setUsage] = useState<ApiUsage | null>(null)
     const [commission, setCommission] = useState<CommissionWallet | null>(null)
 
     const [generateKind, setGenerateKind] = useState<KeyKind | null>(null)
@@ -138,6 +168,13 @@ export default function DeveloperApiPage() {
     const [isRevoking, setIsRevoking] = useState(false)
     const [adminWhatsapp, setAdminWhatsapp] = useState('')
 
+    // Webhook form. Drafts are seeded from the saved endpoints once they load, and a
+    // kind the user is editing is left alone so a refetch cannot overwrite typing.
+    const [webhookDraft, setWebhookDraft] = useState<Partial<Record<KeyKind, string>>>({})
+    const [webhookBusy, setWebhookBusy] = useState<KeyKind | null>(null)
+    const [newSecret, setNewSecret] = useState<{ kind: KeyKind; value: string } | null>(null)
+    const [secretCopied, setSecretCopied] = useState(false)
+
     const [tab, setTab] = useState<Tab>('standard')
     const [activeLang, setActiveLang] = useState<Lang>('curl')
     const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null)
@@ -148,6 +185,65 @@ export default function DeveloperApiPage() {
         setKeys(json.keys ?? [])
     }, [])
 
+    // Seed each input from what is saved. A kind already in the draft is left alone so
+    // a refetch cannot overwrite something being typed.
+    useEffect(() => {
+        if (!keys) return
+        setWebhookDraft(prev => {
+            const next = { ...prev }
+            for (const k of keys) if (next[k.kind] === undefined) next[k.kind] = k.webhook_url ?? ''
+            return next
+        })
+    }, [keys])
+
+    /**
+     * Save, rotate or clear one endpoint.
+     *
+     * The same PATCH does all three: a URL sets it and mints a fresh secret, null
+     * clears both. Rotating is therefore just saving the URL that is already there.
+     */
+    const saveWebhook = async (kind: KeyKind, url: string | null) => {
+        if (url !== null) {
+            const trimmed = url.trim()
+            if (!trimmed) { toast.error('Enter your endpoint URL'); return }
+            // Checked here too so the common mistake is caught without a round trip;
+            // the server enforces it regardless.
+            if (!trimmed.toLowerCase().startsWith('https://')) { toast.error('The URL must start with https://'); return }
+            url = trimmed
+        }
+
+        setWebhookBusy(kind)
+        try {
+            const res = await fetch('/api/user/api-keys', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind, webhook_url: url }),
+            })
+            const json = await res.json()
+            if (!res.ok) { toast.error(json.error || 'Could not save the webhook'); return }
+
+            if (json.webhook_secret) {
+                setNewSecret({ kind, value: json.webhook_secret })
+                setSecretCopied(false)
+            } else {
+                setNewSecret(null)
+                setWebhookDraft(prev => ({ ...prev, [kind]: '' }))
+            }
+            toast.success(json.message || 'Webhook updated')
+            await fetchKeys()
+        } catch {
+            toast.error('Something went wrong')
+        } finally {
+            setWebhookBusy(null)
+        }
+    }
+
+    const copySecret = (value: string) => {
+        navigator.clipboard.writeText(value)
+            .then(() => { setSecretCopied(true); toast.success('Signing secret copied') })
+            .catch(() => toast.error('Could not copy — select the text instead'))
+    }
+
     const fetchLogs = useCallback(async () => {
         setLogsLoading(true)
         try {
@@ -155,6 +251,7 @@ export default function DeveloperApiPage() {
             if (res.ok) {
                 const json = await res.json()
                 setLogs(json.data?.logs ?? [])
+                setUsage(json.data?.usage ?? null)
             }
         } finally {
             setLogsLoading(false)
@@ -351,12 +448,55 @@ export default function DeveloperApiPage() {
     return (
         <div className="space-y-6 max-w-4xl">
             {/* Header */}
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">Developer API</h1>
-                <p className="text-muted-foreground text-sm mt-1">
-                    Integrate ARHMS into your own apps. Agent plan required.
-                </p>
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <h1 className="text-2xl font-bold tracking-tight">Developer API</h1>
+                    <p className="text-muted-foreground text-sm mt-1">
+                        Integrate ARHMS into your own apps. Agent plan required.
+                    </p>
+                </div>
+                {/* The full reference lives at /docs, which is public — a partner reading it
+                    does not need this dashboard, or an account at all. */}
+                <a
+                    href="/docs"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold transition hover:bg-muted"
+                >
+                    <ExternalLink className="w-3.5 h-3.5" /> Docs
+                </a>
             </div>
+
+            {/* Usage */}
+            {usage && usage.total > 0 && (
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                            <Activity className="w-4 h-4" /> Your API Usage
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            {[
+                                { label: 'Total calls', value: usage.total.toLocaleString() },
+                                { label: 'Last 24 hours', value: usage.last24h.toLocaleString() },
+                                { label: 'Succeeded', value: usage.succeeded.toLocaleString() },
+                                { label: 'Success rate', value: usage.successRate === null ? '—' : `${usage.successRate}%` },
+                            ].map(s => (
+                                <div key={s.label} className="rounded-xl border border-border/60 p-3">
+                                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+                                    <p className="text-lg font-black mt-0.5">{s.value}</p>
+                                </div>
+                            ))}
+                        </div>
+                        {usage.lastCallAt && (
+                            <p className="text-[11px] text-muted-foreground mt-3">
+                                Last call {formatDate(usage.lastCallAt)}.
+                            </p>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
 
             {renderKeyCard('standard')}
             {renderKeyCard('commission')}
@@ -502,23 +642,136 @@ ARHMS_COMMISSION_KEY=${COMMISSION_KEY_SAMPLE}`}
                     {tab === 'webhooks' ? (
                         <div className="space-y-4 text-sm">
                             <p className="text-muted-foreground">
-                                Airtime and bill payments settle asynchronously — sometimes instantly, sometimes
-                                minutes later when the provider calls back. Rather than polling every order, register
-                                an HTTPS endpoint and we will POST to it the moment an order reaches a terminal state.
+                                Data bundles, airtime, AFA registrations and bill payments all settle
+                                asynchronously — sometimes instantly, sometimes minutes later when the provider calls
+                                back. Rather than polling every order, register an HTTPS endpoint and we will POST to
+                                it when an order reaches a terminal state. Airtime and bills are sent the instant they
+                                settle; data and AFA are swept within about a minute.
                             </p>
 
+                            {/* Configure your endpoint — one card per key kind, because each
+                                key carries its own URL and its own signing secret. */}
+                            <div className="space-y-2">
+                                <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Configure your endpoint</p>
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    {(["standard", "commission"] as KeyKind[]).map(kind => {
+                                        const key = keys?.find(k => k.kind === kind)
+                                        const meta = WEBHOOK_CARD[kind]
+                                        const draft = webhookDraft[kind] ?? ''
+                                        const busy = webhookBusy === kind
+                                        const live = !!key?.webhook_url
+                                        const dirty = draft.trim() !== (key?.webhook_url ?? '')
+
+                                        return (
+                                            <div key={kind} className="rounded-xl border border-border/60 p-4 space-y-3">
+                                                <div className="flex items-center gap-2">
+                                                    <Webhook className="w-4 h-4 text-muted-foreground shrink-0" />
+                                                    <span className="text-sm font-bold">{meta.title}</span>
+                                                    {live && (
+                                                        <span className="ml-auto text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400">
+                                                            Active
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-muted-foreground">{meta.blurb}</p>
+
+                                                {!key ? (
+                                                    <p className="text-xs text-muted-foreground italic">
+                                                        Generate a {meta.keyLabel} first — a webhook belongs to a key.
+                                                    </p>
+                                                ) : (
+                                                    <>
+                                                        <div>
+                                                            <label className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Webhook URL</label>
+                                                            <Input
+                                                                value={draft}
+                                                                onChange={e => setWebhookDraft(prev => ({ ...prev, [kind]: e.target.value }))}
+                                                                placeholder="https://your-app.com/webhooks/arhms"
+                                                                className="mt-1 h-10 rounded-lg font-mono text-xs"
+                                                                disabled={busy}
+                                                            />
+                                                        </div>
+
+                                                        {live && (
+                                                            <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-2.5 py-2">
+                                                                <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                                                <span className="text-[11px] text-muted-foreground flex-1">
+                                                                    {key.has_webhook_secret
+                                                                        ? 'Signing secret configured — hidden after creation.'
+                                                                        : 'No signing secret yet. Save again to mint one.'}
+                                                                </span>
+                                                            </div>
+                                                        )}
+
+                                                        <div className="flex flex-wrap gap-2">
+                                                            <Button
+                                                                size="sm"
+                                                                className="flex-1 min-w-[8rem]"
+                                                                disabled={busy || (live && !dirty)}
+                                                                onClick={() => saveWebhook(kind, draft)}
+                                                            >
+                                                                {busy
+                                                                    ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                                                                    : <Save className="w-3.5 h-3.5 mr-1.5" />}
+                                                                {live ? 'Update webhook' : 'Save webhook'}
+                                                            </Button>
+                                                            {live && (
+                                                                <>
+                                                                    {/* Re-saving the same URL is what mints a new secret. */}
+                                                                    <Button size="sm" variant="outline" disabled={busy}
+                                                                        onClick={() => saveWebhook(kind, key.webhook_url)}>
+                                                                        <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rotate
+                                                                    </Button>
+                                                                    <Button size="sm" variant="outline" disabled={busy}
+                                                                        className="text-red-600 hover:text-red-600"
+                                                                        onClick={() => saveWebhook(kind, null)}>
+                                                                        <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Disable
+                                                                    </Button>
+                                                                </>
+                                                            )}
+                                                        </div>
+
+                                                        {newSecret?.kind === kind && (
+                                                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2 dark:border-amber-900/50 dark:bg-amber-950/20">
+                                                                <p className="text-[11px] font-bold text-amber-900 dark:text-amber-200">
+                                                                    Signing secret — shown once. Store it now.
+                                                                </p>
+                                                                <div className="flex items-center gap-2">
+                                                                    <code className="flex-1 min-w-0 truncate rounded bg-background/60 px-2 py-1 font-mono text-[11px]">{newSecret.value}</code>
+                                                                    <Button size="icon" variant="ghost" className="w-7 h-7 shrink-0"
+                                                                        onClick={() => copySecret(newSecret.value)}>
+                                                                        {secretCopied
+                                                                            ? <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                                                            : <Copy className="w-3.5 h-3.5" />}
+                                                                    </Button>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                )}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Saving mints a <strong>new</strong> signing secret and retires the old one, so update
+                                    your server whenever you change the URL. HTTPS only — localhost and private addresses are rejected.
+                                </p>
+                            </div>
+
+                            {/* Event types */}
                             <div className="rounded-xl border border-border/60 overflow-hidden">
-                                <div className="px-4 py-3 bg-secondary/30 text-xs font-semibold">1. Register your endpoint</div>
-                                <div className="px-4 py-3">
-                                    <pre className="text-xs font-mono bg-muted/40 rounded-lg p-3 overflow-x-auto whitespace-pre">
-{`curl -X PATCH ${BASE}/api/user/api-keys \\
-  -H "Content-Type: application/json" \\
-  -d '{"kind":"commission","webhook_url":"https://your-app.com/hooks/arhms"}'`}
-                                    </pre>
-                                    <p className="text-xs text-muted-foreground mt-2">
-                                        Called from your logged-in dashboard session. The response contains a
-                                        <code className="font-mono mx-1">webhook_secret</code> shown once — store it.
-                                    </p>
+                                <div className="px-4 py-3 bg-secondary/30 text-xs font-semibold">Event types</div>
+                                <div className="divide-y divide-border/60">
+                                    {WEBHOOK_EVENTS.map(e => (
+                                        <div key={e.event} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
+                                            <code className="font-mono text-xs font-bold text-foreground">{e.event}</code>
+                                            <span className="text-[10px] uppercase font-bold text-muted-foreground">
+                                                {e.keyKind === 'commission' ? 'Commission key' : 'Standard key'}
+                                            </span>
+                                            <span className="text-xs text-muted-foreground w-full sm:w-auto sm:flex-1">{e.when}</span>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
 

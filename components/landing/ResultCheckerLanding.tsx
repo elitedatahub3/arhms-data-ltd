@@ -106,14 +106,19 @@ export function ResultCheckerLanding({
     }, [])
 
     return (
+        // Light mode shows the bubble field painted once on <body> (see
+        // .bg-bubbles in globals.css) rather than a second copy tiled down this
+        // wrapper. overflow-x-clip avoids making the wrapper a scroll container.
         <div
-            className={cn('min-h-screen text-foreground overflow-x-hidden', !isDark && 'bg-bubbles')}
+            className="min-h-screen text-foreground overflow-x-clip"
             style={isDark ? { background: 'linear-gradient(160deg, #020617 0%, #070c1f 40%, #020617 100%)' } : undefined}
         >
             {/* ══ NAV ══════════════════════════════════════════════════════════════ */}
+            {/* No backdrop-blur: the scrolled bar is 97% opaque, so it was an
+                invisible full-width GPU pass on every scroll frame. */}
             <nav className={cn(
-                'fixed top-0 w-full z-[100] transition-all duration-500 h-16 sm:h-20 flex items-center',
-                headerScrolled ? 'backdrop-blur-2xl border-b shadow-sm' : '',
+                'fixed top-0 w-full z-[100] transition-[background-color,border-color,box-shadow] duration-200 h-16 sm:h-20 flex items-center',
+                headerScrolled ? 'border-b shadow-sm' : '',
                 headerScrolled ? (isDark ? 'border-white/10' : 'border-black/10') : ''
             )} style={{ backgroundColor: headerScrolled ? (isDark ? 'rgba(2,6,23,0.97)' : 'rgba(255,255,255,0.97)') : 'transparent' }}>
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 w-full flex items-center justify-between">
@@ -155,20 +160,20 @@ export function ResultCheckerLanding({
             </nav>
 
             {/* ══ HERO ══════════════════════════════════════════════════════════════ */}
-            <section className="relative min-h-screen flex flex-col items-center justify-center px-4 sm:px-6 lg:px-10 overflow-hidden pt-24 pb-16">
+            <section className="relative min-h-screen min-h-[100svh] flex flex-col items-center justify-center px-4 sm:px-6 lg:px-10 overflow-hidden pt-24 pb-16">
                 {/* Background ambience — light mode */}
                 {!isDark && (
                     <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                        <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(37,99,235,0.08) 0%, transparent 70%)', filter: 'blur(40px)' }} />
-                        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.05) 0%, transparent 65%)', filter: 'blur(50px)' }} />
+                        <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(37,99,235,0.08) 0%, transparent 70%)' }} />
+                        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.05) 0%, transparent 65%)' }} />
                     </div>
                 )}
                 {/* Background glow orbs — dark mode */}
                 {isDark && (
                     <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                        <div className="absolute -top-24 -right-24 w-[700px] h-[700px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(79,70,229,0.5) 0%, transparent 62%)', filter: 'blur(44px)' }} />
-                        <div className="absolute top-1/4 -left-48 w-[560px] h-[560px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(37,99,235,0.3) 0%, transparent 68%)', filter: 'blur(32px)' }} />
-                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(124,58,237,0.22) 0%, transparent 58%)', filter: 'blur(60px)' }} />
+                        <div className="absolute -top-24 -right-24 w-[700px] h-[700px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(79,70,229,0.45) 0%, rgba(79,70,229,0.12) 38%, transparent 66%)' }} />
+                        <div className="absolute top-1/4 -left-48 w-[560px] h-[560px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(37,99,235,0.26) 0%, rgba(37,99,235,0.07) 40%, transparent 70%)' }} />
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(124,58,237,0.2) 0%, rgba(124,58,237,0.06) 36%, transparent 62%)' }} />
                     </div>
                 )}
 

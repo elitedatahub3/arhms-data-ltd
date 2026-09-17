@@ -36,24 +36,27 @@ export function DashboardHeader() {
         setUnreadCount(count || 0)
     }
 
+    // Keyed on the id, not the row: a profile refetch must not tear down and
+    // re-open the realtime channel and re-count notifications.
+    const userId = dbUser?.id
     useEffect(() => {
-        if (!dbUser) return
+        if (!userId) return
 
-        fetchUnreadNotifications(dbUser.id)
+        fetchUnreadNotifications(userId)
 
         // Real-time subscription — update count and toast new arrivals
         const channel = supabase
-            .channel(`notifications:${dbUser.id}`)
+            .channel(`notifications:${userId}`)
             .on(
                 'postgres_changes' as any,
                 {
                     event: '*',
                     schema: 'public',
                     table: 'notifications',
-                    filter: `user_id=eq.${dbUser.id}`,
+                    filter: `user_id=eq.${userId}`,
                 },
                 (payload: any) => {
-                    fetchUnreadNotifications(dbUser.id)
+                    fetchUnreadNotifications(userId)
                     if (payload.eventType === 'INSERT' && payload.new) {
                         const n = payload.new
                         toast(n.title, {
@@ -69,7 +72,7 @@ export function DashboardHeader() {
             .subscribe()
 
         return () => { supabase.removeChannel(channel) }
-    }, [dbUser])
+    }, [userId])
 
     const getInitials = () => {
         if (!dbUser) return 'U'

@@ -145,6 +145,10 @@ function getSubdomain(request: NextRequest): string | null {
     return null
 }
 
+// Per-user memo cookies for the dashboard's UX redirects (see the dashboard guard).
+const PHONE_OK_COOKIE = 'arhms_phone_ok'
+const SUB_CHECK_COOKIE = 'arhms_sub_chk'
+
 // Helper to add cache-prevention headers
 function addNoCacheHeaders(response: NextResponse) {
     response.headers.set('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate')
@@ -335,7 +339,7 @@ export async function middleware(request: NextRequest) {
     )
 
 
-    let authUser = null
+    let authUser: { id: string } | null = null
 
     // === ANONYMOUS FAST PATH ===
     // supabase.auth.getUser() is a network round-trip to the Supabase auth
@@ -360,14 +364,22 @@ export async function middleware(request: NextRequest) {
                 setTimeout(() => reject(new Error('Session timeout')), 10000)
             )
 
-            const userPromise = supabase.auth.getUser()
+            // getClaims() rather than getUser(): with asymmetric JWT signing keys
+            // it verifies the token locally against the cached JWKS — no round
+            // trip to the auth server on every page tap and every Link prefetch.
+            // On a project still using a symmetric secret it falls back to the
+            // same network check getUser() made, so it is never weaker. It also
+            // refreshes an expired session through the cookie adapter above,
+            // exactly as getUser() did. Only `.id` is read downstream.
+            const claimsPromise = supabase.auth.getClaims()
 
             const { data } = await Promise.race([
-                userPromise,
+                claimsPromise,
                 timeout
             ]) as any
 
-            authUser = data?.user || null
+            const sub = data?.claims?.sub
+            authUser = sub ? { id: sub as string } : null
         } catch (error) {
             console.error('Middleware session error:', error)
             // On error or timeout, treat as no session
@@ -567,7 +579,20 @@ export async function middleware(request: NextRequest) {
         // This prevents a race condition where the DB write hasn't propagated yet.
         const justVerified = request.cookies.get('phone_just_verified')?.value === '1'
 
-        if (!justVerified) {
+        // This check and the sub-agent one below used to hit the database on every
+        // dashboard tap AND every Link prefetch — two extra round trips before the
+        // page could start. Both are UX redirects, not security boundaries (RLS and
+        // the route handlers enforce access), so:
+        //  * prefetches skip them — the real navigation re-runs middleware without
+        //    the prefetch header, so the redirect still happens when it matters;
+        //  * a pass is remembered in a per-user cookie. Forging it only lets a user
+        //    skip their own profile-completion prompt.
+        const isPrefetch =
+            request.headers.get('next-router-prefetch') === '1' ||
+            request.headers.get('purpose') === 'prefetch'
+        const phoneAlreadyOk = request.cookies.get(PHONE_OK_COOKIE)?.value === authUser.id
+
+        if (!justVerified && !isPrefetch && !phoneAlreadyOk) {
             try {
                 const phoneTimeout = new Promise((_, reject) =>
                     setTimeout(() => reject(new Error('Phone check timeout')), 5000)
@@ -594,6 +619,13 @@ export async function middleware(request: NextRequest) {
                         return addNoCacheHeaders(NextResponse.redirect(new URL('/auth/complete-profile', request.url)))
                     }
                     // phone_verified check removed to allow users to go straight to dashboard
+                    res.cookies.set(PHONE_OK_COOKIE, authUser.id, {
+                        path: '/',
+                        maxAge: 60 * 60 * 24,
+                        httpOnly: true,
+                        sameSite: 'lax',
+                        secure: process.env.NODE_ENV === 'production',
+                    })
                 }
             } catch (error) {
                 // Fail open — never block dashboard access due to infra issues
@@ -605,24 +637,39 @@ export async function middleware(request: NextRequest) {
         // dashboard. Only the exact /dashboard landing is redirected (their home);
         // other /dashboard/* pages stay reachable, and /dashboard/sub is exempt so
         // there is no redirect loop. Fails open on any error/timeout.
-        if (pathname === '/dashboard') {
-            try {
-                const subTimeout = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Sub check timeout')), 5000)
-                )
-                const subQuery = supabase
-                    .from('sub_agents')
-                    .select('id')
-                    .eq('user_id', authUser.id)
-                    .maybeSingle()
+        if (pathname === '/dashboard' && !isPrefetch) {
+            // Only a negative result is cached ("<userId>:0", ten minutes). A cached
+            // positive would outlive a sub-agent's removal and bounce them between
+            // here and /dashboard/sub, whose layout sends non-subs back. Sub-agents
+            // live on /dashboard/sub, so re-checking their rare visits costs nothing.
+            const notSubCached = request.cookies.get(SUB_CHECK_COOKIE)?.value === `${authUser.id}:0`
 
-                const { data: sub } = await Promise.race([subQuery, subTimeout]) as any
+            if (!notSubCached) {
+                try {
+                    const subTimeout = new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('Sub check timeout')), 5000)
+                    )
+                    const subQuery = supabase
+                        .from('sub_agents')
+                        .select('id')
+                        .eq('user_id', authUser.id)
+                        .maybeSingle()
 
-                if (sub) {
-                    return addNoCacheHeaders(NextResponse.redirect(new URL('/dashboard/sub', request.url)))
+                    const { data: sub } = await Promise.race([subQuery, subTimeout]) as any
+
+                    if (sub) {
+                        return addNoCacheHeaders(NextResponse.redirect(new URL('/dashboard/sub', request.url)))
+                    }
+                    res.cookies.set(SUB_CHECK_COOKIE, `${authUser.id}:0`, {
+                        path: '/',
+                        maxAge: 60 * 10,
+                        httpOnly: true,
+                        sameSite: 'lax',
+                        secure: process.env.NODE_ENV === 'production',
+                    })
+                } catch (error) {
+                    console.error('[Middleware] Sub-agent check failed, failing open:', error)
                 }
-            } catch (error) {
-                console.error('[Middleware] Sub-agent check failed, failing open:', error)
             }
         }
     }

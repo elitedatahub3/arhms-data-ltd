@@ -17,7 +17,6 @@ import { useUI } from '@/contexts/ui-context'
 // import { SupportChatWidget } from '@/components/dashboard/support-chat-widget'
 import { SuspendedAccount } from '@/components/dashboard/SuspendedAccount'
 import { CopyrightFooter } from '@/components/CopyrightFooter'
-import { SystemAnnouncementModal } from '@/components/system-announcement-modal'
 import { SubPortalShell } from '@/components/sub-portal/sub-shell'
 
 
@@ -184,7 +183,7 @@ export default function DashboardLayout({
             <div className="min-h-screen relative">
                 <DashboardSidebar />
                 <div className={cn(
-                    "relative transition-all duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
+                    "relative lg:transition-[padding] lg:duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
                     isCollapsed ? "lg:pl-20" : "lg:pl-80"
                 )}>
                     <DashboardHeader />
@@ -213,11 +212,10 @@ export default function DashboardLayout({
         <div className="min-h-screen relative">
             <PushNotificationManager />
             <ReferralClaimOnMount />
-            <SystemAnnouncementModal userRole={dbUser?.role} />
             <AgentExpiryModal />
             <DashboardSidebar />
             <div className={cn(
-                "relative transition-all duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
+                "relative lg:transition-[padding] lg:duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
                 isCollapsed ? "lg:pl-20" : "lg:pl-80"
             )}>
                 <DashboardHeader />

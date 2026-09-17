@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { MIN_DELIVERABLE_AIRTIME_GHS } from '@/lib/kingflexy-airtime-service'
 import { generateReferenceCode } from '@/lib/utils'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
@@ -121,8 +122,11 @@ export async function POST(request: NextRequest) {
             airtimeAmount = parseFloat((parsedAmount - feeAmount).toFixed(2))
         }
 
-        if (airtimeAmount <= 0) {
-            return NextResponse.json({ error: 'Airtime amount after fees is too low' }, { status: 400 })
+        if (airtimeAmount < MIN_DELIVERABLE_AIRTIME_GHS) {
+            // Checked BEFORE the wallet is touched: the supplier would reject this
+            // after we had already taken the money.
+            const needed = Math.ceil((MIN_DELIVERABLE_AIRTIME_GHS / (1 - feeRate / 100)) * 100) / 100
+            return NextResponse.json({ error: `Airtime after the ${feeRate}% fee would be GHS ${airtimeAmount.toFixed(2)}, below the GHS ${MIN_DELIVERABLE_AIRTIME_GHS.toFixed(2)} minimum the provider accepts. Send at least GHS ${needed.toFixed(2)}, or set use_exact_amount to true to add the fee on top.` }, { status: 400 })
         }
 
         // ── 30-second idempotency guard ───────────────────────────────────────

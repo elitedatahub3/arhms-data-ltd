@@ -7,6 +7,7 @@ import { generateReferenceCode } from '@/lib/utils'
 import { waitUntil } from '@vercel/functions'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { triggerAirtimeFulfillment } from '@/lib/airtime-fulfillment-dispatcher'
+import { MIN_DELIVERABLE_AIRTIME_GHS } from '@/lib/kingflexy-airtime-service'
 import { isAirtimeNetwork, isDuplicateReferenceError } from '@/lib/api-v2-networks'
 
 /**
@@ -152,8 +153,11 @@ export async function POST(request: NextRequest) {
         airtimeAmount = round2(parsedAmount - feeAmount)
     }
 
-    if (airtimeAmount <= 0) {
-        return apiError(400, 'Airtime amount after fees is too low')
+    if (airtimeAmount < MIN_DELIVERABLE_AIRTIME_GHS) {
+        // Checked BEFORE the wallet is touched: the supplier would reject this
+        // after we had already taken the money.
+        const needed = Math.ceil((MIN_DELIVERABLE_AIRTIME_GHS / (1 - feeRate / 100)) * 100) / 100
+        return apiError(400, `Airtime after the ${feeRate}% fee would be GHS ${airtimeAmount.toFixed(2)}, below the GHS ${MIN_DELIVERABLE_AIRTIME_GHS.toFixed(2)} minimum the provider accepts. Send at least GHS ${needed.toFixed(2)}, or set use_exact_amount to true to add the fee on top.`)
     }
 
     const { data: deductResult, error: deductError } = await (supabase as any).rpc('deduct_wallet_balance', {

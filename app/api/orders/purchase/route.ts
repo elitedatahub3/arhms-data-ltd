@@ -10,6 +10,7 @@ import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { resolveDataPrice } from '@/lib/data-order-pricing'
 import { triggerFulfillment } from '@/lib/order-fulfillment-dispatcher'
+import { checkMtnRegistration, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 
 const purchaseRateLimit = new Ratelimit({
     redis: Redis.fromEnv(),
@@ -115,16 +116,12 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'This phone number is not allowed' }, { status: 400 })
         }
 
-        // NOTE: the MTN registration gate deliberately does NOT run here.
-        //
-        // Dashboard buyers are never stopped or warned about an unregistered recipient —
-        // they buy, and the order takes the fulfillment-time path it took before the gate
-        // existed: Agent Portal rejects it with added: 0, auto-submits the number to MTN
-        // for enabling, and fulfillOrder() returns whitelistPending, leaving the order
-        // pending. The auto-refulfill cron retries pending orders and delivers it once
-        // MTN enables the number.
-        //
-        // The gate is storefront- and USSD-only (see lib/mtn-registration-gate.ts).
+        // MTN registration gate. Runs before the wallet is touched, so a refusal
+        // charges nothing and creates no order. Off unless an admin turns it on.
+        const gate = await checkMtnRegistration(supabase, phoneNumber, (pkg as any).network)
+        if (gate.gated) {
+            return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
+        }
 
         // Resolve the authoritative price (sub-agent gates + role pricing)
         const priceResult = await resolveDataPrice(supabase, userId, pkg)

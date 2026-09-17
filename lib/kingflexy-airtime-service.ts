@@ -159,6 +159,17 @@ function configError(): string | null {
 
 // ─── Purchase ────────────────────────────────────────────────────────────────
 
+/**
+ * The smallest top-up KingFlexy will accept, in GHS.
+ *
+ * Their API rejects anything below this with "Minimum airtime amount is GHS 1.00"
+ * AFTER our wallet debit has already gone through, so callers must check the amount
+ * that will actually be SENT — not the amount the customer was charged. With the fee
+ * taken out of the amount (use_exact_amount false), a GHS 1.00 charge sends 0.95 and
+ * is always rejected: the customer loses the cedi and the order sits pending.
+ */
+export const MIN_DELIVERABLE_AIRTIME_GHS = 1
+
 export interface KfAirtimePurchaseParams {
     network: string
     /** Beneficiary number, 0XXXXXXXXX — same format KingFlexy expects, no conversion needed. */

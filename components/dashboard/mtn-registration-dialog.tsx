@@ -10,13 +10,13 @@ import {
 } from '@/components/ui/dialog'
 
 /**
- * Shown when a storefront sale is refused because the beneficiary's MTN number has
- * never been registered for data on our supplier account.
+ * Shown when a sale is refused because the beneficiary's MTN number has never been
+ * registered for data on our supplier account. Used by the storefront and by the
+ * dashboard's purchase paths.
  *
- * There is nothing to agree to here. The storefront is one of only two surfaces the
- * registration gate applies to (USSD is the other, and it has no UI), and on both the
- * answer is final — see lib/mtn-registration-gate.ts for why guests are refused where
- * dashboard buyers are simply let through.
+ * There is nothing to agree to here. Every surface the gate applies to refuses
+ * outright — see lib/mtn-registration-gate.ts for where it runs and why API v1 is
+ * the one exemption.
  *
  * Two things the copy has to get right:
  *

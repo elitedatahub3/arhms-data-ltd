@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { createHash } from 'crypto'
 import { LRUCache } from 'lru-cache'
@@ -201,11 +201,9 @@ export async function validateApiKey(
         apiKeyId: keyRow.id, userId: keyRow.user_id, userRole, keyPrefix, keyKind,
     })
 
-    // Fire-and-forget: update last_used_at
-    ;(supabase.from('api_keys') as any)
+    runAfterResponse('API Key last_used_at', () => (supabase.from('api_keys') as any)
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq('id', keyRow.id)
-        .then(() => {}).catch(() => {})
+        .eq('id', keyRow.id))
 
     return { userId: keyRow.user_id, apiKeyId: keyRow.id, userRole, keyPrefix, keyKind, supabase }
 }
@@ -239,6 +237,37 @@ export function apiError(code: number, message: string): NextResponse {
     )
 }
 
+/**
+ * Run a write once the response is on its way, without letting the platform freeze the
+ * function before the write lands.
+ *
+ * These used to be fire-and-forget: started, never awaited. On Vercel an instance can be
+ * suspended as soon as the response is sent, so a write still in flight on the LAST
+ * request before an idle spell was lost. The live check on 2026-09-15 recorded 6 of 7
+ * successful calls in api_logs, and the missing one was the final request of the run.
+ * after() keeps the function alive until the task settles.
+ *
+ * Supabase reports a failed write in `{ error }` rather than by throwing, so that is
+ * checked explicitly — the old `.catch` could never have seen a rejected insert.
+ */
+function runAfterResponse(label: string, task: () => PromiseLike<{ error?: { message: string } | null }>): void {
+    const guarded = async () => {
+        try {
+            const { error } = await task()
+            if (error) console.error(`[${label}]`, error.message)
+        } catch (e: any) {
+            console.error(`[${label}]`, e?.message ?? e)
+        }
+    }
+    try {
+        after(guarded)
+    } catch {
+        // Outside a request scope (a script, a test) there is no response to outlive,
+        // so starting it now is equivalent.
+        void guarded()
+    }
+}
+
 export function logApiRequest(params: {
     apiKeyId: string | null
     userId: string | null
@@ -250,7 +279,7 @@ export function logApiRequest(params: {
     errorMessage?: string
 }): void {
     const supabase = createServerClient()
-    ;(supabase.from('api_logs') as any)
+    runAfterResponse('API Log', () => (supabase.from('api_logs') as any)
         .insert({
             api_key_id:       params.apiKeyId,
             user_id:          params.userId,
@@ -260,8 +289,7 @@ export function logApiRequest(params: {
             response_time_ms: params.responseTimeMs,
             ip_address:       params.ip,
             error_message:    params.errorMessage || null,
-        })
-        .then(() => {}).catch((e: any) => console.error('[API Log]', e.message))
+        }))
 }
 
 export function isApiError(result: ApiAuthResult | NextResponse): result is NextResponse {

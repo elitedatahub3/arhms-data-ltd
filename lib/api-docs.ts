@@ -103,6 +103,24 @@ export function snippetsFor(ep: Endpoint): Record<Lang, string> {
     }
 }
 
+/**
+ * Every event we will POST to a registered endpoint.
+ *
+ * Defined here because the dashboard's Webhooks tab and the public docs both list
+ * them, and a partner switching on `event` cannot afford the two to disagree.
+ */
+export const WEBHOOK_EVENTS: { event: string; when: string; keyKind: KeyKind }[] = [
+    { event: 'data.completed',     when: 'The supplier delivered the bundle to the recipient.',        keyKind: 'standard' },
+    { event: 'data.failed',        when: 'The supplier could not deliver it. Check your wallet — a refund is manual.', keyKind: 'standard' },
+    { event: 'airtime.completed',  when: 'The network confirmed the top-up reached the beneficiary.', keyKind: 'standard' },
+    { event: 'airtime.failed',     when: 'The provider refused or could not deliver it.',             keyKind: 'standard' },
+    { event: 'afa.completed',      when: 'An agent filed the AFA registration with MTN.',             keyKind: 'standard' },
+    { event: 'afa.failed',         when: 'The registration could not be completed.',                  keyKind: 'standard' },
+    { event: 'utility.completed',  when: 'The biller accepted the payment.',                          keyKind: 'commission' },
+    { event: 'utility.failed',     when: 'The biller rejected it; nothing was delivered.',            keyKind: 'commission' },
+    { event: 'utility.refunded',   when: 'A failed bill payment was credited back to your wallet.',   keyKind: 'commission' },
+]
+
 export const STANDARD_ENDPOINTS: Endpoint[] = [
     {
         icon: Package, method: 'GET', path: '/api/v2/packages', label: 'List packages',
@@ -124,7 +142,7 @@ export const STANDARD_ENDPOINTS: Endpoint[] = [
     },
     {
         icon: Phone, method: 'POST', path: '/api/v2/airtime/purchase', label: 'Send airtime',
-        desc: 'Networks: MTN, Telecel, AT. Priced with your ordinary role fee, same as the dashboard. Set `use_exact_amount` to charge the fee on top instead of taking it out of the amount.',
+        desc: 'Networks: MTN, Telecel, AT. Priced with your ordinary role fee, same as the dashboard. Set `use_exact_amount` to charge the fee on top instead of taking it out of the amount. The provider will not send less than GHS 1.00, and by default the fee comes OUT of `amount` — so send at least GHS 1.06, or set `use_exact_amount` and send 1.00.',
         body: { network: 'MTN', amount: 10, recipient: '0551617309', reference: 'air_001' },
     },
     {

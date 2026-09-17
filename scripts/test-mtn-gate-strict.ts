@@ -11,9 +11,10 @@
  * shared helper would silently flip one of them. These cases run both against the
  * same stubbed supplier answers to catch exactly that.
  *
- * Note what is NOT covered here, because it is not this module's job any more: the
- * dashboard and the public API v1 do not call this module at all. If you are checking
- * whether a dashboard purchase is gated, the answer is no — grep the routes, not this.
+ * Note what is NOT covered here: the public API v1 does not call this module at all.
+ * The dashboard does — all three of its purchase routes refuse — but through the
+ * fail-open batch path, not the strict one. The import-graph assertions at the end of
+ * this file are what pin which surface is which.
  *
  * Stubs the database and the Agent Portal call — no network, no DB.
  *
@@ -222,24 +223,27 @@ async function main() {
 
     // ── Surface wiring ───────────────────────────────────────────────────────────
     // Which routes import this module is a product decision, not an implementation
-    // detail: the dashboard and the API are ungated ON PURPOSE. That is exactly the
-    // kind of thing a later "restore consistency" refactor undoes by accident, and no
-    // type error or unit test would catch it — so assert the import graph directly.
+    // detail: API v1 is ungated ON PURPOSE, and each dashboard purchase route is gated
+    // ON PURPOSE. Either is exactly the kind of thing a later refactor flips by
+    // accident, and no type error or unit test would catch it — so assert the import
+    // graph directly.
     console.log('')
     const fs = require('fs') as typeof import('fs')
     const pathMod = require('path') as typeof import('path')
 
     const MUST_NOT_GATE = [
-        'app/api/orders/purchase/route.ts',
-        'app/api/orders/bulk-purchase/route.ts',
-        'app/api/orders/gateway-init/route.ts',
         'app/api/v1/data/purchase/route.ts',
         'app/api/v1/data/bulk/route.ts',
+        // The page reads the 409 body and shows the dialog. It must not import the gate
+        // module itself — that would pull the supplier client into the browser bundle.
         'app/dashboard/data-packages/page.tsx',
     ]
     const MUST_GATE = [
         'app/api/shop/initialize/route.ts',
         'app/api/hubtel/interact/route.ts',
+        'app/api/orders/purchase/route.ts',
+        'app/api/orders/bulk-purchase/route.ts',
+        'app/api/orders/gateway-init/route.ts',
     ]
 
     /** Real import of the gate module, ignoring the prose in comments about it. */

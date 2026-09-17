@@ -373,14 +373,30 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
         try { sessionStorage.setItem('shop_sticky_slug', shop.shop_slug) } catch (_) { }
     }, [shop.shop_slug])
 
-    // Sticky header scroll listener
+    // Sticky header scroll listener.
+    // The hero's height is measured when it changes, not on every scroll event:
+    // reading offsetHeight inside the handler forced a synchronous layout on each
+    // scroll frame, which is what makes a long storefront judder on cheap phones.
     useEffect(() => {
+        const heroHeight = { current: heroRef.current?.offsetHeight || 200 }
         const handleScroll = () => {
-            const heroHeight = heroRef.current?.offsetHeight || 200
-            setScrolled(window.scrollY > heroHeight - 60)
+            setScrolled(window.scrollY > heroHeight.current - 60)
         }
+
+        let observer: ResizeObserver | undefined
+        if (heroRef.current && typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(([entry]) => {
+                heroHeight.current = (entry.target as HTMLElement).offsetHeight || 200
+                handleScroll()
+            })
+            observer.observe(heroRef.current)
+        }
+
         window.addEventListener('scroll', handleScroll, { passive: true })
-        return () => window.removeEventListener('scroll', handleScroll)
+        return () => {
+            observer?.disconnect()
+            window.removeEventListener('scroll', handleScroll)
+        }
     }, [])
 
     useEffect(() => {
@@ -1979,7 +1995,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                             there is no gateway fee to disclose here — afa/initialize charges
                             the selling price and nothing more — so the line states the fee as
                             the whole of it rather than hinting at an extra that never lands. */}
-                        <div className="sticky bottom-4 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm shadow-e3 px-4 pt-3 pb-4 space-y-3">
+                        <div className="sticky bottom-4 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 shadow-e3 px-4 pt-3 pb-4 space-y-3">
                             <dl className="space-y-1.5">
                                 <div className="flex items-center justify-between text-sm">
                                     <dt className="font-semibold text-gray-500 dark:text-gray-400">Registration fee</dt>
@@ -2087,7 +2103,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 <button
                                     key={pkg.id} onClick={() => { setErrorMsg(null); setSelectedPackage(pkg) }}
                                     className={cn(
-                                        'relative rounded-[24px] overflow-hidden transition-all duration-200 active:scale-95 text-left flex flex-col',
+                                        'relative rounded-[24px] overflow-hidden transition-[transform,box-shadow,opacity] duration-200 active:scale-95 text-left flex flex-col',
                                         cardStyle.bg,
                                         isSelected ? 'ring-4 ring-offset-2 ring-[var(--brand-color)] scale-[1.02] shadow-xl' : 'shadow-md hover:shadow-lg hover:-translate-y-1 opacity-95 hover:opacity-100'
                                     )}
@@ -2095,7 +2111,9 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     {/* Top Section */}
                                     <div className="p-4 relative flex-1 flex flex-col items-center justify-center min-h-[140px]">
                                         {/* Top Left Logo Circle */}
-                                        <div className={cn("absolute top-3 left-3 w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-sm", cardStyle.iconBg)}>
+                                        {/* No backdrop-blur: it sits on a solid card, so the blur
+                                            was invisible yet cost a GPU pass per card while scrolling. */}
+                                        <div className={cn("absolute top-3 left-3 w-10 h-10 rounded-full flex items-center justify-center", cardStyle.iconBg)}>
                                             <div className="w-6 h-6 rounded-full flex items-center justify-center bg-transparent">
                                                 <NetworkLogo id={pkg.network} />
                                             </div>
@@ -2285,7 +2303,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 a wrong number on a payment screen is worse than no number. The
                                 real figure comes from the gateway: the handset prompt for the
                                 prompt-based providers, the checkout page for Paystack. */}
-                            <div className="sticky bottom-0 border-t border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm px-5 pt-3 pb-4 safe-b space-y-3">
+                            <div className="sticky bottom-0 border-t border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 px-5 pt-3 pb-4 safe-b space-y-3">
                                 <dl className="space-y-1.5">
                                     <div className="flex items-center justify-between text-sm">
                                         <dt className="font-semibold text-gray-500 dark:text-gray-400">Bundle</dt>

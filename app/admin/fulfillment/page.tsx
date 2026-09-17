@@ -1588,11 +1588,12 @@ export default function FulfillmentPage() {
                         <div className="flex-1">
                             <p className="text-sm font-bold">🔒 Block Orders To Unregistered MTN Numbers</p>
                             <p className="text-xs text-muted-foreground mt-0.5">
-                                When ON, an MTN number that isn&apos;t registered yet is <strong>refused outright on shop
-                                storefronts and on USSD</strong> — nothing is charged and no order is created. This does
-                                not affect the dashboard or the API: those buyers are never stopped or warned, and their
-                                orders sit pending until MTN enables the number. When OFF, storefront and USSD orders go
-                                through silently too. Runs the Agent Portal registration check whichever supplier is
+                                When ON, an MTN number that isn&apos;t registered yet is <strong>refused outright on the
+                                dashboard, shop storefronts and USSD</strong> — nothing is charged and no order is
+                                created, and a bulk order is refused whole if any one number in it is unregistered.
+                                This does not affect the developer API: those orders are never stopped, and they sit
+                                pending until MTN enables the number. When OFF, every surface goes through silently.
+                                Runs the Agent Portal registration check whichever supplier is
                                 currently fulfilling MTN, so some sales your active supplier could have delivered will
                                 be turned away instead. Note that checking a number also submits it for registration —
                                 turning this off later does not undo that. Changes apply within a minute.

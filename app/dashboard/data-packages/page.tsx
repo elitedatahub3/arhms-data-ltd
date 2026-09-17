@@ -26,6 +26,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { MtnRegistrationDialog } from '@/components/dashboard/mtn-registration-dialog'
 import {
     Search,
     LayoutGrid,
@@ -54,6 +55,16 @@ import { toast } from 'sonner'
 import { DataPackage } from '@/types/supabase'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Trash2, Upload } from 'lucide-react'
+
+/**
+ * Numbers out of a MTN_NOT_REGISTERED 409 body (see registrationRequiredBody in
+ * lib/mtn-registration-gate.ts). Single-number routes send only phoneNumber.
+ */
+function registrationNumbers(data: any): string[] {
+    return data?.registration?.phoneNumbers
+        || (data?.registration?.phoneNumber ? [data.registration.phoneNumber] : [])
+}
+
 // Colours for the checkout sheet's package banner, matching the storefront sheet.
 const getNetworkSheetStyle = (net: string) => {
     switch (net) {
@@ -130,6 +141,9 @@ export default function DataPackagesPage() {
     const [phoneNumber, setPhoneNumber] = useState('')
     const [phoneError, setPhoneError] = useState('')
     const [isPurchasing, setIsPurchasing] = useState(false)
+    // Set when a purchase is refused because the recipient's MTN number is not
+    // registered yet. Nothing was charged — the dialog is the whole outcome.
+    const [registrationPrompt, setRegistrationPrompt] = useState<{ numbers: string[]; total?: number } | null>(null)
     const [purchaseSuccess, setPurchaseSuccess] = useState(false)
     const [purchaseDetails, setPurchaseDetails] = useState<{
         referenceCode: string
@@ -542,6 +556,11 @@ export default function DataPackagesPage() {
 
             const data = await response.json()
 
+            if (response.status === 409 && data?.code === 'MTN_NOT_REGISTERED') {
+                setRegistrationPrompt({ numbers: registrationNumbers(data) })
+                return
+            }
+
             if (!response.ok) {
                 throw new Error(data.error || 'Purchase failed')
             }
@@ -595,6 +614,13 @@ export default function DataPackagesPage() {
             })
 
             const data = await res.json()
+
+            // Refused before the payment prompt was sent, so nothing has been charged.
+            if (res.status === 409 && data?.code === 'MTN_NOT_REGISTERED') {
+                setIsPurchasing(false)
+                setRegistrationPrompt({ numbers: registrationNumbers(data) })
+                return
+            }
 
             // A charge is already live for this number. Rather than a dead-end error,
             // hand the customer back to it: if it is waiting on a code, reopen the
@@ -774,11 +800,11 @@ export default function DataPackagesPage() {
      * Annotate validated lines with MTN registration status — one batched call for the
      * whole paste, not one per line.
      *
-     * Purely informational, and nothing downstream enforces it: the dashboard is not
-     * gated, so an "unregistered" badge is a heads-up that delivery will be slow, not a
-     * warning that the order will be refused. It buys anyway. The badge is still worth
-     * showing because the same call submits those numbers to MTN for enabling, which is
-     * what starts the clock on that delay.
+     * Advisory only — the submit path enforces. While the admin gate is ON an
+     * "unregistered" badge is a warning that the whole batch will be refused, so the
+     * agent can drop those lines before paying; while it is OFF no badge appears at all.
+     * Either way the same call submits those numbers to MTN for enabling, which is what
+     * starts the clock on the wait.
      *
      * On any failure the lines are returned untouched, so a supplier outage never
      * blocks the Validate button.
@@ -948,6 +974,12 @@ export default function DataPackagesPage() {
 
             const data = await res.json()
 
+            if (res.status === 409 && data?.code === 'MTN_NOT_REGISTERED') {
+                setIsSubmittingBulk(false)
+                setRegistrationPrompt({ numbers: registrationNumbers(data), total: data?.registration?.total })
+                return
+            }
+
             if (!res.ok) throw new Error(data.error || 'Payment could not be started')
 
             setPollingKind('bulk')
@@ -1008,6 +1040,11 @@ export default function DataPackagesPage() {
             })
 
             const data = await response.json()
+
+            if (response.status === 409 && data?.code === 'MTN_NOT_REGISTERED') {
+                setRegistrationPrompt({ numbers: registrationNumbers(data), total: data?.registration?.total })
+                return
+            }
 
             if (!response.ok) {
                 throw new Error(data.error || 'Bulk order failed')
@@ -2112,6 +2149,13 @@ export default function DataPackagesPage() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <MtnRegistrationDialog
+                open={!!registrationPrompt}
+                numbers={registrationPrompt?.numbers}
+                total={registrationPrompt?.total}
+                onCancel={() => setRegistrationPrompt(null)}
+            />
         </div>
     )
 }

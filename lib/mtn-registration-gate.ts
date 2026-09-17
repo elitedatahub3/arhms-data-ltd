@@ -5,9 +5,9 @@
  * cannot receive data. Historically we only found that out at fulfillment time —
  * after the wallet was debited — and the order sat pending with no explanation.
  *
- * This module moves the check in front of payment, on the two surfaces that use it.
+ * This module moves the check in front of payment, on the surfaces that use it.
  *
- * IT RUNS ON EXACTLY TWO SURFACES, and that narrowness is the design:
+ * WHERE IT RUNS, and why each one refuses:
  *
  *   • Shop storefront (/api/shop/initialize) — REFUSES. A guest has no account, so a
  *     held order is one they can neither track nor chase.
@@ -16,15 +16,22 @@
  *     shown a dialog, cannot be told anything after the line drops, and cannot be
  *     refunded in-session.
  *
- * The dashboard and the public API v1 deliberately do NOT call this at all. They
- * neither warn nor block: the buyer purchases, the supplier rejects the order at
- * fulfillment time and auto-submits the number to MTN, and the order stays pending
- * for the auto-refulfill cron to deliver once the number is enabled. That is the
- * behaviour that predates this module, kept on purpose for buyers who have an account
- * and an order history to see the pending order in.
+ *   • Dashboard — REFUSES, across all three of its purchase routes:
+ *     /api/orders/purchase, /api/orders/bulk-purchase and /api/orders/gateway-init.
+ *     Added by explicit request: a pending order an agent cannot explain to their own
+ *     customer is worth less than a clear "not yet". All three must stay gated together
+ *     — leaving any one open is a way to buy the same number the others just refused,
+ *     and Direct Pay (gateway-init) takes the money before an order row exists at all.
+ *     A bulk batch refuses whole, so an agent never has to reconcile a part-charged paste.
  *
- * So do not "restore consistency" by wiring this into a dashboard or API route. The
- * inconsistency is the requirement.
+ * The public API v1 deliberately does NOT call this. An integrator's order is accepted,
+ * the supplier rejects it at fulfillment time and auto-submits the number to MTN, and it
+ * stays pending for the auto-refulfill cron to deliver once the number is enabled. That
+ * is the behaviour that predates this module, kept so a live integration never starts
+ * seeing an error code it was not written to handle.
+ *
+ * So do not "restore consistency" by wiring this into an API v1 route. That exemption
+ * is the requirement; scripts/test-mtn-gate-strict.ts asserts the whole import graph.
  *
  * Three things worth knowing before you change anything here:
  *

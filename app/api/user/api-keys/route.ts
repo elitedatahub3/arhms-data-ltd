@@ -41,7 +41,7 @@ function parseKind(raw: unknown): Kind | null {
     return (KINDS as readonly string[]).includes(raw as string) ? (raw as Kind) : null
 }
 
-const SELECT_COLUMNS = 'kind, key_prefix, name, status, last_used_at, created_at, updated_at, webhook_url'
+const SELECT_COLUMNS = 'kind, key_prefix, name, status, last_used_at, created_at, updated_at, webhook_url, webhook_secret'
 
 export async function GET() {
     try {
@@ -55,7 +55,13 @@ export async function GET() {
             .select(SELECT_COLUMNS)
             .eq('user_id', user.id)
 
-        const rows = (keys as any[]) || []
+        // The secret is fetched only to answer "is one configured?" — the UI needs to
+        // distinguish a saved endpoint from one that can actually be verified. It is
+        // dropped here and never leaves the server; it is shown once, at creation.
+        const rows = ((keys as any[]) || []).map(({ webhook_secret, ...rest }: any) => ({
+            ...rest,
+            has_webhook_secret: !!webhook_secret,
+        }))
 
         return NextResponse.json({
             success: true,

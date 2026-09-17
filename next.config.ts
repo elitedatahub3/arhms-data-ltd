@@ -158,7 +158,11 @@ const withPWAConfig = withPWA({
     dest: 'public',
     cacheOnFrontEndNav: true,
     aggressiveFrontEndNavCaching: true,
-    reloadOnOnline: true,
+    // Off: on mobile data the connection drops and returns constantly, and each
+    // return hard-reloaded whatever page the user was on — losing scroll
+    // position and form input, and refetching everything. Pages already recover
+    // on their own; the offline modal covers the genuinely-offline case.
+    reloadOnOnline: false,
     disable: process.env.NODE_ENV === 'development',
     customWorkerSrc: path.resolve(process.cwd(), 'worker'),
     workboxOptions: {
