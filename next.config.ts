@@ -156,8 +156,12 @@ const nextConfig: NextConfig = {
 
 const withPWAConfig = withPWA({
     dest: 'public',
-    cacheOnFrontEndNav: true,
-    aggressiveFrontEndNavCaching: true,
+    // Both off deliberately. They prefetch pages the user has only hovered or
+    // scrolled near, which on a 2G link competes for bandwidth with the
+    // navigation the user actually asked for. Speculative fetching is a
+    // fast-connection optimisation; here it makes the real request slower.
+    cacheOnFrontEndNav: false,
+    aggressiveFrontEndNavCaching: false,
     // Off: on mobile data the connection drops and returns constantly, and each
     // return hard-reloaded whatever page the user was on — losing scroll
     // position and form input, and refetching everything. Pages already recover
@@ -167,17 +171,32 @@ const withPWAConfig = withPWA({
     customWorkerSrc: path.resolve(process.cwd(), 'worker'),
     workboxOptions: {
         disableDevLogs: true,
-        // Exclude the homepage HTML from the PWA cache.
-        // The landing page is server-rendered and controlled by admin toggles
-        // (e.g. `landing_rc_only_enabled`). Caching it causes users to see a
-        // stale version of the page instantly, then a jarring swap once the
-        // Service Worker fetches the updated HTML in the background.
-        // By excluding it, the browser always fetches the root URL from the
-        // network, ensuring the correct page is shown immediately.
+        // `exclude` is tested against *webpack asset names* — `static/chunks/foo.js`,
+        // with no leading slash. The previous value here was `/^\//`, which
+        // therefore matched nothing at all: the intent was to keep the root HTML
+        // out of the precache, but the pattern could never fire, and nothing else
+        // was excluded either. The result was a 502-entry / 7.79 MB precache.
+        //
+        // That entire payload downloaded in the background on a user's first
+        // visit, racing the page they were waiting for over the same ~5 KB/s
+        // pipe. Dropping the build output from the *pre*cache does not stop it
+        // being cached: the plugin's default runtimeCaching already has a
+        // CacheFirst rule for `/_next/static.+\.js` (cacheName
+        // "next-static-js-assets"), so a chunk is cached the first time it is
+        // actually used — and these are content-hashed and served immutable
+        // (see the headers() block above), so repeat visits behave identically.
+        // The difference is only that nothing is fetched speculatively.
+        //
+        // What stays precached is what the PWA needs to open offline at all:
+        // offline.html, manifest.json and the icons, which come from public/ and
+        // total well under 100 KB.
         exclude: [
-            // Never cache the root HTML document
-            /^\//,
-            // Keep existing defaults: don't cache Next.js build manifests
+            /^static\/chunks\//,
+            /^static\/css\//,
+            /^static\/media\//,
+            // Source maps are never needed by a client and are large.
+            /\.map$/,
+            // Build manifests: stale copies break hydration after a deploy.
             /build-manifest\.json$/,
             /react-loadable-manifest\.json$/,
         ],

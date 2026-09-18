@@ -57,11 +57,15 @@ export const metadata: Metadata = {
         statusBarStyle: 'black-translucent',
         title: 'ARHMS',
     },
+    // The 512x512 is deliberately not listed here. Entries in `icons.icon` become
+    // <link rel="icon"> tags, which browsers treat as favicon candidates and may
+    // fetch on a cold page load — 225 KB for something rendered at 16-32px. It is
+    // still declared in manifest.json, which is where an installable PWA actually
+    // needs it, and which is only read at install time.
     icons: {
         apple: '/apple-touch-icon.png',
         icon: [
             { url: '/icon-192x192.png', sizes: '192x192', type: 'image/png' },
-            { url: '/icon-512x512.png', sizes: '512x512', type: 'image/png' },
         ],
     },
     openGraph: {

@@ -118,3 +118,103 @@ route-level code, not configuration. That is phase 2, and the analyzer
 `scripts/measure-bundles.js` reads the manifests `next build` leaves behind, so it can be
 re-run against any existing build without rebuilding, and its `--json` output diffs cleanly
 between branches. Re-run it after each phase and record the delta here.
+
+`scripts/perf-gates.js` (`npm run perf:gates`) covers the two things bundle size does not:
+how much HTML is prerendered, and what the service worker precaches. `npm run perf` runs both.
+
+---
+
+# Phase 2 — the service worker precache
+
+Measured on `perf/2g-phase-0-1`, branched from `origin/main` at `2339a3a0`.
+
+## The precache was 7.79 MB, and the exclusion that was meant to control it never ran
+
+`next.config.ts` carried `workboxOptions.exclude: [/^\//]` with a comment explaining it
+kept the root HTML document out of the cache. It did not. Workbox tests `exclude`
+against **webpack asset names** — `static/chunks/foo.js`, with no leading slash — so
+`/^\//` matched nothing. The root document was not excluded, and neither was anything
+else. The result:
+
+| | Entries | Bytes |
+|---|---|---|
+| Before | 502 | **7.79 MB** |
+| After | 15 | **0.28 MB** |
+
+488 of the 502 entries were `/_next/static` chunks. All of it downloaded in the
+background on a user's **first** visit, competing with the page they were waiting for
+over the same ~2.5–7.5 KB/s pipe. At 50 kbps that install is roughly 21 minutes of
+contention — on the one visit where the user has nothing cached and is deciding whether
+the site works at all.
+
+## Why dropping chunks from the precache does not un-cache them
+
+This is the part worth being precise about, because "stop precaching the app" sounds
+like it should make repeat visits slower. It does not, because the plugin's *default*
+`runtimeCaching` already contains:
+
+```js
+{ urlPattern: /\/_next\/static.+\.js$/i, handler: "CacheFirst",
+  options: { cacheName: "next-static-js-assets", ... } }
+```
+
+Verified in `node_modules/@ducanh2912/next-pwa/dist/index.cjs`. So a chunk is still
+cached — on the first request that actually *needs* it, rather than speculatively. The
+chunks are content-hashed and already served `max-age=31536000, immutable` by the
+`headers()` block, so a repeat visit is served from cache either way. The only thing
+that changed is that nothing is fetched before it is needed.
+
+Because the default list is replaced wholesale if `runtimeCaching` is specified, it is
+deliberately **not** specified here — overriding it to re-add one rule would silently
+drop the other 18.
+
+`exclude` only filters webpack assets. `public/` reaches the manifest through
+`additionalManifestEntries`, which `exclude` does not touch — which is why
+`offline.html`, `manifest.json` and the icons are still precached, as they should be.
+
+`cacheOnFrontEndNav` and `aggressiveFrontEndNavCaching` were also turned off: both
+prefetch pages on hover/proximity, which on 2G competes with the navigation the user
+actually asked for.
+
+## Icons
+
+`icon-512x512.png` was 220 KB and was listed in `metadata.icons.icon`, which renders
+`<link rel="icon">` — a favicon candidate a browser may fetch on a cold load, for
+something displayed at 16–32px. It is now declared only in `manifest.json`, which is
+where an installable PWA needs it and which is read at install time.
+
+All four icons were re-encoded with palette quantisation (they are flat-ish brand marks,
+and the gradients survive it — checked visually at full size):
+
+| File | Before | After |
+|---|---|---|
+| `icon-512x512.png` | 220.5 KB | 75.5 KB |
+| `icon-192x192.png` | 37.7 KB | 12.8 KB |
+| `apple-touch-icon.png` | 33.7 KB | 11.8 KB |
+| `icon-maskable-192x192.png` | 24.9 KB | 8.8 KB |
+
+## Client JS, after phase 2 — unchanged, as expected
+
+This phase moved no JavaScript, which is correct: it is entirely about what is fetched
+and when, not what is bundled. Current figures on `origin/main` (note these are *higher*
+than the phase-1 table above — main has moved since, and the shared chunk is unchanged):
+
+| Route | GZ KB | Raw KB | Tier |
+|---|---|---|---|
+| `/dashboard/layout` | 389.5 | 1331.7 | reseller |
+| `/layout` (root) | 377.4 | 1440.2 | all |
+| `/page` (landing) | 364.9 | 1258.1 | **guest** |
+| `/auth/login/page` | 329.1 | 1137.2 | **guest** |
+| `/shop/[shopSlug]/page` | 332.8 | 1121.1 | **guest** |
+| Shared by all routes | 105.5 | 370.0 | floor |
+
+## Still zero prerendered HTML
+
+`npm run perf:gates` reports **0** files under `.next/server/app` and no
+`prerender-manifest.json`. Every route in the app still renders on demand, so every
+first byte costs a Ghana → `dub1` round trip. The cause is the explicit `noStore()` in
+`app/layout.tsx`, which is now a deliberate, documented choice rather than an accident —
+see the comment there. Undoing it is not a one-line change, because ~370 routes would
+attempt static generation and many were never written to be static. That is the next
+phase, and it needs the dynamic default inverted per subtree rather than removed
+globally.
