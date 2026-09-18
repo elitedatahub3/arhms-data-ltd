@@ -23,6 +23,11 @@ interface Props {
   params: Promise<{ code: string }>
 }
 
+// Per request: this page resolves an invite code to the Lead's live branding and
+// validity, and an invite can be revoked at any time. The root layout no longer
+// forces the whole app dynamic, so this route declares it for itself.
+export const dynamic = 'force-dynamic'
+
 export default async function JoinPage({ params }: Props) {
   const { code } = await params
   const supabase: any = createServerClient()

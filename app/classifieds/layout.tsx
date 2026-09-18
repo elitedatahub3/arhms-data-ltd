@@ -6,6 +6,13 @@ export const metadata: Metadata = {
     description: 'Browse and post classifieds listings in your area',
 }
 
+// This subtree renders per request. The root layout used to force that for the
+// whole app with a bare noStore(); it no longer does, so the routes that
+// genuinely cannot be static now say so themselves. Here that is listing data,
+// which changes constantly and must never be baked in at build time, plus
+// several pages that read useSearchParams outside a Suspense boundary.
+export const dynamic = 'force-dynamic'
+
 export default function ClassifiedsLayout({
     children,
 }: {

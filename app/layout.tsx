@@ -14,7 +14,6 @@ export const viewport: Viewport = {
 }
 import { Outfit, Inter } from 'next/font/google'
 import { Suspense } from 'react'
-import { unstable_noStore as noStore } from 'next/cache'
 import './globals.css'
 import { AuthProvider } from '@/contexts/auth-context'
 import { Toaster } from '@/components/ui/sonner'
@@ -81,17 +80,6 @@ export default function RootLayout({
 }: {
     children: React.ReactNode
 }) {
-    // Every route renders per request, as it always has. This used to be a side
-    // effect of reading the active announcement here (with noStore) on every
-    // request; that query is gone — SystemAnnouncementModal fetches
-    // /api/public/announcement itself on the routes where it shows — but the
-    // opt-out stays explicit. Removing it lets Next prerender ~370 pages at
-    // build time, many of which were never written to be static (e.g. /classifieds
-    // reads useSearchParams outside a Suspense boundary) and would bake in
-    // build-time data. Pages that want caching cache their data instead
-    // (see app/page.tsx).
-    noStore()
-
     return (
         <html lang="en" suppressHydrationWarning className={`${outfit.variable} ${inter.variable}`}>
             <head>

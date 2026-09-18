@@ -124,7 +124,7 @@ how much HTML is prerendered, and what the service worker precaches. `npm run pe
 
 ---
 
-# Phase 2 — the service worker precache
+# Phase 2 — service worker precache, and static rendering
 
 Measured on `perf/2g-phase-0-1`, branched from `origin/main` at `2339a3a0`.
 
@@ -208,13 +208,59 @@ than the phase-1 table above — main has moved since, and the shared chunk is u
 | `/shop/[shopSlug]/page` | 332.8 | 1121.1 | **guest** |
 | Shared by all routes | 105.5 | 370.0 | floor |
 
-## Still zero prerendered HTML
+## Static rendering: inverting the dynamic default
 
-`npm run perf:gates` reports **0** files under `.next/server/app` and no
-`prerender-manifest.json`. Every route in the app still renders on demand, so every
-first byte costs a Ghana → `dub1` round trip. The cause is the explicit `noStore()` in
-`app/layout.tsx`, which is now a deliberate, documented choice rather than an accident —
-see the comment there. Undoing it is not a one-line change, because ~370 routes would
-attempt static generation and many were never written to be static. That is the next
-phase, and it needs the dynamic default inverted per subtree rather than removed
-globally.
+`app/layout.tsx` called a bare `noStore()`. Because the root layout is part of every
+route, that one line made **every route in the app** render on demand: `perf:gates`
+reported 0 prerendered files and there was no `prerender-manifest.json`. Every first
+byte cost a Ghana → `dub1` round trip.
+
+That `noStore()` was deliberate, not accidental — the comment there argued that removing
+it would let Next try to prerender ~370 pages, many of which were never written to be
+static. That concern was legitimate, so the fix was not to delete the line and hope, but
+to **invert the default**: make dynamic rendering something a subtree opts into, rather
+than something the whole app is forced into.
+
+| Segment | Pages | How it declares itself dynamic |
+|---|---|---|
+| `dashboard` | 40 | new server `layout.tsx` wrapping `dashboard-shell.tsx` |
+| `admin` | 35 | new server `layout.tsx` wrapping `admin-shell.tsx` |
+| `classifieds` | 27 | `force-dynamic` on the existing server layout |
+| `marketplace-domain` | 17 | `force-dynamic` on the existing server layout |
+| `auth` | 7 | new transparent server layout |
+| `(portal)/join/[code]` | 1 | per-page — resolves an invite code against live data |
+
+The `dashboard` and `admin` layouts were `'use client'`, and route segment config cannot
+be exported from a client module, so each got a thin server `layout.tsx` that renders the
+existing client shell. That is not scaffolding for its own sake: putting the
+server/client boundary at that file is also what later allows the profile to be read
+server-side and passed down, instead of the shell fetching it after hydration.
+
+Result — the build reported **no errors**, so nothing turned out to be unsafe to
+prerender:
+
+| | Before | After |
+|---|---|---|
+| Prerendered HTML files | 0 | **5** |
+| `prerender-manifest.json` | absent | present |
+
+Now static: `/` (the landing page, and the highest-volume guest entry point), `/docs`,
+`/portal/login`, `/shop/status`, `/_not-found`.
+
+Two things this does **not** yet fix, both deliberate follow-ups:
+
+- **`/shop/[shopSlug]` is still dynamic.** It reads cookies (`createRouteHandlerClient`,
+  then `auth.getUser()`) to decide whether an admin is previewing a disabled storefront,
+  and reading cookies opts a route out of static generation no matter what `revalidate`
+  says. Splitting the admin path onto its own route is what makes the guest storefront
+  cacheable.
+- **The CDN cannot serve the static `/` yet.** `middleware.ts` calls
+  `addNoCacheHeaders(...)` on essentially every matched response, including the
+  pass-through for `/`. Prerendering already removes the per-request render at the
+  origin, but the round trip itself remains until that header is narrowed.
+
+One behaviour change worth knowing: `/` is ISR with `revalidate = 600`, so an admin
+toggle such as `landing_rc_only_enabled` is no longer reflected instantly. It still
+propagates promptly in practice, because the landing data comes from
+`getCachedPublicConfig()` and admin saves call `revalidateTag(PUBLIC_CONFIG_CACHE_TAG)`,
+which invalidates the routes built from it; 600s is the worst case if that path fails.

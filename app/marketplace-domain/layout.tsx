@@ -12,6 +12,11 @@ export const metadata: Metadata = {
     },
 }
 
+// Per-request, for the same reason as the classifieds subtree: these pages read
+// live listing and conversation data that must not be baked in at build time.
+// The root layout no longer forces this globally.
+export const dynamic = 'force-dynamic'
+
 export default function MarketplaceLayout({
     children,
 }: {
