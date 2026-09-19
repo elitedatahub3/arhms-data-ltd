@@ -10,6 +10,12 @@ const getCookieDomain = () => {
     if (host.endsWith('arhmsgh.com')) {
         return '.arhmsgh.com'
     }
+    if (host.endsWith('qzz.io')) {
+        const parts = host.split('.')
+        if (parts.length >= 2) {
+            return '.' + parts.slice(-2).join('.')
+        }
+    }
     // Local/preview: use default (host-scoped)
     return undefined
 }

@@ -467,7 +467,7 @@ export async function POST(request: Request) {
             throw new Error(moolreResponse.error || 'Failed to initialize payment')
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.otpRequired || moolreResponse.status === '200_OTP_REQ') {
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',

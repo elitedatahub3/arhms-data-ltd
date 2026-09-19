@@ -94,6 +94,25 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
     revoked: { label: 'Revoked',          className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
 }
 
+const LANGS: { id: Lang; label: string }[] = [
+    { id: 'curl',       label: 'cURL'       },
+    { id: 'javascript', label: 'JavaScript' },
+    { id: 'nodejs',     label: 'Node.js'    },
+    { id: 'python',     label: 'Python'     },
+    { id: 'php',        label: 'PHP'        },
+]
+
+const KEY  = 'YOUR_API_KEY'
+// Apex, NOT www. www.arhmsgh.com answers every /api request with a 307 to the apex,
+// and a cross-host redirect makes clients drop the Authorization header -- curl and
+// axios both do, by design. A partner copying a www sample gets 401 no matter how
+// valid their key is, with nothing in the response to explain why. Verified:
+//   > Host: www.arhmsgh.com   Authorization: <key>   -> 307
+//   > Host: arhmsgh.com       (no Authorization)     -> 401
+const BASE = 'https://arhmsgh.com'
+const STANDARD_KEY_SAMPLE   = 'kf_live_your_api_key_here'
+const COMMISSION_KEY_SAMPLE = 'kf_cs_live_your_commission_key_here'
+
 const KEY_META: Record<KeyKind, { title: string; blurb: string; empty: string; icon: React.ElementType }> = {
     standard: {
         title: 'Standard API Key',
@@ -241,7 +260,7 @@ export default function DeveloperApiPage() {
     }, [fetchKeys, fetchLogs])
 
     useEffect(() => {
-        if (dbUser && dbUser.role !== 'agent' && dbUser.role !== 'admin' && dbUser.role !== 'sub-admin') {
+        if (dbUser && dbUser.role !== 'agent' && dbUser.role !== 'dealer' && dbUser.role !== 'admin' && dbUser.role !== 'sub-admin') {
             router.push('/dashboard/upgrade')
         }
     }, [dbUser, router])

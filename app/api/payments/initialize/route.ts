@@ -483,7 +483,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Failed to initialize payment' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.otpRequired || moolreResponse.status === '200_OTP_REQ') {
             return NextResponse.json({
                 success: true, gateway: 'moolre', otpRequired: true, reference,
                 message: 'OTP is required to complete this payment. Please enter the code sent to your phone.',

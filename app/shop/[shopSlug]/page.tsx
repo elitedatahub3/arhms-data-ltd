@@ -22,10 +22,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     // Use service-role so metadata is generated even for unauthenticated crawlers
     const supabaseAdmin = createServerClient()
 
+    const cleanSlug = shopSlug.trim()
     const { data: shop } = await (supabaseAdmin
         .from('shop_profiles')
         .select('shop_name, description, logo_url')
-        .eq('shop_slug', shopSlug)
+        .ilike('shop_slug', cleanSlug)
         .eq('approval_status', 'approved')
         .eq('is_active', true)
         .single() as any)
@@ -51,21 +52,23 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ShopPage({ params }: Props) {
     const { shopSlug } = await params
+    const cleanSlug = shopSlug.trim()
 
     // Service-role client for all public data reads — anonymous visitors have no session cookie
     const supabaseAdmin = createServerClient()
-    // Session client only for the admin pass-through check
-    const supabase = await createRouteHandlerClient()
 
     // Fetch shop using service-role so unauthenticated visitors can load the page
-    const { data: shop } = await (supabaseAdmin
+    const { data: shop, error: shopError } = await (supabaseAdmin
         .from('shop_profiles')
         .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at, ussd_code, ussd_status, utilities_enabled')
-        .eq('shop_slug', shopSlug)
+        .ilike('shop_slug', cleanSlug)
         .single() as any)
 
     // Shop doesn't exist or is not profile-approved → 404
     if (!shop || shop.approval_status !== 'approved' || !shop.is_active) {
+        if (shopError) {
+            console.error(`[ShopPage] Error fetching shop_slug "${cleanSlug}":`, shopError)
+        }
         notFound()
     }
 
@@ -105,16 +108,23 @@ export default async function ShopPage({ params }: Props) {
 
     const storefrontSetting = adminSettingsMap['page_access_storefront']
 
-    // Admin pass-through check (uses session client — admins are always logged in)
-    const { data: { user: authUser } } = await supabase.auth.getUser()
+    // Admin pass-through check (only if storefront is toggled off globally)
     let isAdmin = false
-    if (authUser) {
-        const { data: user } = await supabaseAdmin
-            .from('users')
-            .select('role')
-            .eq('id', authUser.id)
-            .single()
-        if ((user as any)?.role === 'admin') isAdmin = true
+    if (storefrontSetting === 'false') {
+        try {
+            const supabase = await createRouteHandlerClient()
+            const { data: { user: authUser } } = await supabase.auth.getUser()
+            if (authUser) {
+                const { data: user } = await supabaseAdmin
+                    .from('users')
+                    .select('role')
+                    .eq('id', authUser.id)
+                    .single()
+                if ((user as any)?.role === 'admin') isAdmin = true
+            }
+        } catch (err) {
+            console.error('[ShopPage] Failed to evaluate admin pass-through:', err)
+        }
     }
 
     // Block if globally disabled and not an admin

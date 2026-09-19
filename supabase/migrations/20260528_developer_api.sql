@@ -78,10 +78,10 @@ CREATE INDEX IF NOT EXISTS idx_orders_api_key_id ON public.orders(api_key_id);
 -- ─── Admin settings ───────────────────────────────────────────────────────────
 INSERT INTO public.admin_settings (key, value) VALUES
     ('api_feature_enabled', 'true'),
-    ('api_allowed_roles',   '["agent","admin","sub-admin"]'),
+    ('api_allowed_roles',   '["agent","dealer","admin","sub-admin"]'),
     ('api_rate_limits',     '{"purchase":20,"bulk":10,"balance":60,"status":60}')
 ON CONFLICT (key) DO NOTHING;
 
 -- Ensure admin/sub-admin are always in the allowed roles list (idempotent upsert)
-INSERT INTO public.admin_settings (key, value) VALUES ('api_allowed_roles', '["agent","admin","sub-admin"]')
-ON CONFLICT (key) DO UPDATE SET value = '["agent","admin","sub-admin"]';
+INSERT INTO public.admin_settings (key, value) VALUES ('api_allowed_roles', '["agent","dealer","admin","sub-admin"]')
+ON CONFLICT (key) DO UPDATE SET value = '["agent","dealer","admin","sub-admin"]';

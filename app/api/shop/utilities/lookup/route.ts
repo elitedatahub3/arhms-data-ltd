@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
         const { data: shop } = await db
             .from('shop_profiles')
             .select('id, shop_name, owner_id, utilities_enabled, approval_status, is_active')
-            .eq('shop_slug', shopSlug.trim())
+            .ilike('shop_slug', shopSlug.trim())
             .maybeSingle()
 
         if (!shop || shop.approval_status !== 'approved' || shop.is_active !== true) {

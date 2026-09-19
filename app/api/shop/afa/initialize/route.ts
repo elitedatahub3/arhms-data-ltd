@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
         const { data: shop } = await db
             .from('shop_profiles')
             .select('id, shop_name, owner_id, approval_status, is_active')
-            .eq('shop_slug', shopSlug)
+            .ilike('shop_slug', shopSlug.trim())
             .single()
 
         if (!shop || shop.approval_status !== 'approved' || !shop.is_active) {
@@ -395,7 +395,7 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ error: moolreResponse.error || 'Payment initialization failed' }, { status: 500 })
             }
 
-            if (moolreResponse.status === '200_OTP_REQ') {
+            if (moolreResponse.otpRequired || moolreResponse.status === '200_OTP_REQ') {
                 return NextResponse.json({
                     success: true,
                     otpRequired: true,
@@ -464,7 +464,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Payment failed' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.otpRequired || moolreResponse.status === '200_OTP_REQ') {
             return NextResponse.json({
                 success: true,
                 otpRequired: true,

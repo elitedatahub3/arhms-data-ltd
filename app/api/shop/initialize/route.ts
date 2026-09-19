@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
                 airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at,
                 owner:users!shop_profiles_owner_id_fkey(role, email)
             `)
-            .eq('shop_slug', shopSlug)
+            .ilike('shop_slug', shopSlug.trim())
             .single()
 
         if (shopError || !shop) return NextResponse.json({ error: 'Shop not found' }, { status: 404 })
@@ -536,7 +536,7 @@ export async function POST(request: NextRequest) {
             console.log('[ShopInit] OTP verified successfully. Sending follow-up payment request.')
             moolreResponse = await initiatePayment({
                 amount: totalAmount / 100,
-                payerPhone: cleanPhone,
+                payerPhone: payerClean,
                 channel: channelId,
                 externalRef: shopRef,
             })
@@ -546,7 +546,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Payment initialization failed' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.otpRequired || moolreResponse.status === '200_OTP_REQ') {
             if (!existingRef) {
                 await redis.set(`shop:meta:${shopRef}`, JSON.stringify(fullMetadata), { ex: 86400 })
             }

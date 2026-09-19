@@ -24,10 +24,11 @@ export default async function ShopSuccessPage({ params, searchParams }: Props) {
     const supabase = createServerClient()
 
     // Fetch shop branding
+    const cleanSlug = shopSlug.trim()
     const { data: shop } = await (supabase
         .from('shop_profiles')
         .select('shop_name, logo_url, brand_color, whatsapp_number')
-        .eq('shop_slug', shopSlug)
+        .ilike('shop_slug', cleanSlug)
         .single() as any)
 
     // Fetch order details

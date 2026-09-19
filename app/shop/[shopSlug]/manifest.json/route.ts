@@ -11,11 +11,12 @@ export async function GET(_req: NextRequest, { params }: Params) {
     const { shopSlug } = await params
 
     try {
+        const cleanSlug = shopSlug.trim()
         const supabaseAdmin = createServerClient()
         const { data: shop } = await (supabaseAdmin
             .from('shop_profiles')
             .select('shop_name, description, logo_url, brand_color, shop_slug')
-            .eq('shop_slug', shopSlug)
+            .ilike('shop_slug', cleanSlug)
             .eq('approval_status', 'approved')
             .eq('is_active', true)
             .single() as any)

@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
         const { data: shop } = await db
             .from('shop_profiles')
             .select('id')
-            .eq('shop_slug', shopSlug)
+            .ilike('shop_slug', shopSlug.trim())
             .eq('approval_status', 'approved')
             .eq('is_active', true)
             .maybeSingle()

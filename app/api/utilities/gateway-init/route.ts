@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
             const { data: shopRow } = await supabase
                 .from('shop_profiles')
                 .select('id, shop_name, owner_id, utility_fee_percent, utilities_enabled, approval_status, is_active')
-                .eq('shop_slug', shopSlug.trim())
+                .ilike('shop_slug', shopSlug.trim())
                 .maybeSingle()
 
             if (!shopRow || shopRow.approval_status !== 'approved' || shopRow.is_active !== true) {
@@ -504,7 +504,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Failed to initialize mobile money payment' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.otpRequired || moolreResponse.status === '200_OTP_REQ') {
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',

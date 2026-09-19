@@ -14,12 +14,13 @@ export const revalidate = 3600 // Revalidate once an hour
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
     const { shopSlug } = await params
+    const cleanSlug = shopSlug.trim()
     const supabaseAdmin = createServerClient()
 
     const { data: shop } = await (supabaseAdmin
         .from('shop_profiles')
         .select('shop_name, description')
-        .eq('shop_slug', shopSlug)
+        .ilike('shop_slug', cleanSlug)
         .eq('approval_status', 'approved')
         .eq('is_active', true)
         .single() as any)
@@ -34,12 +35,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ShopAboutPage({ params }: Props) {
     const { shopSlug } = await params
+    const cleanSlug = shopSlug.trim()
     const supabaseAdmin = createServerClient()
 
     const { data: shop } = await (supabaseAdmin
         .from('shop_profiles')
         .select('shop_name, description, owner_phone, owner_email, whatsapp_number, logo_url, community_link, brand_color, is_active, approval_status')
-        .eq('shop_slug', shopSlug)
+        .ilike('shop_slug', cleanSlug)
         .single() as any)
 
     if (!shop || shop.approval_status !== 'approved' || !shop.is_active) {

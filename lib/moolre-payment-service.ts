@@ -25,6 +25,7 @@ export interface InitiatePaymentResult {
     success: boolean
     status?: string
     txstatus?: number
+    otpRequired?: boolean
     error?: string
 }
 
@@ -110,27 +111,43 @@ export async function initiatePayment(params: InitiatePaymentParams): Promise<In
         // Detect OTP requirement — Moolre can indicate this via:
         //  • data.status === '200_OTP_REQ'  (string status code)
         //  • data.requiresotp === true       (boolean field)
-        //  • data.txstatus === 5             (numeric code, if used)
+        //  • data.otp_required === true      (boolean field)
+        //  • data.code / data.status_code === '200_OTP_REQ'
+        //  • data.txstatus === 5             (numeric code)
+        //  • data.message containing "OTP"
         const rawStatus = String(data.status ?? '')
-        const isOtpRequired = 
-            rawStatus === '200_OTP_REQ' || 
-            rawStatus.includes('OTP') ||
+        const rawCode = String(data.code ?? data.status_code ?? '')
+        const msgText = String(data.message ?? '')
+        const txStatusNum = data.txstatus ?? data.data?.txstatus
+
+        const isOtpRequired =
+            rawStatus === '200_OTP_REQ' ||
+            rawStatus.toUpperCase().includes('OTP') ||
+            rawCode === '200_OTP_REQ' ||
+            rawCode.toUpperCase().includes('OTP') ||
             data.requiresotp === true ||
             data.requiresotp === 'true' ||
-            data.otp_required === true
+            data.otp_required === true ||
+            data.otp_required === 'true' ||
+            data.requires_otp === true ||
+            data.requires_otp === 'true' ||
+            txStatusNum === 5 ||
+            /otp/i.test(msgText)
 
         if (isOtpRequired) {
             return {
                 success: true,
                 status: '200_OTP_REQ',
-                txstatus: data.txstatus ?? data.data?.txstatus,
+                otpRequired: true,
+                txstatus: txStatusNum,
             }
         }
 
         return {
             success: true,
             status: rawStatus || data.status,
-            txstatus: data.txstatus ?? data.data?.txstatus,
+            otpRequired: false,
+            txstatus: txStatusNum,
         }
     } catch (err: any) {
         console.error('[MoolrePayment] initiatePayment error:', err.message)

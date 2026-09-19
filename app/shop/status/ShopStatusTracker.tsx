@@ -125,10 +125,11 @@ export default function ShopStatusTracker() {
 
     const fetchShopData = async (slug: string) => {
         try {
+            const cleanSlug = slug.trim()
             const { data } = await supabase
                 .from('shop_profiles')
                 .select('shop_name, logo_url, owner_phone, owner_email, whatsapp_number, brand_color')
-                .eq('shop_slug', slug)
+                .ilike('shop_slug', cleanSlug)
                 .single()
             if (data) {
                 setShopData(data as ShopProfile)
