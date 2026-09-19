@@ -22,6 +22,7 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { NavProgress } from '@/components/ui/nav-progress'
 import PwaInstallPrompt from '@/components/pwa-install-prompt'
 import { UIProvider } from '@/contexts/ui-context'
+import { SWRProvider } from '@/components/swr-provider'
 import { SystemAnnouncementModal } from '@/components/system-announcement-modal'
 import { OfflineModal } from '@/components/offline-modal'
 
@@ -105,6 +106,7 @@ export default function RootLayout({
                     disableTransitionOnChange
                 >
                     <AuthProvider>
+                        <SWRProvider>
                         <UIProvider>
                             <Suspense fallback={null}>
                                 <NavProgress />
@@ -117,6 +119,7 @@ export default function RootLayout({
                                 colours each kind of message itself. */}
                             <Toaster position="top-center" expand />
                         </UIProvider>
+                        </SWRProvider>
                     </AuthProvider>
                 </ThemeProvider>
             </body>

@@ -16,7 +16,12 @@ interface TodayOrderStats {
     totalSpent: number
 }
 
-export function TodaysOrdersSummary() {
+interface TodayData {
+    orders: Array<{ status: string; size: string; price: number }> | null
+    afaOrders: Array<{ status: string; payment_amount: number }> | null
+}
+
+export function TodaysOrdersSummary({ data }: { data?: TodayData } = {}) {
     const { dbUser } = useAuth()
     const [stats, setStats] = useState<TodayOrderStats>({
         totalCount: 0,
@@ -37,23 +42,31 @@ export function TodaysOrdersSummary() {
                 const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
                 const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString()
 
-                const { data: regularOrders } = await supabase
-                    .from('orders')
-                    .select('status, size, price')
-                    .eq('user_id', dbUser.id)
-                    .is('shop_order_id', null)
-                    .gte('created_at', startOfToday)
-                    .lte('created_at', endOfToday)
-
-                const { data: afaOrders } = await supabase
-                    .from('afa_orders')
-                    // The column is payment_amount — selecting a non-existent
-                    // `amount` made the whole query error, so AFA spend always
-                    // rendered as 0.
-                    .select('status, payment_amount')
-                    .eq('user_id', dbUser.id)
-                    .gte('created_at', startOfToday)
-                    .lte('created_at', endOfToday)
+                // Rows come from /api/dashboard/summary when the dashboard passes
+                // them (same two queries, already made server-side). The fetch
+                // below is the fallback for any other caller.
+                const [regularOrders, afaOrders] = data
+                    ? [data.orders, data.afaOrders]
+                    : await Promise.all([
+                        supabase
+                            .from('orders')
+                            .select('status, size, price')
+                            .eq('user_id', dbUser.id)
+                            .is('shop_order_id', null)
+                            .gte('created_at', startOfToday)
+                            .lte('created_at', endOfToday)
+                            .then(r => r.data),
+                        supabase
+                            .from('afa_orders')
+                            // The column is payment_amount — selecting a non-existent
+                            // `amount` made the whole query error, so AFA spend always
+                            // rendered as 0.
+                            .select('status, payment_amount')
+                            .eq('user_id', dbUser.id)
+                            .gte('created_at', startOfToday)
+                            .lte('created_at', endOfToday)
+                            .then(r => r.data),
+                    ])
 
                 const currentStats = {
                     totalCount: 0,
@@ -112,7 +125,7 @@ export function TodaysOrdersSummary() {
         }
 
         fetchTodayOrders()
-    }, [dbUser])
+    }, [dbUser, data])
 
     if (isLoading) return null
 

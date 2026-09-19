@@ -1,7 +1,8 @@
 /**
  * Pays a Commission Services partner their share of a completed bill payment.
  *
- * The share is a percentage of what HUBTEL paid us on that order, not of the bill.
+ * The share is a percentage of what the PROVIDER (KingFlexy) paid us on that order,
+ * not of the bill.
  * That is what `commission_share_percent` means in the API response, and it has a
  * useful property the bill-percentage model did not: a share of the commission can
  * never exceed the commission, so there is no ceiling to configure and no way to pay

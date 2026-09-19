@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, Suspense } from 'react'
 import { Phone, CheckCircle, Copy, Wallet, AlertTriangle, Loader2, ChevronRight, Info, History, X, ArrowRight, RefreshCw, Search, Calendar, Filter, TrendingUp, Coins, Clock, CalendarRange, CreditCard } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
+import { refreshDashboardSummary } from '@/hooks/use-dashboard-summary'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
@@ -684,6 +685,7 @@ function AirtimePageInner() {
                     setIsSubmitting(false)
                     setSuccessOrder(data.order)
                     resetForm()
+                    refreshDashboardSummary()
                     toast.success('Payment received — your airtime is being processed!')
                 } else if (data.status === 'failed') {
                     clearInterval(interval)

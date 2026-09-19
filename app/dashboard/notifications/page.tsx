@@ -35,6 +35,9 @@ function urlBase64ToUint8Array(base64String: string) {
     return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)))
 }
 
+const NOTIFICATION_FETCH_LIMIT = 100
+const NOTIFICATION_PAGE_SIZE = 25
+
 export default function NotificationsPage() {
     const { dbUser } = useAuth()
     const { isIOS, isInstalled } = usePwa()
@@ -46,6 +49,11 @@ export default function NotificationsPage() {
     const [pushPermission, setPushPermission] = useState<NotificationPermission | null>(null)
     const [isPushSupported, setIsPushSupported] = useState(false)
     const [isSubscribing, setIsSubscribing] = useState(false)
+    const [visibleCount, setVisibleCount] = useState(NOTIFICATION_PAGE_SIZE)
+
+    useEffect(() => {
+        setVisibleCount(NOTIFICATION_PAGE_SIZE)
+    }, [filter])
 
     useEffect(() => {
         if (!dbUser) return
@@ -163,6 +171,10 @@ export default function NotificationsPage() {
                 .select('*')
                 .eq('user_id', dbUser?.id as any)
                 .order('created_at', { ascending: false })
+                // Bounded: this used to download every notification the account
+                // had ever received. The counts below stay exact for anyone
+                // under the cap, and the list says so when it is reached.
+                .limit(NOTIFICATION_FETCH_LIMIT)
 
             if (error) throw error
             setNotifications(data || [])
@@ -258,6 +270,10 @@ export default function NotificationsPage() {
         : notifications
 
     const unreadCount = notifications.filter(n => !n.is_read).length
+
+    // Render a page at a time: several hundred cards is what makes this list
+    // stutter on a low-end phone.
+    const visibleNotifications = filteredNotifications.slice(0, visibleCount)
 
     if (isLoading) {
         return (
@@ -419,7 +435,7 @@ export default function NotificationsPage() {
                 </Card>
             ) : (
                 <div className="space-y-3">
-                    {filteredNotifications.map((notification) => (
+                    {visibleNotifications.map((notification) => (
                         <Card
                             key={notification.id}
                             className={`transition-all ${!notification.is_read
@@ -471,6 +487,27 @@ export default function NotificationsPage() {
                             </CardContent>
                         </Card>
                     ))}
+
+                    {filteredNotifications.length > visibleNotifications.length && (
+                        <div className="flex flex-col items-center gap-2 pt-2">
+                            <Button
+                                variant="outline"
+                                className="w-full sm:w-auto"
+                                onClick={() => setVisibleCount(c => c + NOTIFICATION_PAGE_SIZE)}
+                            >
+                                Load more
+                            </Button>
+                            <p className="text-xs text-muted-foreground">
+                                Showing {visibleNotifications.length} of {filteredNotifications.length}
+                            </p>
+                        </div>
+                    )}
+
+                    {notifications.length >= NOTIFICATION_FETCH_LIMIT && (
+                        <p className="pt-2 text-center text-xs text-muted-foreground">
+                            Showing your {NOTIFICATION_FETCH_LIMIT} most recent notifications.
+                        </p>
+                    )}
                 </div>
             )}
         </div>

@@ -46,14 +46,10 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: 'Database error', details: fetchError.message }, { status: 500 })
         }
 
-        if (!pendingTxns || pendingTxns.length === 0) {
-            return NextResponse.json({ message: 'No moolre_pending transactions found.', results })
-        }
-
-        console.log(`[sync-moolre] Checking ${pendingTxns.length} moolre_pending transactions...`)
+        console.log(`[sync-moolre] Checking ${pendingTxns?.length ?? 0} moolre_pending shop transactions...`)
 
         // 3. Check each pending transaction in series to avoid overwhelming Moolre API
-        for (const tx of pendingTxns) {
+        for (const tx of pendingTxns || []) {
             results.processed++
 
             const externalref = tx.moolre_external_ref || tx.id
@@ -151,6 +147,82 @@ export async function GET(req: NextRequest) {
                 console.error(`[sync-moolre] Unexpected error processing tx ${tx.id}:`, txErr.message)
                 results.errors++
             }
+        }
+
+        // ── Commission Wallet payouts ────────────────────────────────────────────
+        // Same Moolre lifecycle, a different table. Kept in this cron rather than a new
+        // one because it is the same question asked of the same API: "did this transfer
+        // land?" — and a second schedule is another thing to register and forget.
+        try {
+            const { data: commissionPending } = await db
+                .from('commission_withdrawals')
+                .select('id, moolre_external_ref, net_amount, momo_number, account_number, network, user_id')
+                .eq('status', 'moolre_pending')
+
+            for (const w of (commissionPending as any[]) || []) {
+                results.processed++
+                try {
+                    const status = await checkTransferStatus(w.moolre_external_ref || w.id)
+
+                    if (status.txstatus === null) {
+                        console.warn(`[sync-moolre] commission ${w.id}: no status —`, status.error)
+                        results.errors++
+                        continue
+                    }
+
+                    if (status.txstatus === 1) {
+                        const { error: updateError } = await db
+                            .from('commission_withdrawals')
+                            .update({
+                                status: 'completed',
+                                moolre_status: 1,
+                                moolre_transaction_id: status.transactionid,
+                                processed_at: new Date().toISOString(),
+                                updated_at: new Date().toISOString(),
+                            })
+                            .eq('id', w.id)
+                            .eq('status', 'moolre_pending')
+
+                        if (updateError) {
+                            console.error(`[sync-moolre] commission ${w.id} update failed:`, updateError.message)
+                            results.errors++
+                            continue
+                        }
+
+                        results.completed++
+
+                        try {
+                            const { data: partner } = await db
+                                .from('users').select('first_name, phone_number').eq('id', w.user_id).maybeSingle()
+                            if (partner?.phone_number) {
+                                await sendShopWithdrawalProcessedSMS(
+                                    partner.phone_number,
+                                    partner.first_name || 'Partner',
+                                    w.net_amount,
+                                    w.network || 'MoMo',
+                                    w.momo_number || w.account_number || ''
+                                )
+                            }
+                        } catch (notifyErr) {
+                            // Non-fatal: the payout is already recorded as completed.
+                            console.warn(`[sync-moolre] commission ${w.id} SMS failed:`, notifyErr)
+                        }
+                    } else if (status.txstatus === 2) {
+                        // Left in moolre_pending on purpose, exactly as the shop sweep does:
+                        // the admin can still settle it with "Pay Manually".
+                        console.error(`[sync-moolre] commission ${w.id}: Moolre reported failure (txstatus=2).`)
+                        results.errors++
+                    } else {
+                        results.stillPending++
+                    }
+                } catch (e: any) {
+                    console.error(`[sync-moolre] commission ${w.id} error:`, e?.message || e)
+                    results.errors++
+                }
+            }
+        } catch (e: any) {
+            console.error('[sync-moolre] commission sweep failed:', e?.message || e)
+            results.errors++
         }
 
         console.log('[sync-moolre] Run complete:', results)

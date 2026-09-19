@@ -156,7 +156,9 @@ const SectionHeader = ({
 )
 
 export default function ShopSetupPage() {
-    const { dbUser } = useAuth()
+    const { dbUser, isSubAgent } = useAuth()
+    // A sub-agent's shop dashboard lives under /dashboard/sub/shop.
+    const shopHome = isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop'
     const router = useRouter()
     const fileInputRef = useRef<HTMLInputElement>(null)
     const bannerInputRef = useRef<HTMLInputElement>(null)
@@ -458,7 +460,7 @@ export default function ShopSetupPage() {
             setHasUnsavedChanges(false)
             setSavedIsActive(form.is_active)
             if (thenNavigate) router.push(thenNavigate)
-            else router.push('/dashboard/shop')
+            else router.push(shopHome)
         } catch (err: any) {
             toast.error(err.message || 'Failed to save shop')
         } finally {
@@ -571,7 +573,7 @@ export default function ShopSetupPage() {
 
             {/* Header */}
             <div className="space-y-4">
-                <button onClick={() => handleNavAway('/dashboard/shop')}>
+                <button onClick={() => handleNavAway(shopHome)}>
                     <span className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-emerald-600 transition-colors -ml-2 px-2 py-1 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
                         <ArrowLeft className="w-4 h-4" />
                         Back to Shop Dashboard
@@ -1175,7 +1177,7 @@ export default function ShopSetupPage() {
                                         const { error } = await supabase.rpc('delete_shop_data')
                                         if (error) throw error
                                         toast.success('Shop deleted successfully')
-                                        router.replace('/dashboard/shop')
+                                        router.replace(shopHome)
                                     } catch (err: any) {
                                         toast.error(err.message || 'Failed to delete shop')
                                         setSaving(false)

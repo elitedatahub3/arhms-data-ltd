@@ -88,13 +88,6 @@ interface ApiUsage {
     lastCallAt: string | null
 }
 
-interface CommissionWallet {
-    balance: number
-    total_earned: number
-    total_withdrawn: number
-    currency: string
-}
-
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
     pending: { label: 'Pending Approval', className: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' },
     active:  { label: 'Active',           className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
@@ -156,7 +149,6 @@ export default function DeveloperApiPage() {
     const [logs, setLogs] = useState<ApiLog[]>([])
     const [logsLoading, setLogsLoading] = useState(true)
     const [usage, setUsage] = useState<ApiUsage | null>(null)
-    const [commission, setCommission] = useState<CommissionWallet | null>(null)
 
     const [generateKind, setGenerateKind] = useState<KeyKind | null>(null)
     const [revokeKind, setRevokeKind] = useState<KeyKind | null>(null)
@@ -258,25 +250,14 @@ export default function DeveloperApiPage() {
         }
     }, [])
 
-    const fetchCommission = useCallback(async () => {
-        try {
-            const res = await fetch('/api/user/commission-wallet')
-            if (res.ok) {
-                const json = await res.json()
-                setCommission(json.wallet ?? null)
-            }
-        } catch { /* the strip simply does not render */ }
-    }, [])
-
     useEffect(() => {
         fetchKeys()
         fetchLogs()
-        fetchCommission()
         fetch('/api/admin-settings?keys=whatsapp_admin_number')
             .then(r => r.json())
             .then(d => { if (d.whatsapp_admin_number) setAdminWhatsapp(d.whatsapp_admin_number) })
             .catch(() => {})
-    }, [fetchKeys, fetchLogs, fetchCommission])
+    }, [fetchKeys, fetchLogs])
 
     useEffect(() => {
         if (dbUser && dbUser.role !== 'agent' && dbUser.role !== 'dealer' && dbUser.role !== 'admin' && dbUser.role !== 'sub-admin') {
@@ -463,7 +444,7 @@ export default function DeveloperApiPage() {
                     rel="noopener noreferrer"
                     className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold transition hover:bg-muted"
                 >
-                    <ExternalLink className="w-3.5 h-3.5" /> Docs
+                    <ExternalLink className="w-3.5 h-3.5" /> Documentation Page
                 </a>
             </div>
 
@@ -500,36 +481,6 @@ export default function DeveloperApiPage() {
 
             {renderKeyCard('standard')}
             {renderKeyCard('commission')}
-
-            {/* Commission Wallet */}
-            {commission && (commission.total_earned > 0 || keyOf('commission')) && (
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="flex items-center gap-2 text-base">
-                            <Coins className="w-4 h-4" /> Commission Wallet
-                        </CardTitle>
-                        <CardDescription>
-                            Earnings from airtime and bill payments made with your Commission Services key.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="grid grid-cols-3 gap-3">
-                            {[
-                                { label: 'Available',  value: commission.balance },
-                                { label: 'Earned',     value: commission.total_earned },
-                                { label: 'Withdrawn',  value: commission.total_withdrawn },
-                            ].map(stat => (
-                                <div key={stat.label} className="rounded-xl border border-border/60 bg-secondary/20 p-3">
-                                    <p className="text-xs text-muted-foreground">{stat.label}</p>
-                                    <p className="text-lg font-bold tabular-nums">
-                                        GHS {Number(stat.value).toFixed(2)}
-                                    </p>
-                                </div>
-                            ))}
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
 
             {/* Endpoints Reference */}
             <Card>

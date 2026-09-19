@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/auth-context'
+import { refreshDashboardSummary } from '@/hooks/use-dashboard-summary'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { formatCurrency, getNetworkGradient, cn } from '@/lib/utils'
@@ -117,7 +118,7 @@ function sizeToGb(size: string): number {
 }
 
 export default function DataPackagesPage() {
-    const { dbUser, session } = useAuth()
+    const { dbUser, session, isSubAgent, subAgentCheckDone } = useAuth()
     const router = useRouter()
     const searchParams = useSearchParams()
 
@@ -129,6 +130,10 @@ export default function DataPackagesPage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
     const [isLoading, setIsLoading] = useState(true)
+    // A sub-agent pays their upline's sub_price, not the platform price. null
+    // until the fetch lands (or for non-subs, who never need it).
+    const [subPrices, setSubPrices] = useState<Record<string, number> | null>(null)
+    const pricingReady = subAgentCheckDone && (!isSubAgent || subPrices !== null)
     const [walletBalance, setWalletBalance] = useState(0)
     const [hideMashup, setHideMashup] = useState(false)
     const [hideExpressMtn, setHideExpressMtn] = useState(false)
@@ -214,8 +219,17 @@ export default function DataPackagesPage() {
         fetchWalletBalance()
         fetchOrdersToday()
         fetchMashupSetting()
-        fetchPaymentSettings()
     }, [dbUser])
+
+    useEffect(() => {
+        if (!isSubAgent) return
+        let active = true
+        fetch('/api/dashboard/sub/package-prices')
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (active) setSubPrices(d?.prices ?? {}) })
+            .catch(() => { if (active) setSubPrices({}) })
+        return () => { active = false }
+    }, [isSubAgent])
 
     // Prefill the MoMo number from the account profile
     useEffect(() => {
@@ -298,6 +312,7 @@ export default function DataPackagesPage() {
                     }
 
                     setOrdersToday(prev => prev + placedOrders.length)
+                    refreshDashboardSummary()
                     toast.success('Payment received — your order is being processed!')
                 } else if (data.status === 'failed') {
                     clearInterval(interval)
@@ -316,7 +331,7 @@ export default function DataPackagesPage() {
 
     useEffect(() => {
         filterPackages()
-    }, [packages, selectedNetwork, searchQuery])
+    }, [packages, selectedNetwork, searchQuery, isSubAgent, subPrices])
 
     useEffect(() => {
         if (textareaRef.current) {
@@ -325,25 +340,18 @@ export default function DataPackagesPage() {
         }
     }, [bulkText])
 
+    // One request for both groups of settings. They were two calls to the same
+    // endpoint, fired together on mount — and on a phone each one is a round
+    // trip before the page can price anything.
     const fetchMashupSetting = async () => {
         try {
-            const res = await fetch('/api/admin-settings?keys=special_mtn_mashup_hidden,express_mtn_hidden,standard_mtn_hidden')
-            if (res.ok) {
-                const settings = await res.json()
-                setHideMashup(String(settings.special_mtn_mashup_hidden) === 'true')
-                setHideExpressMtn(String(settings.express_mtn_hidden) === 'true')
-                setHideStandardMtn(String(settings.standard_mtn_hidden) === 'true')
-            }
-        } catch (_) {
-            // fallback
-        }
-    }
-
-    const fetchPaymentSettings = async () => {
-        try {
-            const res = await fetch('/api/admin-settings?keys=active_payment_provider_web,paystack_fee_percent,agent_paystack_fee_percent')
+            const res = await fetch('/api/admin-settings?keys=special_mtn_mashup_hidden,express_mtn_hidden,standard_mtn_hidden,active_payment_provider_web,paystack_fee_percent,agent_paystack_fee_percent')
             if (!res.ok) return
             const settings = await res.json()
+
+            setHideMashup(String(settings.special_mtn_mashup_hidden) === 'true')
+            setHideExpressMtn(String(settings.express_mtn_hidden) === 'true')
+            setHideStandardMtn(String(settings.standard_mtn_hidden) === 'true')
 
             setWebPaymentProvider(resolveProvider(settings.active_payment_provider_web))
 
@@ -406,6 +414,12 @@ export default function DataPackagesPage() {
     const filterPackages = () => {
         let filtered = packages
 
+        // Sub-agents only see packages their upline has priced; the server
+        // refuses the rest, so listing them would just be a dead Buy button.
+        if (isSubAgent) {
+            filtered = filtered.filter(p => !!subPrices?.[p.id])
+        }
+
         // Filter by network
         filtered = filtered.filter(p => p.network === selectedNetwork)
 
@@ -423,6 +437,9 @@ export default function DataPackagesPage() {
 
     // Helper function to get effective price based on user role
     const getEffectivePrice = (pkg: DataPackage) => {
+        if (isSubAgent && subPrices?.[pkg.id]) {
+            return subPrices[pkg.id]
+        }
         if (dbUser?.role === 'dealer' && (pkg as any).dealer_price > 0) {
             return (pkg as any).dealer_price
         }
@@ -576,6 +593,7 @@ export default function DataPackagesPage() {
             })
             setWalletBalance(typeof data.order?.new_balance === 'number' ? data.order.new_balance : (prev: number) => prev - effectivePrice)
             setOrdersToday(prev => prev + 1)
+            refreshDashboardSummary()
             toast.success('Order placed successfully!')
         } catch (error: any) {
             toast.error(error.message || 'Failed to place order')
@@ -1065,6 +1083,7 @@ export default function DataPackagesPage() {
             setBulkText('')
             fetchWalletBalance()
             fetchOrdersToday()
+            refreshDashboardSummary()
 
         } catch (error: any) {
             toast.error(error.message || 'Error submitting bulk orders')
@@ -1072,7 +1091,7 @@ export default function DataPackagesPage() {
             setIsSubmittingBulk(false)
         }
     }
-    if (isLoading) {
+    if (isLoading || !pricingReady) {
         return (
             <div className="space-y-6">
                 <Skeleton className="h-12 w-full max-w-md" />

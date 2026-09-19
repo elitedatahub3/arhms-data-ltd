@@ -24,12 +24,19 @@ import { Order } from '@/types/supabase'
 import { ArrowRight, Clock, CheckCircle2, XCircle, AlertCircle, ShoppingCart, Loader2, Eye, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export function RecentOrdersWidget() {
+/**
+ * `orders` comes from /api/dashboard/summary, which already carries the same ten
+ * rows this widget would fetch — so expanding it costs nothing. The self-fetch
+ * stays as the fallback for any caller that doesn't pass them.
+ */
+export function RecentOrdersWidget({ orders: providedOrders }: { orders?: Order[] } = {}) {
     const { dbUser } = useAuth()
-    const [orders, setOrders] = useState<Order[]>([])
+    const [fetchedOrders, setFetchedOrders] = useState<Order[]>([])
     const [isExpanded, setIsExpanded] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+
+    const orders = providedOrders ?? fetchedOrders
 
     const fetchRecentOrders = async () => {
         if (!dbUser || isLoading) return
@@ -44,7 +51,7 @@ export function RecentOrdersWidget() {
                 .limit(10)
 
             if (error) throw error
-            setOrders(data || [])
+            setFetchedOrders(data || [])
         } catch (error) {
             console.error('Error fetching recent orders:', error)
         } finally {
@@ -54,7 +61,7 @@ export function RecentOrdersWidget() {
 
     const handleShowOrders = () => {
         setIsExpanded(true)
-        fetchRecentOrders()
+        if (!providedOrders) fetchRecentOrders()
     }
 
     const getStatusConfig = (status: Order['status']) => {

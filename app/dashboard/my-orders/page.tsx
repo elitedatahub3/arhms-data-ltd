@@ -44,6 +44,7 @@ interface OrderWithComplaints extends Order {
 const NETWORKS = ['All', 'MTN', 'Telecel', 'AT-iShare', 'AT-BigTime', 'Special MTN Mashup', 'EXPRESS MTN']
 const STATUSES = ['All', 'pending', 'processing', 'completed', 'failed']
 const TIME_PERIODS = ['Today', 'Yesterday', 'This Week', 'This Month', 'Custom']
+const PAGE_SIZE = 25
 
 export default function MyOrdersPage() {
     const { dbUser } = useAuth()
@@ -77,7 +78,10 @@ export default function MyOrdersPage() {
 
             const { data, error } = await supabase
                 .from('orders')
-                .select('*, complaints(*)')
+                // Only the complaint's status is ever rendered, so pull just that
+                // column. `complaints(*)` shipped every field of every complaint
+                // for every order on the page — pure weight on a phone.
+                .select('*, complaints(status)')
                 .eq('user_id', dbUser?.id as any)
                 .is('shop_order_id', null)  // Exclude mirrored shop orders from storefront
                 .gte('created_at', thirtyDaysAgo.toISOString())
@@ -166,6 +170,19 @@ export default function MyOrdersPage() {
 
         return filtered
     }, [orders, searchQuery, networkFilter, statusFilter, timePeriod])
+
+    // Render a page at a time. The totals above still count every matching
+    // order — only the cards are limited — because rendering several hundred of
+    // them is what makes this list crawl on a cheap phone.
+    const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+    useEffect(() => {
+        setVisibleCount(PAGE_SIZE)
+    }, [searchQuery, networkFilter, statusFilter, timePeriod, customStart, customEnd])
+
+    const visibleOrders = useMemo(
+        () => filteredOrders.slice(0, visibleCount),
+        [filteredOrders, visibleCount]
+    )
 
     // Calculate stats from filtered orders
     const stats = useMemo(() => {
@@ -385,7 +402,7 @@ export default function MyOrdersPage() {
 
             {/* Order Cards */}
             <div id="orders-table" className="space-y-4">
-                {filteredOrders.length === 0 ? (
+                {visibleOrders.length === 0 ? (
                     <Card className="shadow-md dark:shadow-gray-900/50">
                         <CardContent className="py-12 text-center">
                             <ShoppingCart className="w-12 h-12 mx-auto text-muted-foreground/50 mb-4" />
@@ -393,7 +410,7 @@ export default function MyOrdersPage() {
                         </CardContent>
                     </Card>
                 ) : (
-                    filteredOrders.map((order) => (
+                    visibleOrders.map((order) => (
                         <Card key={order.id} className="overflow-hidden border shadow-md hover:shadow-lg transition-shadow dark:shadow-gray-900/50 dark:hover:shadow-gray-900/70">
                             <CardContent className="p-4 space-y-4">
                                 {/* Header Row */}
@@ -455,6 +472,21 @@ export default function MyOrdersPage() {
                             </CardContent>
                         </Card>
                     ))
+                )}
+
+                {filteredOrders.length > visibleOrders.length && (
+                    <div className="flex flex-col items-center gap-2 pt-2">
+                        <Button
+                            variant="outline"
+                            className="w-full sm:w-auto"
+                            onClick={() => setVisibleCount(c => c + PAGE_SIZE)}
+                        >
+                            Load more orders
+                        </Button>
+                        <p className="text-xs text-muted-foreground">
+                            Showing {visibleOrders.length} of {filteredOrders.length}
+                        </p>
+                    </div>
                 )}
             </div>
 

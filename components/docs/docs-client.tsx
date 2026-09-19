@@ -15,21 +15,27 @@ import Link from 'next/link'
 import {
     AlertTriangle,
     ArrowRight,
-    BookOpen,
     Check,
     Copy,
     Gauge,
     KeyRound,
     Lightbulb,
-    ListChecks,
     Menu,
     Braces,
+    GraduationCap,
+    IdCard,
+    Package,
+    Phone,
     Radio,
+    Receipt,
     ShieldAlert,
+    Signal,
+    Wallet,
 } from 'lucide-react'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { cn } from '@/lib/utils'
 import {
+    type DocGroup,
     type Endpoint,
     type Lang,
     BASE,
@@ -37,6 +43,7 @@ import {
     COMMISSION_KEY_SAMPLE,
     LANGS,
     STANDARD_ENDPOINTS,
+    DOC_GROUPS,
     STANDARD_KEY_SAMPLE,
     WEBHOOK_EVENTS,
     snippetsFor,
@@ -284,16 +291,35 @@ function EndpointCard({ ep, lang, onLang }: { ep: Endpoint; lang: Lang; onLang: 
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-const SECTIONS = [
-    { id: 'authentication',  title: 'Authentication',       icon: KeyRound },
-    { id: 'response-format', title: 'Response Format',      icon: Braces },
-    { id: 'rate-limits',     title: 'Rate Limits',          icon: Gauge },
-    { id: 'standard-api',    title: 'Standard API',         icon: BookOpen,   endpoints: STANDARD_ENDPOINTS },
-    { id: 'commission-api',  title: 'Commission Services',  icon: ListChecks, endpoints: COMMISSION_ENDPOINTS },
-    { id: 'webhooks',        title: 'Webhooks',             icon: Radio },
-    { id: 'error-codes',     title: 'Error Codes',          icon: AlertTriangle },
-    { id: 'tips',            title: 'Tips & Best Practice', icon: Lightbulb },
-] as const
+const ALL_ENDPOINTS = [...STANDARD_ENDPOINTS, ...COMMISSION_ENDPOINTS]
+
+const GROUP_ICON: Record<DocGroup, React.ElementType> = {
+    'data':            Package,
+    'airtime':         Phone,
+    'results-checker': GraduationCap,
+    'afa':             IdCard,
+    'account':         Wallet,
+    'utility-bills':   Receipt,
+}
+
+/**
+ * The sidebar, flat and grouped by product.
+ *
+ * It used to list two headings — Standard API and Commission Services — with all
+ * sixteen endpoints nested beneath them, which made the nav twenty-four rows long and
+ * sorted by a detail (which key signs the request) rather than by what the reader came
+ * to build. Each product section states its own key instead.
+ */
+const SECTIONS: { id: string; title: string; icon: React.ElementType; group?: DocGroup }[] = [
+    { id: 'authentication',  title: 'Authentication',        icon: KeyRound },
+    { id: 'response-format', title: 'Response Format',       icon: Braces },
+    { id: 'rate-limits',     title: 'Rate Limits',           icon: Gauge },
+    ...DOC_GROUPS.map(g => ({ id: g.id, title: g.title, icon: GROUP_ICON[g.id], group: g.id })),
+    { id: 'webhooks',        title: 'Webhooks',              icon: Radio },
+    { id: 'networks',        title: 'Networks',              icon: Signal },
+    { id: 'error-codes',     title: 'Error Codes',           icon: AlertTriangle },
+    { id: 'tips',            title: 'Tips & Recommendations', icon: Lightbulb },
+]
 
 const LANG_STORAGE_KEY = 'arhms-docs-lang'
 
@@ -341,35 +367,20 @@ export default function DocsClient() {
             {SECTIONS.map(s => {
                 const Icon = s.icon
                 return (
-                    <div key={s.id}>
-                        <a
-                            href={`#${s.id}`}
-                            onClick={() => setMobileNavOpen(false)}
-                            className={cn(
-                                'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition',
-                                active === s.id
-                                    ? 'bg-accent-soft text-accent-solid'
-                                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                            )}
-                        >
-                            <Icon className="h-4 w-4 shrink-0" />
-                            {s.title}
-                        </a>
-                        {'endpoints' in s && (
-                            <div className="mb-1 ml-5 border-l border-border pl-2">
-                                {s.endpoints.map(ep => (
-                                    <a
-                                        key={anchorFor(ep)}
-                                        href={`#${anchorFor(ep)}`}
-                                        onClick={() => setMobileNavOpen(false)}
-                                        className="block truncate rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                                    >
-                                        {ep.label}
-                                    </a>
-                                ))}
-                            </div>
+                    <a
+                        key={s.id}
+                        href={`#${s.id}`}
+                        onClick={() => setMobileNavOpen(false)}
+                        className={cn(
+                            'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition',
+                            active === s.id
+                                ? 'bg-accent-soft text-accent-solid'
+                                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                         )}
-                    </div>
+                    >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        {s.title}
+                    </a>
                 )
             })}
         </nav>
@@ -448,7 +459,7 @@ export default function DocsClient() {
                             Get your API key <ArrowRight className="h-4 w-4" />
                         </Link>
                         <a
-                            href="#standard-api"
+                            href="#data"
                             className="inline-flex items-center gap-1.5 rounded-xl border border-accent-contrast/30 px-4 py-2.5 text-sm font-bold transition hover:bg-background/10"
                         >
                             Browse endpoints
@@ -595,16 +606,13 @@ export default function DocsClient() {
                     </section>
 
                     {/* 4 & 5. Endpoints */}
-                    {SECTIONS.filter(s => 'endpoints' in s).map((s, i) => (
-                        <section key={s.id} className="space-y-4">
+                    {DOC_GROUPS.map((g, i) => (
+                        <section key={g.id} className="space-y-4">
                             <SectionHeading
-                                id={s.id} index={4 + i} icon={s.icon} title={s.title}
-                                lead={s.id === 'standard-api'
-                                    ? `Use a Standard key (${STANDARD_KEY_SAMPLE.slice(0, 8)}…). Orders are charged to your main wallet.`
-                                    : `Use a Commission Services key (${COMMISSION_KEY_SAMPLE.slice(0, 11)}…). Sending a Standard key here returns 403.`}
+                                id={g.id} index={4 + i} icon={GROUP_ICON[g.id]} title={g.title} lead={g.lead}
                             />
                             <div className="space-y-4">
-                                {'endpoints' in s && s.endpoints.map(ep => (
+                                {ALL_ENDPOINTS.filter(ep => ep.group === g.id).map(ep => (
                                     <EndpointCard key={anchorFor(ep)} ep={ep} lang={lang} onLang={chooseLang} />
                                 ))}
                             </div>
@@ -614,7 +622,7 @@ export default function DocsClient() {
 {/* 6. Webhooks */}
                     <section className="space-y-4">
                         <SectionHeading
-                            id="webhooks" index={6} icon={Radio} title="Webhooks"
+                            id="webhooks" index={10} icon={Radio} title="Webhooks"
                             lead="Register an HTTPS endpoint and we POST to it when an order settles, so you do not have to poll every order you place."
                         />
                         <p className="text-sm text-muted-foreground">
@@ -662,10 +670,38 @@ export default function DocsClient() {
                         </p>
                     </section>
 
-                    {/* 7. Error codes */}
+
+                    {/* 11. Networks */}
                     <section className="space-y-4">
                         <SectionHeading
-                            id="error-codes" index={7} icon={AlertTriangle} title="Error Codes"
+                            id="networks" index={11} icon={Signal} title="Networks"
+                            lead="Ghana only. Send local numbers in 0XXXXXXXXX form — 233XXXXXXXXX is also accepted and normalised."
+                        />
+                        <div className="grid gap-3 sm:grid-cols-3">
+                            {[
+                                { name: 'MTN',     value: 'MTN',     prefixes: '024, 025, 053, 054, 055, 059' },
+                                { name: 'Telecel', value: 'Telecel', prefixes: '020, 050 (formerly Vodafone)' },
+                                { name: 'AT',      value: 'AT',      prefixes: '026, 027, 056, 057 (AirtelTigo)' },
+                            ].map(n => (
+                                <div key={n.name} className="rounded-2xl border border-border bg-card p-4">
+                                    <p className="font-bold text-foreground">{n.name}</p>
+                                    <code className="mt-1 block font-mono text-xs text-accent-solid">network: "{n.value}"</code>
+                                    <p className="mt-2 text-xs text-muted-foreground">{n.prefixes}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                            Pass the value exactly as shown — the API matches it, not the brand name. International
+                            numbers and other networks are rejected. Which bundle sizes exist per network changes, so
+                            read <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/api/v2/packages</code>{' '}
+                            rather than hardcoding a list.
+                        </p>
+                    </section>
+
+                    {/* 12. Error codes */}
+                    <section className="space-y-4">
+                        <SectionHeading
+                            id="error-codes" index={12} icon={AlertTriangle} title="Error Codes"
                             lead="The error message is written to be read — it usually says exactly what to change."
                         />
                         <div className="space-y-2">
@@ -689,9 +725,9 @@ export default function DocsClient() {
                         </div>
                     </section>
 
-                    {/* 8. Tips */}
+                    {/* 13. Tips */}
                     <section className="space-y-4">
-                        <SectionHeading id="tips" index={8} icon={Lightbulb} title="Tips & Best Practice" />
+                        <SectionHeading id="tips" index={13} icon={Lightbulb} title="Tips & Recommendations" />
                         <div className="grid gap-3 sm:grid-cols-2">
                             {[
                                 { title: 'Always send a reference', body: 'Your reference is the idempotency key. If a request times out, send it again with the same reference — you get the existing order back instead of being charged twice.' },

@@ -436,7 +436,7 @@ export default function AdminUtilitiesPage() {
                                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                                     {[
                                         { key: 'utility_total_markup_cap_percent', label: 'Total markup cap %', fallback: '5' },
-                                        { key: 'commission_share_percent', label: 'API partner share %', fallback: '40' },
+                                        { key: 'commission_share_percent', label: 'API partner share %', fallback: '50' },
                                         { key: 'utility_api_min_amount', label: 'API min amount', fallback: '1' },
                                         { key: 'utility_api_max_amount', label: 'API max amount', fallback: '1000' },
                                     ].map(f => (

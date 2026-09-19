@@ -16,14 +16,14 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { roleConfig } from '@/lib/roles'
+import { roleConfig, subAgentRoleConfig } from '@/lib/roles'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { Menu, X, Bell, User, Settings, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export function DashboardHeader() {
-    const { dbUser, signOut, isAdmin, isSubAdmin } = useAuth()
+    const { dbUser, signOut, isAdmin, isSubAdmin, isSubAgent } = useAuth()
     const { toggleSidebar, isCollapsed, isInternalSidebarOpen } = useUI()
     const [unreadCount, setUnreadCount] = useState(0)
 
@@ -80,7 +80,9 @@ export function DashboardHeader() {
     }
 
     const userRole = isAdmin ? 'admin' : isSubAdmin ? 'sub-admin' : (dbUser?.role || 'customer') as keyof typeof roleConfig
-    const currentRole = roleConfig[userRole] || roleConfig['customer']
+    const currentRole = isSubAgent && !isAdmin && !isSubAdmin
+        ? subAgentRoleConfig
+        : (roleConfig[userRole] || roleConfig['customer'])
 
     return (
         <header className={cn(
@@ -181,7 +183,7 @@ export function DashboardHeader() {
                                             currentRole.badgeClass
                                         )}
                                     >
-                                        {currentRole.label}
+                                        {isSubAgent ? 'Sub-Agent' : currentRole.label}
                                     </span>
                                 </div>
                                 <Avatar className="h-8 w-8 sm:h-9 sm:w-9 rounded-lg border-2 border-border/50 group-hover:border-primary/50 transition-all overflow-hidden">

@@ -37,7 +37,7 @@ import { usePageAccess } from '@/hooks/use-page-access'
 import { useUI } from '@/contexts/ui-context'
 import { useAuth } from '@/contexts/auth-context'
 import { type UserRole } from '@/lib/roles'
-import { shopNavItems, type NavItem } from '@/lib/dashboard-nav'
+import { shopNavItems, subShopNavItems, type NavItem } from '@/lib/dashboard-nav'
 
 /**
  * Floating pill bottom navigation for the mobile dashboard.
@@ -94,6 +94,12 @@ const NAV_THEME: Record<UserRole, NavTheme> = {
         gradient: 'from-brand-gold-light via-brand-gold to-brand-gold-dark',
         ink: '#7A5F22', onSurface: '#4A3810', darkSurface: false,
     },
+}
+
+/** Sub-agents are not a role value, so their teal bar sits beside NAV_THEME. */
+const SUB_AGENT_NAV_THEME: NavTheme = {
+    gradient: 'from-teal-500 via-teal-600 to-teal-800',
+    ink: '#0F766E', onSurface: 'rgba(255,255,255,0.92)', darkSurface: true,
 }
 
 /** Depth shared by the pill and the hamburger: rim light plus a cast shadow. */
@@ -216,6 +222,50 @@ const NAV_VARIANTS = {
             shop: shopNavItems,
         },
     },
+    // A sub-agent's own dashboard/orders/AFA/Results-Checker/Bill-Payments pages
+    // live under /dashboard/sub/* — separate implementations (own wallet debit,
+    // upline-resolved pricing floor, owner-approved withdrawals) from the
+    // customer pages the `dashboard` variant above points at. Everything not
+    // remapped here (Data Packages, Buy Airtime, Wallet, Marketplace, Refer &
+    // Earn, Transactions, Complaints, Profile, Download App, Developer API,
+    // Commission Wallet) is genuinely shared with the customer nav.
+    'dashboard-sub': {
+        root: '/dashboard/sub',
+        tabs: [
+            { id: 'home', label: 'Home', href: '/dashboard/sub', icon: LayoutGrid },
+            { id: 'wallet', label: 'Wallet', href: '/dashboard/wallet', icon: Wallet },
+            { id: 'data', label: 'Data', href: '/dashboard/data-packages', icon: Package },
+            { id: 'orders', label: 'Orders', href: '/dashboard/sub/orders', icon: ClipboardList },
+            { id: 'shop', label: 'Shop', href: '/dashboard/sub/shop', icon: Store },
+        ],
+        subItems: {
+            home: [
+                { href: '/dashboard/profile', label: 'Profile', icon: User },
+                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
+                { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
+                { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+                { href: '/dashboard/install', label: 'Download App', icon: Download },
+            ],
+            wallet: [
+                { href: '/dashboard/wallet', label: 'Top Up', icon: Wallet },
+                { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
+            ],
+            data: [
+                { href: '/dashboard/data-packages', label: 'Data Packages', icon: Package },
+                { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
+                { href: '/dashboard/sub/utilities', label: 'Pay Bills', icon: Receipt },
+                { href: '/dashboard/data-packages?network=Special%20MTN%20Mashup', label: 'Special MTN Mashup', icon: Zap },
+                { href: '/dashboard/data-packages?network=EXPRESS%20MTN', label: 'EXPRESS MTN', icon: Zap },
+                { href: '/dashboard/sub/rc', label: 'Results Checker', icon: Tag },
+                { href: '/dashboard/sub/afa', label: 'AFA Registration', icon: BadgeCheck },
+            ],
+            orders: [
+                { href: '/dashboard/sub/orders', label: 'My Orders', icon: ClipboardList },
+                { href: '/dashboard/complaints', label: 'Complaints', icon: MessageSquare },
+            ],
+            shop: subShopNavItems,
+        },
+    },
     // Five tabs for twenty-five admin pages, so the sub-menus carry the rest —
     // between them they cover every link in the sidebar's admin list. Tab hrefs
     // are matched by prefix, so /admin/shops also owns /admin/shops/withdrawals.
@@ -287,7 +337,9 @@ export function MobileBottomNav({ variant = 'dashboard' }: { variant?: NavVarian
         : isSubAdmin
             ? 'sub-admin'
             : ((dbUser?.role as UserRole) || 'customer')
-    const theme = NAV_THEME[role] ?? NAV_THEME['customer']
+    const theme = variant === 'dashboard-sub'
+        ? SUB_AGENT_NAV_THEME
+        : (NAV_THEME[role] ?? NAV_THEME['customer'])
     const surface = `relative overflow-hidden bg-gradient-to-br ${theme.gradient} ${SURFACE_DEPTH}`
 
     // The sub-menu is anchored to the active chip, so a route change always
