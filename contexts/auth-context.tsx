@@ -14,6 +14,12 @@ interface AuthContextType {
     isAdmin: boolean
     isSubAdmin: boolean
     isSeller: boolean
+    /** True once we've confirmed (via /api/dashboard/sub/data) this account is a sub-agent. */
+    isSubAgent: boolean
+    /** True once the sub-agent check above has resolved (success or 403) — lets callers avoid a false "not a sub-agent" during the initial fetch. */
+    subAgentCheckDone: boolean
+    /** True for a level-2+ sub, who is the bottom of the recruiting chain and can never recruit further. */
+    subAgentRecruitBlocked: boolean
     phoneVerified: boolean
     signIn: (email: string, password: string) => Promise<{ error: Error | null }>
     signUp: (data: SignUpData) => Promise<{ error: any, data: { user: User | null, session: Session | null } | null }>
@@ -72,6 +78,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const isSubAdmin = dbUser?.role === 'sub-admin'
     const isSeller = dbUser?.is_seller ?? false
     const phoneVerified = dbUser?.phone_verified ?? false
+
+    // Sub-agent status lives in a separate `sub_agents` table, not on `role`, so
+    // it can only be resolved by asking the server. 200 → sub-agent, 403 → not
+    // one; anything else fails open (both flags stay false) so a network hiccup
+    // never wrongly de-features a regular user's dashboard.
+    const [isSubAgent, setIsSubAgent] = useState(false)
+    const [subAgentCheckDone, setSubAgentCheckDone] = useState(false)
+    const [subAgentRecruitBlocked, setSubAgentRecruitBlocked] = useState(false)
+    useEffect(() => {
+        if (!dbUser?.id) {
+            setIsSubAgent(false)
+            setSubAgentCheckDone(false)
+            setSubAgentRecruitBlocked(false)
+            return
+        }
+        let active = true
+        fetch('/api/dashboard/sub/data')
+            .then((r) => {
+                if (!active) return
+                if (r.ok) {
+                    setIsSubAgent(true)
+                    return r.json().catch(() => null)
+                }
+                if (r.status === 403) setIsSubAgent(false)
+                return null
+            })
+            .then((d) => {
+                if (!active) return
+                if (typeof d?.canRecruit === 'boolean') setSubAgentRecruitBlocked(!d.canRecruit)
+            })
+            .catch(() => {})
+            .finally(() => { if (active) setSubAgentCheckDone(true) })
+        return () => { active = false }
+    }, [dbUser?.id])
 
     // Fetch the profile row for the authenticated user. Returns true on success.
     // Resilient by design: mobile networks (see the "Connection Error" screen in
@@ -443,12 +483,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAdmin,
         isSubAdmin,
         isSeller,
+        isSubAgent,
+        subAgentCheckDone,
+        subAgentRecruitBlocked,
         phoneVerified,
         signIn,
         signUp,
         signOut,
         refreshUser,
-    }), [user, dbUser, session, isLoading, isAdmin, isSubAdmin, isSeller, phoneVerified, signIn, signUp, signOut, refreshUser])
+    }), [user, dbUser, session, isLoading, isAdmin, isSubAdmin, isSeller, isSubAgent, subAgentCheckDone, subAgentRecruitBlocked, phoneVerified, signIn, signUp, signOut, refreshUser])
 
     return (
         <AuthContext.Provider value={value}>

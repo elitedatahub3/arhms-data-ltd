@@ -50,7 +50,7 @@ import { supabase } from '@/lib/supabase'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useAdminCounts } from '@/hooks/use-admin-counts'
 import { roleConfig } from '@/lib/roles'
-import { shopNavItems } from '@/lib/dashboard-nav'
+import { shopNavItems, subShopNavItems } from '@/lib/dashboard-nav'
 import { BrandLogo } from '@/components/BrandLogo'
 
 const userNavItems = [
@@ -74,6 +74,23 @@ const userNavItems = [
     { href: '/dashboard/developer-api', label: 'Developer API', icon: Code2 },
     { href: '/dashboard/commission-wallet', label: 'Commission Wallet', icon: Percent },
 ]
+
+/**
+ * A sub-agent's own dashboard/orders/AFA/Results-Checker/Bill-Payments pages
+ * live under /dashboard/sub/* — separate implementations (own wallet debit,
+ * upline-resolved pricing floor, owner-approved withdrawals) from the shared
+ * customer pages `userNavItems` otherwise points at. Everything not listed
+ * here (Data Packages, Buy Airtime, Wallet, Marketplace, Refer & Earn,
+ * Transactions, Complaints, Profile, Download App, Developer API, Commission
+ * Wallet) is genuinely shared and needs no remap.
+ */
+const SUB_AGENT_HREF_OVERRIDES: Record<string, string> = {
+    '/dashboard': '/dashboard/sub',
+    '/dashboard/results-checker': '/dashboard/sub/rc',
+    '/dashboard/afa-orders': '/dashboard/sub/afa',
+    '/dashboard/utilities': '/dashboard/sub/utilities',
+    '/dashboard/my-orders': '/dashboard/sub/orders',
+}
 
 const adminNavItems = [
     { href: '/admin', label: 'Dashboard', icon: Shield },
@@ -109,7 +126,7 @@ const adminNavItems = [
 
 export function DashboardSidebar() {
     const pathname = usePathname()
-    const { dbUser, isAdmin, isSubAdmin, signOut } = useAuth()
+    const { dbUser, isAdmin, isSubAdmin, isSubAgent, subAgentRecruitBlocked, signOut } = useAuth()
     const { isInternalSidebarOpen, closeSidebar, isCollapsed, toggleCollapse } = useUI()
     const { isPageAccessible, loading: pageAccessLoading } = usePageAccess()
     const [walletBalance, setWalletBalance] = useState(0)
@@ -176,8 +193,11 @@ export function DashboardSidebar() {
         setProviderSaving(null)
     }
 
-    // My Shop accordion — auto-expands on any /dashboard/shop route
-    const isOnShopRoute = pathname?.startsWith('/dashboard/shop') ?? false
+    // My Shop accordion — auto-expands on any shop route (a sub-agent's shop
+    // lives under /dashboard/sub/*, not /dashboard/shop/*)
+    const isOnShopRoute = isSubAgent
+        ? subShopNavItems.some(item => pathname?.startsWith(item.href))
+        : (pathname?.startsWith('/dashboard/shop') ?? false)
     const [shopGroupOpen, setShopGroupOpen] = useState(isOnShopRoute)
     useEffect(() => {
         if (isOnShopRoute) setShopGroupOpen(true)
@@ -265,11 +285,25 @@ export function DashboardSidebar() {
     }, [])
 
     const isLinkActive = (href: string) => {
-        if (href === '/dashboard' || href === '/admin' || href === '/dashboard/shop') {
+        if (href === '/dashboard' || href === '/admin' || href === '/dashboard/shop' || href === '/dashboard/sub' || href === '/dashboard/sub/shop') {
             return pathname === href
         }
         return pathname?.startsWith(href)
     }
+
+    // Sub-agents run their Home/Results Checker/AFA/Pay Bills/Orders through
+    // their own /dashboard/sub/* implementations (see SUB_AGENT_HREF_OVERRIDES);
+    // Role Upgrade doesn't apply to them at all. Everything else in
+    // `userNavItems` is genuinely shared and passes through unchanged.
+    const resolvedUserNavItems = userNavItems
+        .filter(item => !isSubAgent || item.label !== 'Role Upgrade')
+        .map(item => (isSubAgent && SUB_AGENT_HREF_OVERRIDES[item.href])
+            ? { ...item, href: SUB_AGENT_HREF_OVERRIDES[item.href] }
+            : item)
+
+    const resolvedShopNavItems = isSubAgent
+        ? subShopNavItems.filter(item => !subAgentRecruitBlocked || item.label !== 'My Sub-Agents')
+        : shopNavItems
 
     // Get role config
     const userRole = isAdmin ? 'admin' : isSubAdmin ? 'sub-admin' : (dbUser?.role || 'customer') as keyof typeof roleConfig
@@ -306,7 +340,7 @@ export function DashboardSidebar() {
             >
                 {/* Logo Header */}
                 <div className="h-20 flex items-center justify-between px-6 border-b border-border/50">
-                    <Link href="/dashboard">
+                    <Link href={isSubAgent ? '/dashboard/sub' : '/dashboard'}>
                         <BrandLogo collapsed={isCollapsed} lightText={dbUser?.role === 'dealer'} />
                     </Link>
                     <Button
@@ -494,7 +528,7 @@ export function DashboardSidebar() {
                         </p>
                     )}
 
-                    {userNavItems
+                    {resolvedUserNavItems
                     .filter(item => !rcOnly || item.href === '/dashboard/results-checker')
                     .filter(item => (!hideMashup || item.label !== 'Special MTN Mashup') && (!hideExpressMtn || item.label !== 'EXPRESS MTN'))
                     .filter(item => isPageAccessible('/dashboard/data-packages') || !item.href.startsWith('/dashboard/data-packages'))
@@ -538,7 +572,7 @@ export function DashboardSidebar() {
                             )}
 
                             {isCollapsed ? (
-                                <Link href="/dashboard/shop" onClick={() => {
+                                <Link href={isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop'} onClick={() => {
                                     if (window.innerWidth < 1024) closeSidebar()
                                 }}>
                                     <div className={cn(
@@ -570,7 +604,7 @@ export function DashboardSidebar() {
                                             "ml-4 pl-4 border-l space-y-0.5 mt-0.5",
                                             dbUser?.role === 'dealer' ? "border-white/10" : "border-border/30"
                                         )}>
-                                            {shopNavItems.filter((item) => isPageAccessible(item.href)).map((item) => {
+                                            {resolvedShopNavItems.filter((item) => isPageAccessible(item.href)).map((item) => {
                                                 const isActive = isLinkActive(item.href)
                                                 return (
                                                     <Link key={item.href} href={item.href} onClick={() => {
