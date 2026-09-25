@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { checkPaymentStatus } from '@/lib/moolre-payment-service'
-import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
+import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { Redis } from '@upstash/redis'
 
 const redis = Redis.fromEnv()
@@ -122,6 +122,17 @@ export async function GET(request: NextRequest) {
                             })
                             results.walletCredited++
                             console.log(`[CronMoolre] ✅ USSD activation ${payment.reference} activated`)
+                        } else if (isSmsPaymentReference(payment.reference, metadata)) {
+                            // Customer SMS unlock / credit bundle
+                            results.walletChecked++
+                            const { processCompletedSmsPayment } = await import('@/lib/payments')
+                            await processCompletedSmsPayment(payment.reference, {
+                                reference: payment.reference,
+                                amount: paidAmountPesewas,
+                                metadata,
+                            }, metadata)
+                            results.walletCredited++
+                            console.log(`[CronMoolre] ✅ Customer SMS payment ${payment.reference} settled`)
                         } else if (
                             payment.reference.startsWith('dealer_sub_') ||
                             metadata.upgrade_type === 'dealer_subscription'

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { checkPaymentStatus } from '@/lib/hubtel-payment-service'
-import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
+import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { logStatusCheck } from '@/lib/hubtel-payment-log'
 import { claimHubtelStatusCheck, CRON_THROTTLE_KEYS } from '@/lib/hubtel-status-throttle'
 
@@ -179,6 +179,10 @@ export async function GET(request: NextRequest) {
                             const { processCompletedUssdActivation } = await import('@/lib/payments')
                             await processCompletedUssdActivation(payment.reference, mappedEventData)
                             console.log(`[CronHubtel] ✅ USSD activation ${payment.reference} activated`)
+                        } else if (isSmsPaymentReference(payment.reference, metadata)) {
+                            const { processCompletedSmsPayment } = await import('@/lib/payments')
+                            await processCompletedSmsPayment(payment.reference, mappedEventData, metadata)
+                            console.log(`[CronHubtel] ✅ Customer SMS payment ${payment.reference} settled`)
                         } else if (
                             payment.reference.startsWith('dealer_sub_') ||
                             metadata.upgrade_type === 'dealer_subscription'

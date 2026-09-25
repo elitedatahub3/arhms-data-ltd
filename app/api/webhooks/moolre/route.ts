@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
-import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
+import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { getShopMeta } from '@/lib/shop-meta-store'
 
 export async function POST(request: NextRequest) {
@@ -137,6 +137,14 @@ export async function POST(request: NextRequest) {
                     amount: paidAmountKobo,
                     metadata: metadata,
                 })
+            } else if (isSmsPaymentReference(externalref, metadata)) {
+                // Customer SMS unlock / credit bundle
+                const { processCompletedSmsPayment } = await import('@/lib/payments')
+                await processCompletedSmsPayment(externalref, {
+                    reference: externalref,
+                    amount: paidAmountKobo,
+                    metadata: metadata,
+                }, metadata)
             } else if (externalref.startsWith('dealer_sub_') || metadata.upgrade_type === 'dealer_subscription') {
                 // Dealer subscriptions
                 const mappedEventData = {

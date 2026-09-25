@@ -51,8 +51,14 @@ function normalizeGhanaPhoneForHubtel(phone: string): string | null {
 export async function sendHubtelSMS(options: {
     recipient: string
     message: string
+    /**
+     * Per-send sender ID. Customer SMS sends under the shop's own approved
+     * brand name; without this the message would silently go out as ARHMS and
+     * the shop owner would have paid for someone else's branding.
+     */
+    sender?: string
 }): Promise<HubtelSMSResult> {
-    const senderId = (process.env.HUBTEL_SMS_SENDER_ID || 'ARHMS').trim()
+    const senderId = (options.sender || process.env.HUBTEL_SMS_SENDER_ID || 'ARHMS').trim()
 
     const clientId = process.env.HUBTEL_SMS_CLIENT_ID || process.env.HUBTEL_CLIENT_ID
     const clientSecret = process.env.HUBTEL_SMS_CLIENT_SECRET || process.env.HUBTEL_CLIENT_SECRET

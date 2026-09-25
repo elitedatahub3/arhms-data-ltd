@@ -8,6 +8,7 @@ import {
     Banknote,
     Receipt,
     Crown,
+    MessageSquare,
     type LucideIcon,
 } from 'lucide-react'
 
@@ -28,6 +29,7 @@ export const shopNavItems: NavItem[] = [
     { href: '/dashboard/shop/orders', label: 'Orders', icon: ShoppingCart },
     { href: '/dashboard/shop/utilities', label: 'Bill Payments', icon: Receipt },
     { href: '/dashboard/shop/ussd', label: 'USSD Code', icon: Smartphone },
+    { href: '/dashboard/shop/sms', label: 'Customer SMS', icon: MessageSquare },
     { href: '/dashboard/shop/withdraw', label: 'Withdraw', icon: Banknote },
 ]
 
@@ -47,5 +49,6 @@ export const subShopNavItems: NavItem[] = [
     { href: '/dashboard/sub/pricing', label: 'Pricing', icon: Tag },
     { href: '/dashboard/sub/storefront-orders', label: 'Store Orders', icon: ClipboardList },
     { href: '/dashboard/sub/ussd', label: 'USSD Code', icon: Smartphone },
+    { href: '/dashboard/sub/sms', label: 'Customer SMS', icon: MessageSquare },
     { href: '/dashboard/sub/sub-agents', label: 'My Sub-Agents', icon: Crown },
 ]

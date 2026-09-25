@@ -112,6 +112,7 @@ const adminNavItems = [
     { href: '/admin/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/admin/announcements', label: 'Announce', icon: Bell },
     { href: '/admin/sms-broadcast', label: 'SMS', icon: MessageSquare },
+    { href: '/admin/sms-senders', label: 'Customer SMS', icon: MessageSquare },
     { href: '/admin/email-broadcast', label: 'Email', icon: Send },
     { href: '/admin/finance', label: 'Finance', icon: Banknote },
     { href: '/admin/hubtel-payments', label: 'Hubtel Payments', icon: Banknote },

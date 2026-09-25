@@ -21,7 +21,12 @@ interface SMSResult {
 
 const MOOLRE_URL = 'https://api.moolre.com/open/sms/send'
 
-function normalizeGhanaPhone(phone: string): string | null {
+/**
+ * Exported for Customer SMS: recipient lists are stored and deduped in the
+ * 233XXXXXXXXX form this produces, so importers and the send route have to
+ * normalise exactly the way the providers do.
+ */
+export function normalizeGhanaPhone(phone: string): string | null {
     let p = phone.replace(/\s+/g, '').replace(/-/g, '').replace(/\+/g, '')
     if (p.startsWith('0') && p.length === 10) p = '233' + p.slice(1)
     if (!p.startsWith('233') || p.length !== 12) return null
@@ -333,6 +338,20 @@ export async function sendShopProfileRejectedSMS(phoneNumber: string, firstName:
     return sendSMS({
         recipient: phoneNumber,
         message: `${firstName} Your shop application was not approved. Reason: ${reason}. Log in to update your profile. ARHMSgh.com\n\nARHMSGh`,
+    })
+}
+
+export async function sendSenderIdApprovedSMS(phoneNumber: string, sender: string) {
+    return sendSMS({
+        recipient: phoneNumber,
+        message: `Good news! Your sender ID "${sender}" has been approved by the networks. Your customer SMS will now arrive from ${sender}. ARHMSgh.com\n\nARHMSGh`,
+    })
+}
+
+export async function sendSenderIdRejectedSMS(phoneNumber: string, sender: string, reason: string) {
+    return sendSMS({
+        recipient: phoneNumber,
+        message: `Your sender ID "${sender}" was not approved. Reason: ${reason}. Log in to request a different name. ARHMSgh.com\n\nARHMSGh`,
     })
 }
 

@@ -18,7 +18,7 @@ import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSA
 import { createServerClient } from '@/lib/supabase'
 import { checkPaymentStatus } from '@/lib/payswitch-payment-service'
 import { claimHubtelStatusCheck, PAYSWITCH_CRON_THROTTLE_KEYS } from '@/lib/hubtel-status-throttle'
-import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
+import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { Redis } from '@upstash/redis'
 
 const redis = Redis.fromEnv()
@@ -141,6 +141,11 @@ export async function GET(request: NextRequest) {
                         await processCompletedUssdActivation(payment.reference, eventData)
                         results.walletCredited++
                         console.log(`[CronPayswitch] USSD activation ${payment.reference} activated`)
+                    } else if (isSmsPaymentReference(payment.reference, metadata)) {
+                        const { processCompletedSmsPayment } = await import('@/lib/payments')
+                        await processCompletedSmsPayment(payment.reference, eventData, metadata)
+                        results.walletCredited++
+                        console.log(`[CronPayswitch] Customer SMS payment ${payment.reference} settled`)
                     } else if (payment.reference.startsWith('dealer_sub_') || metadata.upgrade_type === 'dealer_subscription') {
                         await processCompletedDealerSubscription(payment.reference, eventData)
                         results.walletCredited++

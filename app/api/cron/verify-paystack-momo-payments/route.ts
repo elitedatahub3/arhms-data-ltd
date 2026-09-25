@@ -39,6 +39,7 @@ import {
     processCompletedWalletPayment,
     processCompletedUpgradePayment,
     processCompletedDealerSubscription,
+    isSmsPaymentReference,
 } from '@/lib/payments'
 
 const redis = Redis.fromEnv()
@@ -186,6 +187,9 @@ export async function GET(request: NextRequest) {
                     ) {
                         const { processCompletedUssdActivation } = await import('@/lib/payments')
                         await processCompletedUssdActivation(payment.reference, mappedEventData)
+                    } else if (isSmsPaymentReference(payment.reference, metadata)) {
+                        const { processCompletedSmsPayment } = await import('@/lib/payments')
+                        await processCompletedSmsPayment(payment.reference, mappedEventData, metadata)
                     } else if (
                         payment.reference.startsWith('dealer_sub_')
                         || metadata.upgrade_type === 'dealer_subscription'
