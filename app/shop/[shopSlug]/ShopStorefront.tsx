@@ -6,13 +6,14 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
-import { resolveProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
+import StorefrontUtilities from '@/components/shop/storefront-utilities'
+import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
 import {
     Phone, Mail, MessageCircle, ShoppingCart, Loader2,
     CheckCircle2, AlertCircle, X, Search, Zap, Smartphone, ChevronDown, Check, Menu, Bell,
     History, TrendingUp, Coins, Calendar, CalendarRange, RefreshCw, Info, Clock, Copy, ArrowRight, AlertTriangle, Users, Target, Sparkles, Download, Share2, GraduationCap, Store, BadgeCheck
-} from 'lucide-react'
+, Receipt } from 'lucide-react'
 import {
     ID_TYPES, REGIONS, AFA_REQUIRED_FIELDS, MIN_AFA_AGE,
     validateId, maskIdNumber, ageFromDob, maxDobInputValue,
@@ -36,6 +37,7 @@ import { Label } from '@/components/ui/label'
 import { MtnRegistrationDialog } from '@/components/dashboard/mtn-registration-dialog'
 import { AnnouncementModal } from '@/components/announcements/announcement-modal'
 import type { AnnouncementTone } from '@/lib/announcement-tones'
+import { isUssdEnabled } from '@/lib/ussd-availability'
 
 const ShopPwaInstallPrompt = dynamic(() => import('@/components/ShopPwaInstallPrompt'), { ssr: false })
 
@@ -92,6 +94,7 @@ interface ShopData {
     banner_pos_x?: number
     banner_pos_y?: number
     banner_zoom?: number
+    utilities_enabled?: boolean
     ussd_code?: string | null
     ussd_status?: string | null
 }
@@ -194,7 +197,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     
     // Global State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-    const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa'>('data')
+    const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
     const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
     const [loading, setLoading] = useState(false)
     const [pageLoading, setPageLoading] = useState(true)
@@ -208,12 +211,15 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     const [otpRequired, setOtpRequired] = useState(false)
 
     // Set when the beneficiary's MTN number isn't registered yet. Nothing has been
-    // charged at this point — the guest either accepts the wait or backs out.
+    // charged at this point, and on the storefront there is no way past it — the guest
+    // either enters a different number or leaves. See /api/shop/initialize for why the
+    // storefront refuses where the dashboard offers to hold the order.
     const [registrationPrompt, setRegistrationPrompt] = useState<{ numbers: string[] } | null>(null)
-    const [isConfirmingRegistration, setIsConfirmingRegistration] = useState(false)
+    /** Focused when the guest picks "Try another number", so the fix is one tap away. */
+    const beneficiaryRef = useRef<HTMLInputElement>(null)
     const [otpCode, setOtpCode] = useState('')
     const [otpReference, setOtpReference] = useState<string | null>(null)
-    const [otpOrderType, setOtpOrderType] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa'>('data')
+    const [otpOrderType, setOtpOrderType] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
 
     // Results Checker State
     const [rcTypes, setRcTypes] = useState<any[]>([])
@@ -266,17 +272,17 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     const isGlobalAfaEnabled = adminSettings['storefront_afa_enabled'] === 'true'
 
     // USSD short code — shown only once this shop has actually bought one, and
-    // only while the admin leaves the card switched on globally.
+    // only while the admin leaves the card switched on globally. The master
+    // switch is checked first: with USSD off the code does not answer, so
+    // advertising it would just send customers to a dead line.
     const ussdDialCode = adminSettings['ussd_dial_code'] || ''
     const isUssdCardEnabled =
+        isUssdEnabled(adminSettings) &&
         adminSettings['storefront_ussd_card_enabled'] !== 'false' &&
         shop.ussd_status === 'active' &&
         !!shop.ussd_code &&
         !!ussdDialCode
 
-    // Marketplace ad — defaults ON unless an admin explicitly disables it
-    const isMarketplaceAdEnabled = adminSettings['storefront_marketplace_ad_enabled'] !== 'false'
-    const marketplaceUrl = process.env.NEXT_PUBLIC_MARKETPLACE_URL || 'https://marketplace.arhmsgh.com'
     
     const airtimeNetworks = [
         { id: 'MTN', fee: shop.airtime_fee_mtn || 0, enabled: adminSettings['airtime_enabled_mtn'] !== 'false' },
@@ -297,9 +303,28 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
 
     const [webPaymentProvider, setWebPaymentProvider] = useState<PaymentProvider>('moolre')
 
+    /**
+     * The gateway that will actually collect for a data purchase.
+     *
+     * Read from active_payment_provider_shop, NOT active_payment_provider_web, because
+     * /api/shop/initialize resolves the shop scope and ignores the `provider` the
+     * browser sends. Reading the web key here would let the sheet ask for a Mobile
+     * Money number that the real gateway never uses — or omit one it needs.
+     */
+    const [shopPaymentProvider, setShopPaymentProvider] = useState<PaymentProvider>(
+        () => resolveProviderForScope(adminSettings['active_payment_provider_shop'], 'shop')
+    )
+
+    /**
+     * Paystack redirects to its own hosted checkout, where the payer enters their
+     * details — so asking for them here is a dead end the buyer has to fill in twice.
+     * Every other gateway pushes an approval prompt and genuinely needs the number.
+     */
+    const needsMomoDetails = isMomoPromptProvider(shopPaymentProvider)
+
     useEffect(() => {
         // Bypass ISR cache to get the very latest toggle status
-        fetch('/api/admin-settings?keys=special_mtn_mashup_hidden,express_mtn_hidden,standard_mtn_hidden,active_payment_provider_web', { cache: 'no-store' })
+        fetch('/api/admin-settings?keys=special_mtn_mashup_hidden,express_mtn_hidden,standard_mtn_hidden,active_payment_provider_web,active_payment_provider_shop', { cache: 'no-store' })
             .then(res => res.json())
             .then(data => {
                 if (data && typeof data.special_mtn_mashup_hidden !== 'undefined') {
@@ -313,6 +338,9 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 }
                 if (data && data.active_payment_provider_web) {
                     setWebPaymentProvider(resolveProvider(data.active_payment_provider_web))
+                }
+                if (data && data.active_payment_provider_shop) {
+                    setShopPaymentProvider(resolveProviderForScope(data.active_payment_provider_shop, 'shop'))
                 }
             })
             .catch(() => {})
@@ -342,14 +370,30 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
         try { sessionStorage.setItem('shop_sticky_slug', shop.shop_slug) } catch (_) { }
     }, [shop.shop_slug])
 
-    // Sticky header scroll listener
+    // Sticky header scroll listener.
+    // The hero's height is measured when it changes, not on every scroll event:
+    // reading offsetHeight inside the handler forced a synchronous layout on each
+    // scroll frame, which is what makes a long storefront judder on cheap phones.
     useEffect(() => {
+        const heroHeight = { current: heroRef.current?.offsetHeight || 200 }
         const handleScroll = () => {
-            const heroHeight = heroRef.current?.offsetHeight || 200
-            setScrolled(window.scrollY > heroHeight - 60)
+            setScrolled(window.scrollY > heroHeight.current - 60)
         }
+
+        let observer: ResizeObserver | undefined
+        if (heroRef.current && typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(([entry]) => {
+                heroHeight.current = (entry.target as HTMLElement).offsetHeight || 200
+                handleScroll()
+            })
+            observer.observe(heroRef.current)
+        }
+
         window.addEventListener('scroll', handleScroll, { passive: true })
-        return () => window.removeEventListener('scroll', handleScroll)
+        return () => {
+            observer?.disconnect()
+            window.removeEventListener('scroll', handleScroll)
+        }
     }, [])
 
     useEffect(() => {
@@ -549,7 +593,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             : 'Too many payment attempts right now. Please wait a moment and try again.'
     }
 
-    const handleBuyData = async (opts?: { acknowledgeRegistration?: boolean }) => {
+    const handleBuyData = async () => {
         if (!selectedPackage) { toast.error('Select a package first'); return }
         if (!phone.trim()) { toast.error('Enter the beneficiary number'); return }
 
@@ -559,13 +603,18 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             return
         }
 
+        // Only demanded for prompt-based gateways. Under Paystack these fields are not
+        // even rendered, so validating them would block the sale on something the buyer
+        // was never shown — and the server defaults payer_phone to the beneficiary.
         const cleanPayPhone = effectivePayPhone
-        if (!cleanPayPhone) { toast.error('Enter the Mobile Money number to charge'); return }
-        if (!/^(0\d{9}|233\d{9})$/.test(cleanPayPhone)) {
-            toast.error('Invalid Mobile Money number. Use format: 0XXXXXXXXX')
-            return
+        if (needsMomoDetails) {
+            if (!cleanPayPhone) { toast.error('Enter the Mobile Money number to charge'); return }
+            if (!/^(0\d{9}|233\d{9})$/.test(cleanPayPhone)) {
+                toast.error('Invalid Mobile Money number. Use format: 0XXXXXXXXX')
+                return
+            }
+            if (!payNetwork) { toast.error('Select the Mobile Money network to pay from'); return }
         }
-        if (!payNetwork) { toast.error('Select the Mobile Money network to pay from'); return }
 
         setLoading(true)
         try {
@@ -576,11 +625,9 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     shopSlug: shop.shop_slug,
                     packageId: selectedPackage.id,
                     guestPhone: cleanPhone,
-                    payerPhone: cleanPayPhone,
-                    payerNetwork: payNetwork,
+                    ...(needsMomoDetails ? { payerPhone: cleanPayPhone, payerNetwork: payNetwork } : {}),
                     guestEmail: email.trim() || undefined,
                     provider: webPaymentProvider,
-                    ...(opts?.acknowledgeRegistration ? { acknowledgeRegistration: true } : {}),
                 }),
             })
             const data = await res.json()
@@ -615,12 +662,20 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 return
             }
 
-            // Moolre: show OTP modal
+            // An OTP step only when the gateway asked for one. Unconditional was fine
+            // while Moolre always wanted a code; Paystack asks only on Telecel and
+            // AirtelTigo, so on MTN the modal would wait for a code that never comes
+            // while the prompt sits unanswered on the handset.
             try { localStorage.setItem('shop_last_phone', cleanPhone) } catch (_) { }
-            setOtpReference(data.reference)
-            setOtpOrderType('data')
-            setOtpRequired(true)
-            setLoading(false)
+            if (data.otpRequired) {
+                setOtpReference(data.reference)
+                setOtpOrderType('data')
+                setOtpRequired(true)
+                setLoading(false)
+            } else {
+                toast.success(data.message || 'Payment prompt sent! Please approve on your phone.')
+                setPollingRef(data.reference)
+            }
         } catch (err) {
             toast.error('Network error. Please try again.')
             setLoading(false)
@@ -677,8 +732,12 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 return
             }
 
-            // Moolre: show OTP modal
             try { localStorage.setItem('shop_last_phone', cleanPhone) } catch (_) { }
+            if (!data.otpRequired) {
+                toast.success(data.message || 'Payment prompt sent! Please approve on your phone.')
+                setPollingRef(data.reference)
+                return
+            }
             setOtpReference(data.reference)
             setOtpOrderType('airtime')
             setOtpRequired(true)
@@ -772,6 +831,12 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             }
 
             try { localStorage.setItem('shop_last_phone', cleanPhone) } catch (_) { }
+            if (!data.otpRequired) {
+                toast.success(data.message || 'Payment prompt sent! Please approve on your phone.')
+                setPollingRef(data.reference)
+                setLoading(false)
+                return
+            }
             setOtpReference(data.reference)
             setOtpOrderType('mashup')
             setOtpRequired(true)
@@ -1109,15 +1174,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     >
                         <Info className="w-4 h-4" /> About Shop
                     </a>
-                    {isMarketplaceAdEnabled && (
-                        <a
-                            href={marketplaceUrl}
-                            target="_blank" rel="noopener noreferrer"
-                            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold text-white/80 hover:bg-white/10 hover:text-white transition-colors"
-                        >
-                            <Store className="w-4 h-4 text-[#FFB800]" /> Buy &amp; Sell Marketplace
-                        </a>
-                    )}
                     {shop.whatsapp_number && (
                         <a
                             href={`https://wa.me/${shop.whatsapp_number}?text=Hello, I need help with ${shop.shop_name}`}
@@ -1199,28 +1255,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             </div>
 
             <div className="max-w-2xl mx-auto px-6 pb-40 -mt-6 relative z-20">
-                {/* Marketplace Ad */}
-                {isMarketplaceAdEnabled && (
-                    <a
-                        href={marketplaceUrl}
-                        target="_blank" rel="noopener noreferrer"
-                        className="group relative flex items-center gap-4 mb-6 w-full rounded-2xl border border-amber-300/40 dark:border-amber-500/20 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 p-4 shadow-sm overflow-hidden transition-transform hover:scale-[1.01] active:scale-[0.99]"
-                    >
-                        <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-white/10 blur-xl" aria-hidden="true" />
-                        <div className="shrink-0 w-12 h-12 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center border border-white/20">
-                            <Store className="w-6 h-6 text-white" />
-                        </div>
-                        <div className="flex-1 min-w-0 text-left">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-white/80">Marketplace</p>
-                            <p className="text-sm sm:text-base font-black text-white leading-tight">Visit our Marketplace to Buy &amp; Sell</p>
-                            <p className="text-[11px] text-white/85 leading-tight mt-0.5">Phones, fashion, electronics &amp; more</p>
-                        </div>
-                        <div className="shrink-0 flex items-center gap-1 rounded-full bg-white/95 text-gray-900 text-xs font-black px-3 py-2 shadow-sm">
-                            Explore <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-                        </div>
-                    </a>
-                )}
-
                 {/* Need Help Section */}
                 <div className={cn(
                     "grid gap-3 mb-8 w-full",
@@ -1389,6 +1423,24 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 <BadgeCheck className={cn("w-6 h-6", activeTab === 'afa' ? "text-white" : "text-gray-400")} />
                             </div>
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">AFA REGISTRATION</span>
+                        </button>
+                    )}
+
+                    {/* PAY BILLS Button — only when the owner has switched it on */}
+                    {shop.utilities_enabled && (
+                        <button
+                            onClick={() => { setActiveTab('utilities'); setIsAirtimeOpen(false) }}
+                            className={cn(
+                                "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
+                                activeTab === 'utilities'
+                                    ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400"
+                                    : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
+                            )}
+                        >
+                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'utilities' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
+                                <Receipt className={cn("w-6 h-6", activeTab === 'utilities' ? "text-white" : "text-gray-400")} />
+                            </div>
+                            <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">PAY BILLS</span>
                         </button>
                     )}
                 </div>
@@ -1617,11 +1669,19 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     </div>
 
                                     <button
-                                        onClick={handleBuyAirtime} disabled={loading || !detectedNetwork || parseFloat(airtimeAmount || '0') <= 0}
+                                        onClick={handleBuyAirtime} disabled={loading || !detectedNetwork || parseFloat(airtimeAmount || '0') <= 0 || !useExact}
                                         className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-base uppercase tracking-widest shadow-lg flex justify-center items-center gap-3 transition-transform active:scale-95 disabled:opacity-50 disabled:active:scale-100"
                                     >
                                         {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> {pollingRef ? 'Waiting for Approval...' : 'Processing...'}</> : <><Smartphone className="w-5 h-5"/> Recharge Airtime</>}
                                     </button>
+                                    {/* "Pay separately" is required, not optional — Standard mode silently
+                                        shorts the recipient by the fee amount, so checkout stays blocked
+                                        until the toggle above is on. */}
+                                    {!useExact && detectedNetwork && parseFloat(airtimeAmount || '0') > 0 && (
+                                        <p className="text-center text-[10px] text-amber-600 dark:text-amber-500 font-bold -mt-2">
+                                            Turn on "Pay processing fee separately" above to continue
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -1748,6 +1808,18 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 <p className="text-[10px] text-center text-muted-foreground">Direct MoMo Prompt</p>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {/* ── Utilities (Pay Bills) Tab Content ── */}
+                {shop.utilities_enabled && activeTab === 'utilities' && (
+                    <div className="bg-white dark:bg-[#151c2c] rounded-2xl border border-gray-100 dark:border-gray-800 p-4 sm:p-6">
+                        <h2 className="text-lg font-black mb-1">Pay a bill</h2>
+                        <p className="text-xs text-gray-500 mb-4">
+                            DSTV, GOtv, StarTimes, ECG and Ghana Water. Verify the account first —
+                            bill payments cannot be reversed.
+                        </p>
+                        <StorefrontUtilities shopSlug={shop.shop_slug} brandColor={shop.brand_color} />
                     </div>
                 )}
 
@@ -1889,7 +1961,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                             there is no gateway fee to disclose here — afa/initialize charges
                             the selling price and nothing more — so the line states the fee as
                             the whole of it rather than hinting at an extra that never lands. */}
-                        <div className="sticky bottom-4 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm shadow-e3 px-4 pt-3 pb-4 space-y-3">
+                        <div className="sticky bottom-4 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 shadow-e3 px-4 pt-3 pb-4 space-y-3">
                             <dl className="space-y-1.5">
                                 <div className="flex items-center justify-between text-sm">
                                     <dt className="font-semibold text-gray-500 dark:text-gray-400">Registration fee</dt>
@@ -1997,7 +2069,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 <button
                                     key={pkg.id} onClick={() => { setErrorMsg(null); setSelectedPackage(pkg) }}
                                     className={cn(
-                                        'relative rounded-[24px] overflow-hidden transition-all duration-200 active:scale-95 text-left flex flex-col',
+                                        'relative rounded-[24px] overflow-hidden transition-[transform,box-shadow,opacity] duration-200 active:scale-95 text-left flex flex-col',
                                         cardStyle.bg,
                                         isSelected ? 'ring-4 ring-offset-2 ring-[var(--brand-color)] scale-[1.02] shadow-xl' : 'shadow-md hover:shadow-lg hover:-translate-y-1 opacity-95 hover:opacity-100'
                                     )}
@@ -2005,7 +2077,9 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     {/* Top Section */}
                                     <div className="p-4 relative flex-1 flex flex-col items-center justify-center min-h-[140px]">
                                         {/* Top Left Logo Circle */}
-                                        <div className={cn("absolute top-3 left-3 w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-sm", cardStyle.iconBg)}>
+                                        {/* No backdrop-blur: it sits on a solid card, so the blur
+                                            was invisible yet cost a GPU pass per card while scrolling. */}
+                                        <div className={cn("absolute top-3 left-3 w-10 h-10 rounded-full flex items-center justify-center", cardStyle.iconBg)}>
                                             <div className="w-6 h-6 rounded-full flex items-center justify-center bg-transparent">
                                                 <NetworkLogo id={pkg.network} />
                                             </div>
@@ -2054,16 +2128,17 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     { id: 'AT', label: 'AirtelTigo', dot: 'bg-[#2463eb]' },
                 ]
                 return (
-                    // Hidden — not unmounted — while the registration prompt is up. This
-                    // sheet sits at z-[70], above the Radix dialog's z-50 overlay, so
-                    // leaving it visible buries the prompt. Keeping it mounted preserves
-                    // the entered numbers and payment choice for a Cancel.
+                    // Hidden — not unmounted — while the registration prompt or the OTP
+                    // dialog is up. This sheet sits at z-[70], above the Radix dialog's
+                    // z-50 overlay, so leaving it visible buries either one. Keeping it
+                    // mounted preserves the entered numbers and payment choice for a
+                    // Cancel.
                     <div
                         className={cn(
                             "fixed inset-0 z-[70] flex items-end justify-center",
-                            registrationPrompt && "hidden"
+                            (registrationPrompt || otpRequired) && "hidden"
                         )}
-                        aria-hidden={!!registrationPrompt}
+                        aria-hidden={!!registrationPrompt || otpRequired}
                     >
                         <div
                             className="absolute inset-0 bg-black/50 backdrop-blur-[2px] animate-in fade-in duration-200"
@@ -2106,6 +2181,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                         Beneficiary number <span className="font-semibold text-gray-400">(gets the data)</span>
                                     </Label>
                                     <input
+                                        ref={beneficiaryRef}
                                         type="tel" inputMode="numeric" value={phone}
                                         onChange={(e) => setPhone(e.target.value)}
                                         placeholder="0241234567"
@@ -2113,44 +2189,51 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     />
                                 </div>
 
-                                {/* Payer — typed on its own. Any number on any network may pay, so this
-                                    is never locked to the beneficiary's number. */}
-                                <div className="space-y-2">
-                                    <Label className={SHEET_LABEL_CLASS}>
-                                        Mobile Money number <span className="font-semibold text-gray-400">(to pay)</span>
-                                    </Label>
-                                    <input
-                                        type="tel" inputMode="numeric"
-                                        value={payPhone}
-                                        onChange={(e) => setPayPhone(e.target.value)}
-                                        placeholder="0241234567"
-                                        className={SHEET_FIELD_CLASS}
-                                    />
-                                </div>
+                                {/* Payer details — only for gateways that push a prompt to a handset.
+                                    On Paystack the buyer enters all of this on Paystack's own
+                                    checkout page, so showing it here asks for the same details
+                                    twice and gives the second copy no effect. */}
+                                {needsMomoDetails && (
+                                    <>
+                                        {/* Payer — typed on its own. Any number on any network may pay, so this
+                                            is never locked to the beneficiary's number. */}
+                                        <div className="space-y-2">
+                                            <Label className={SHEET_LABEL_CLASS}>
+                                                Mobile Money number <span className="font-semibold text-gray-400">(to pay)</span>
+                                            </Label>
+                                            <input
+                                                type="tel" inputMode="numeric"
+                                                value={payPhone}
+                                                onChange={(e) => setPayPhone(e.target.value)}
+                                                placeholder="0241234567"
+                                                className={SHEET_FIELD_CLASS}
+                                            />
+                                        </div>
 
-
-                                {/* Payment network */}
-                                <div className="space-y-2">
-                                    <Label className={SHEET_LABEL_CLASS}>Network</Label>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {payNetworks.map(({ id, label, dot }) => (
-                                            <button
-                                                key={id}
-                                                type="button"
-                                                onClick={() => { setPayNetwork(id); setPayNetworkManual(true) }}
-                                                className={cn(
-                                                    'flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-bold transition-all',
-                                                    payNetwork === id
-                                                        ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
-                                                        : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
-                                                )}
-                                            >
-                                                <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', dot)} />
-                                                {label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+                                        {/* Payment network */}
+                                        <div className="space-y-2">
+                                            <Label className={SHEET_LABEL_CLASS}>Network</Label>
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {payNetworks.map(({ id, label, dot }) => (
+                                                    <button
+                                                        key={id}
+                                                        type="button"
+                                                        onClick={() => { setPayNetwork(id); setPayNetworkManual(true) }}
+                                                        className={cn(
+                                                            'flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-bold transition-all',
+                                                            payNetwork === id
+                                                                ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                                                                : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                                                        )}
+                                                    >
+                                                        <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', dot)} />
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
 
                                 {/* Email */}
                                 <div className="space-y-2">
@@ -2180,11 +2263,13 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 payer commits, then discovers the amount differs on their
                                 handset. It now sits above the CTA as a labelled line.
 
-                                We deliberately do NOT show a computed total. The fee percent
-                                lives in HUBTEL_FEE_PERCENT on the server and is never sent to
-                                the browser, so any total rendered here would be a guess — and
-                                a wrong number on a payment screen is worse than no number. */}
-                            <div className="sticky bottom-0 border-t border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm px-5 pt-3 pb-4 safe-b space-y-3">
+                                We deliberately do NOT show a computed total. A storefront's fee
+                                depends on the shop's own gateway configuration, which this page
+                                does not carry, so any total rendered here would be a guess — and
+                                a wrong number on a payment screen is worse than no number. The
+                                real figure comes from the gateway: the handset prompt for the
+                                prompt-based providers, the checkout page for Paystack. */}
+                            <div className="sticky bottom-0 border-t border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 px-5 pt-3 pb-4 safe-b space-y-3">
                                 <dl className="space-y-1.5">
                                     <div className="flex items-center justify-between text-sm">
                                         <dt className="font-semibold text-gray-500 dark:text-gray-400">Bundle</dt>
@@ -2195,7 +2280,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     <div className="flex items-center justify-between text-sm">
                                         <dt className="font-semibold text-gray-500 dark:text-gray-400">Payment fee</dt>
                                         <dd className="font-semibold text-gray-500 dark:text-gray-400">
-                                            added by Mobile Money
+                                            {needsMomoDetails ? 'added by Mobile Money' : 'shown at checkout'}
                                         </dd>
                                     </div>
                                 </dl>
@@ -2206,11 +2291,15 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 >
                                     {loading
                                         ? <><Loader2 className="w-5 h-5 animate-spin" /> {pollingRef ? 'Waiting for approval...' : 'Processing...'}</>
-                                        : <><Smartphone className="w-5 h-5" /> Pay {formatCurrency(selectedPackage.selling_price)}</>}
+                                        : needsMomoDetails
+                                            ? <><Smartphone className="w-5 h-5" /> Pay {formatCurrency(selectedPackage.selling_price)}</>
+                                            : <><Smartphone className="w-5 h-5" /> Proceed to payment</>}
                                 </button>
 
                                 <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
-                                    Your phone will show the exact total to approve.
+                                    {needsMomoDetails
+                                        ? 'Your phone will show the exact total to approve.'
+                                        : 'You’ll choose how to pay and see the exact total on the next page.'}
                                 </p>
                             </div>
                         </div>
@@ -2366,7 +2455,9 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
 
             {/* Moolre per-transaction OTP */}
             <Dialog open={otpRequired} onOpenChange={(open) => !open && setOtpRequired(false)}>
-                <DialogContent className="sm:max-w-md">
+                {/* z-[110] because this page carries overlays at z-[60], z-[70] and
+                    z-[100]; the Radix default of z-50 buries the code entry. */}
+                <DialogContent className="sm:max-w-md z-[110]">
                     <DialogHeader>
                         <DialogTitle>OTP Verification</DialogTitle>
                         <DialogDescription>
@@ -2487,21 +2578,20 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 </div>
             </div>
 
-            {/* Beneficiary's MTN number is not registered — asked before any charge. */}
+            {/* Beneficiary's MTN number is not registered — refused before any charge.
+                No confirm handler: on the storefront there is nothing to agree to. */}
             <MtnRegistrationDialog
                 open={!!registrationPrompt}
                 numbers={registrationPrompt?.numbers}
-                isSubmitting={isConfirmingRegistration}
-                onConfirm={async () => {
-                    setIsConfirmingRegistration(true)
-                    try {
-                        setRegistrationPrompt(null)
-                        await handleBuyData({ acknowledgeRegistration: true })
-                    } finally {
-                        setIsConfirmingRegistration(false)
-                    }
-                }}
                 onCancel={() => setRegistrationPrompt(null)}
+                onCloseAutoFocus={(event) => {
+                    // The purchase sheet is still open behind the dialog, so put the
+                    // cursor where the guest has to act. Done here rather than in
+                    // onCancel because Radix restores focus to the Pay button on close,
+                    // and that restore would run last and undo it.
+                    event.preventDefault()
+                    beneficiaryRef.current?.focus()
+                }}
             />
         </div>
     )

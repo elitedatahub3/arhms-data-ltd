@@ -27,6 +27,8 @@ export default function AdminSettingsPage() {
     // Form states
     const [paystackFee, setPaystackFee] = useState('1.95')
     const [agentPaystackFee, setAgentPaystackFee] = useState('1.95')
+    const [paystackMomoFee, setPaystackMomoFee] = useState('1.95')
+    const [agentPaystackMomoFee, setAgentPaystackMomoFee] = useState('1.95')
     const [mtnAdjustment, setMtnAdjustment] = useState('0')
     const [agentUpgradePrice, setAgentUpgradePrice] = useState('100')
     const [afaPriceCustomer, setAfaPriceCustomer] = useState('15')
@@ -47,7 +49,9 @@ export default function AdminSettingsPage() {
     const [smsProvider, setSmsProvider] = useState<'moolre' | 'hubtel'>('moolre')
     const [webPaymentProvider, setWebPaymentProvider] = useState<PaymentProvider>('moolre')
     const [shopPaymentProvider, setShopPaymentProvider] = useState<PaymentProvider>('moolre')
-    const [classifiedsPaymentProvider, setClassifiedsPaymentProvider] = useState<PaymentProvider>('moolre')
+    // Seeded with the USSD scope's own fallback, not Moolre — Moolre has no USSD
+    // branch, so showing it here would offer a gateway that cannot take the money.
+    const [ussdPaymentProvider, setUssdPaymentProvider] = useState<PaymentProvider>('paystack_momo')
     const [rcWalletPaymentEnabled, setRcWalletPaymentEnabled] = useState(true)
     // Referral programme
     const [referralEnabled, setReferralEnabled] = useState(false)
@@ -57,6 +61,9 @@ export default function AdminSettingsPage() {
     const [referralMaxClaimsPerDay, setReferralMaxClaimsPerDay] = useState('25')
     const [referralClawbackOnRefund, setReferralClawbackOnRefund] = useState(true)
     const [skipGoogleOauthOtp, setSkipGoogleOauthOtp] = useState(false)
+    // Master switch. Starts closed to match isUssdEnabled(): if the row is
+    // missing the service is off, and the toggle should say so.
+    const [ussdEnabled, setUssdEnabled] = useState(false)
     const [ussdDialCode, setUssdDialCode] = useState('')
     const [ussdActivationPriceCustomer, setUssdActivationPriceCustomer] = useState('50')
     const [ussdActivationPriceAgent, setUssdActivationPriceAgent] = useState('40')
@@ -80,7 +87,6 @@ export default function AdminSettingsPage() {
     const [hideExpressMtn, setHideExpressMtn] = useState(false)
     const [hideStandardMtn, setHideStandardMtn] = useState(false)
     const [resultsCheckerOnly, setResultsCheckerOnly] = useState(false)
-    const [storefrontMarketplaceAd, setStorefrontMarketplaceAd] = useState(true)
 
     useEffect(() => {
         fetchSettings()
@@ -104,12 +110,18 @@ export default function AdminSettingsPage() {
             // Initialize form values
             setPaystackFee(settingsMap.paystack_fee_percent || '1.95')
             setAgentPaystackFee(settingsMap.agent_paystack_fee_percent || '1.95')
+            // Fall back to the hosted-checkout figure rather than to 1.95, so the box
+            // shows what the MoMo rail would actually charge today — lib/gateway-fees
+            // resolves it the same way when the momo key is unset.
+            setPaystackMomoFee(settingsMap.paystack_momo_fee_percent || settingsMap.paystack_fee_percent || '1.95')
+            setAgentPaystackMomoFee(settingsMap.agent_paystack_momo_fee_percent || settingsMap.agent_paystack_fee_percent || '1.95')
             setMtnAdjustment(settingsMap.mtn_price_adjustment || '0')
             setAgentUpgradePrice(settingsMap.agent_upgrade_price || '100')
             setAfaPriceCustomer(settingsMap.afa_price_customer || '15')
             setAfaPriceAgent(settingsMap.afa_price_agent || '15')
             setAfaPriceDealer(settingsMap.afa_price_dealer || '15')
             setStorefrontAfaEnabled(settingsMap.storefront_afa_enabled === 'true')
+            setUssdEnabled(settingsMap.ussd_enabled === 'true')
             setUssdDialCode(settingsMap.ussd_dial_code || '')
             setUssdActivationPriceCustomer(settingsMap.ussd_activation_price_customer || '50')
             setUssdActivationPriceAgent(settingsMap.ussd_activation_price_agent || '40')
@@ -130,7 +142,7 @@ export default function AdminSettingsPage() {
             setSmsProvider(settingsMap.active_sms_provider === 'hubtel' ? 'hubtel' : 'moolre')
             setWebPaymentProvider(resolveProviderForScope(settingsMap.active_payment_provider_web, 'web'))
             setShopPaymentProvider(resolveProviderForScope(settingsMap.active_payment_provider_shop, 'shop'))
-            setClassifiedsPaymentProvider(resolveProviderForScope(settingsMap.active_payment_provider_classifieds, 'classifieds'))
+            setUssdPaymentProvider(resolveProviderForScope(settingsMap.active_payment_provider_ussd, 'ussd'))
             setSkipGoogleOauthOtp(settingsMap.skip_google_oauth_otp === 'true')
             setRcWalletPaymentEnabled(settingsMap.rc_wallet_payment_enabled !== 'false')
 
@@ -159,7 +171,6 @@ export default function AdminSettingsPage() {
             setHideExpressMtn(settingsMap.express_mtn_hidden === 'true')
             setHideStandardMtn(settingsMap.standard_mtn_hidden === 'true')
             setResultsCheckerOnly(settingsMap.results_checker_only_mode === 'true')
-            setStorefrontMarketplaceAd(settingsMap.storefront_marketplace_ad_enabled !== 'false')
 
         } catch (error) {
             console.error('Error fetching settings:', error)
@@ -181,6 +192,8 @@ export default function AdminSettingsPage() {
                 { key: 'referral_clawback_on_refund', value: String(referralClawbackOnRefund) },
                 { key: 'paystack_fee_percent', value: paystackFee },
                 { key: 'agent_paystack_fee_percent', value: agentPaystackFee },
+                { key: 'paystack_momo_fee_percent', value: paystackMomoFee },
+                { key: 'agent_paystack_momo_fee_percent', value: agentPaystackMomoFee },
                 { key: 'mtn_price_adjustment', value: mtnAdjustment },
                 { key: 'agent_upgrade_price', value: agentUpgradePrice },
                 { key: 'afa_price_customer', value: afaPriceCustomer },
@@ -201,7 +214,7 @@ export default function AdminSettingsPage() {
                 { key: 'active_sms_provider', value: smsProvider },
                 { key: 'active_payment_provider_web', value: webPaymentProvider },
                 { key: 'active_payment_provider_shop', value: shopPaymentProvider },
-                { key: 'active_payment_provider_classifieds', value: classifiedsPaymentProvider },
+                { key: 'active_payment_provider_ussd', value: ussdPaymentProvider },
                 { key: 'rc_wallet_payment_enabled', value: String(rcWalletPaymentEnabled) },
                 { key: 'skip_google_oauth_otp', value: String(skipGoogleOauthOtp) },
                 // Page access settings
@@ -220,21 +233,14 @@ export default function AdminSettingsPage() {
                 { key: 'express_mtn_hidden', value: String(hideExpressMtn) },
                 { key: 'standard_mtn_hidden', value: String(hideStandardMtn) },
                 { key: 'results_checker_only_mode', value: String(resultsCheckerOnly) },
-                { key: 'storefront_marketplace_ad_enabled', value: String(storefrontMarketplaceAd) },
                 // USSD short codes
+                { key: 'ussd_enabled', value: String(ussdEnabled) },
                 { key: 'ussd_dial_code', value: ussdDialCode },
                 { key: 'ussd_activation_price_customer', value: ussdActivationPriceCustomer },
                 { key: 'ussd_activation_price_agent', value: ussdActivationPriceAgent },
                 { key: 'ussd_activation_price_dealer', value: ussdActivationPriceDealer },
                 { key: 'ussd_activation_price_sub', value: ussdActivationPriceSub },
                 { key: 'storefront_ussd_card_enabled', value: String(storefrontUssdCard) },
-                // Classifieds boost fees
-                { key: 'classifieds_boost_fee_7d', value: settings['classifieds_boost_fee_7d'] || '' },
-                { key: 'classifieds_boost_fee_14d', value: settings['classifieds_boost_fee_14d'] || '' },
-                { key: 'classifieds_boost_fee_21d', value: settings['classifieds_boost_fee_21d'] || '' },
-                { key: 'classifieds_boost_fee_30d', value: settings['classifieds_boost_fee_30d'] || '' },
-                { key: 'classifieds_boost_fee_60d', value: settings['classifieds_boost_fee_60d'] || '' },
-                { key: 'classifieds_boost_fee_90d', value: settings['classifieds_boost_fee_90d'] || '' },
             ]
 
             const response = await fetch('/api/admin-settings', {
@@ -278,7 +284,6 @@ export default function AdminSettingsPage() {
                 <TabsList>
                     <TabsTrigger value="general">General</TabsTrigger>
                     <TabsTrigger value="fees">Fees &amp; Pricing</TabsTrigger>
-                    <TabsTrigger value="classifieds">Classifieds</TabsTrigger>
                     <TabsTrigger value="fulfillment">Fulfillment</TabsTrigger>
                     <TabsTrigger value="referrals">Referrals</TabsTrigger>
                     <TabsTrigger value="access">Page Access</TabsTrigger>
@@ -437,6 +442,26 @@ export default function AdminSettingsPage() {
                                 <p className="text-xs text-muted-foreground">Fee passed on to AGENTS during wallet top-up</p>
                             </div>
                             <div className="space-y-2">
+                                <Label>Paystack MoMo Fee Percentage (%)</Label>
+                                <Input
+                                    type="number"
+                                    value={paystackMomoFee}
+                                    onChange={(e) => setPaystackMomoFee(e.target.value)}
+                                    step="0.01"
+                                />
+                                <p className="text-xs text-muted-foreground">Used when a scope is set to Paystack MoMo (the direct prompt). Leave blank to reuse the Paystack fee above.</p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Agent Paystack MoMo Fee Percentage (%)</Label>
+                                <Input
+                                    type="number"
+                                    value={agentPaystackMomoFee}
+                                    onChange={(e) => setAgentPaystackMomoFee(e.target.value)}
+                                    step="0.01"
+                                />
+                                <p className="text-xs text-muted-foreground">The same, for AGENTS. Leave blank to reuse the Agent Paystack fee above.</p>
+                            </div>
+                            <div className="space-y-2">
                                 <Label>MTN Price Adjustment (GHS)</Label>
                                 <Input
                                     type="number"
@@ -458,6 +483,18 @@ export default function AdminSettingsPage() {
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
+                            <div className="flex items-center justify-between rounded-lg border p-3">
+                                <div className="space-y-0.5">
+                                    <Label>USSD service enabled</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Master switch. Off means callers who dial the code are told the service is
+                                        unavailable and hung up on, no shop can buy a short code, and every USSD link
+                                        and card disappears. Existing codes are kept, not cancelled — turning this back
+                                        on restores them. Takes up to a minute to reach the dial-in service.
+                                    </p>
+                                </div>
+                                <Switch checked={ussdEnabled} onCheckedChange={setUssdEnabled} />
+                            </div>
                             <div className="space-y-2">
                                 <Label>USSD Dial Code</Label>
                                 <Input
@@ -583,6 +620,37 @@ export default function AdminSettingsPage() {
                                     ))}
                                 </div>
                             </div>
+
+                            {/* USSD offers only the two gateways that can complete a
+                                dial-in sale. A hosted redirect cannot: there is no
+                                browser on a USSD session. SCOPE_PROVIDERS.ussd is what
+                                keeps that honest, and this control renders from it.
+                                Selecting Hubtel here is the rollback to the AddToCart
+                                path — it used to require editing the database by hand. */}
+                            <div className="flex items-center justify-between p-4 border rounded-lg">
+                                <div className="space-y-0.5">
+                                    <Label className="text-base">USSD Payments</Label>
+                                    <p className="text-sm text-muted-foreground">Short-code dial-in sales and short-code activations</p>
+                                </div>
+                                <div className="flex rounded-lg border overflow-hidden">
+                                    {SCOPE_PROVIDERS.ussd.map((id, index) => (
+                                        <button
+                                            key={id}
+                                            type="button"
+                                            onClick={() => setUssdPaymentProvider(id)}
+                                            className={cn(
+                                                'px-4 py-2 text-sm font-medium transition-colors',
+                                                index > 0 && 'border-l',
+                                                ussdPaymentProvider === id
+                                                    ? 'bg-primary text-primary-foreground'
+                                                    : 'bg-background hover:bg-muted text-foreground'
+                                            )}
+                                        >
+                                            {PROVIDER_LABEL[id]}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
                         </CardContent>
                     </Card>
 
@@ -645,107 +713,6 @@ export default function AdminSettingsPage() {
                         </CardContent>
                     </Card>
 
-                </TabsContent>
-
-                {/* ── Classifieds Tab ── */}
-                <TabsContent value="classifieds" className="space-y-4 mt-4">
-
-                    {/* Boost Payment Gateway */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Boost Payment Gateway</CardTitle>
-                            <CardDescription>Select the payment provider sellers use when paying to boost a listing. Changes take effect immediately — sellers will be charged directly (no wallet needed).</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex items-center justify-between p-4 border rounded-lg">
-                                <div className="space-y-0.5">
-                                    <Label className="text-base">Classifieds Boost Payments</Label>
-                                    <p className="text-sm text-muted-foreground">Gateway used when sellers pay to boost their listings</p>
-                                </div>
-                                {/* Hubtel is absent by design: the boost flow has no Hubtel
-                                    branch, so selecting it here used to silently fall back to
-                                    Moolre. SCOPE_PROVIDERS is what keeps that honest. */}
-                                <div className="flex rounded-lg border overflow-hidden">
-                                    {SCOPE_PROVIDERS.classifieds.map((id, index) => (
-                                        <button
-                                            key={id}
-                                            type="button"
-                                            onClick={() => setClassifiedsPaymentProvider(id)}
-                                            className={cn(
-                                                'px-4 py-2 text-sm font-medium transition-colors',
-                                                index > 0 && 'border-l',
-                                                classifiedsPaymentProvider === id
-                                                    ? 'bg-primary text-primary-foreground'
-                                                    : 'bg-background hover:bg-muted text-foreground'
-                                            )}
-                                        >
-                                            {PROVIDER_LABEL[id]}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Boost Fees */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Promotion Boost Fees</CardTitle>
-                            <CardDescription>Set the GHS price sellers pay to boost a listing to the top of the marketplace. Changes take effect immediately after saving.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {[
-                                { key: 'classifieds_boost_fee_7d',  label: '1 Week (7 days)' },
-                                { key: 'classifieds_boost_fee_14d', label: '2 Weeks (14 days)' },
-                                { key: 'classifieds_boost_fee_21d', label: '3 Weeks (21 days)' },
-                                { key: 'classifieds_boost_fee_30d', label: '1 Month (30 days)' },
-                                { key: 'classifieds_boost_fee_60d', label: '2 Months (60 days)' },
-                                { key: 'classifieds_boost_fee_90d', label: '3 Months (90 days)' },
-                            ].map(({ key, label }) => (
-                                <div key={key} className="space-y-1.5 p-4 border rounded-lg">
-                                    <Label className="font-semibold">{label}</Label>
-                                    <div className="relative">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-medium">GHS</span>
-                                        <Input
-                                            type="number"
-                                            value={settings[key] || ''}
-                                            onChange={(e) => setSettings({ ...settings, [key]: e.target.value })}
-                                            step="0.01"
-                                            min="0"
-                                            placeholder="0.00"
-                                            className="pl-12"
-                                        />
-                                    </div>
-                                </div>
-                            ))}
-                        </CardContent>
-                    </Card>
-
-                    {/* Seller Verification */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Seller Verification</CardTitle>
-                            <CardDescription>Review and approve seller identity verification requests submitted through the marketplace.</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
-                                <div className="space-y-1">
-                                    <p className="font-semibold text-sm">Manage Verification Queue</p>
-                                    <p className="text-xs text-muted-foreground">Approve or reject seller verification requests, view applicant details, and add rejection notes.</p>
-                                </div>
-                                <a
-                                    href="/classifieds/admin/sellers"
-                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors whitespace-nowrap ml-4 flex-shrink-0"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
-                                    Open Verification Queue
-                                </a>
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-3">
-                                You can also access this from the sidebar: <strong>Classifieds → Seller Verification</strong>.
-                            </p>
-                        </CardContent>
-                    </Card>
                 </TabsContent>
 
                 <TabsContent value="fulfillment" className="space-y-4 mt-4">
@@ -1164,23 +1131,6 @@ export default function AdminSettingsPage() {
                                     checked={pageAccessStorefront}
                                     onCheckedChange={setPageAccessStorefront}
                                     className="data-[state=checked]:bg-emerald-500"
-                                />
-                            </div>
-
-                            <div className="flex items-center justify-between p-4 border rounded-lg border-amber-100 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-900/10">
-                                <div className="space-y-0.5">
-                                    <Label className="text-base text-amber-600 dark:text-amber-500 font-bold flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-store"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7" /><path d="M4 12v8a2 2 0 0 0 2 2h2" /><path d="M20 12v8a2 2 0 0 1-2 2h-2" /><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4" /><path d="M2 7h20" /><path d="M22 7v3a2 2 0 0 1-2 2v0a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12v0a2 2 0 0 1-2-2V7" /></svg>
-                                        Marketplace Ad on Storefronts
-                                    </Label>
-                                    <p className="text-sm text-amber-700/70 dark:text-amber-300/70 font-medium">
-                                        Shows a &quot;Visit our Marketplace to Buy &amp; Sell&quot; promo banner and menu link on every seller storefront
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={storefrontMarketplaceAd}
-                                    onCheckedChange={setStorefrontMarketplaceAd}
-                                    className="data-[state=checked]:bg-amber-500"
                                 />
                             </div>
                         </CardContent>

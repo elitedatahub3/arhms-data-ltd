@@ -42,16 +42,28 @@ function SparklineBar({ heightPercent, isToday }: { heightPercent: number; isTod
     )
 }
 
-export function BusinessPerformanceWidget() {
+interface PerformanceSource {
+    totalCount: number
+    completedCount: number
+    completedLast14Days: Array<{ price: number; created_at: string }>
+}
+
+/**
+ * `source` comes from /api/dashboard/summary. Without it this widget made three
+ * round trips *in series* — two counts and then the 14-day rows — which on a
+ * phone is three times the latency before the cards appear. The self-fetch is
+ * kept as a fallback for any other caller.
+ */
+export function BusinessPerformanceWidget({ data: source }: { data?: PerformanceSource } = {}) {
     const { dbUser } = useAuth()
     const [data, setData] = useState<PerformanceData | null>(null)
     const [isLoading, setIsLoading] = useState(true)
 
     useEffect(() => {
-        if (dbUser) {
+        if (dbUser || source) {
             fetchPerformanceData()
         }
-    }, [dbUser])
+    }, [dbUser, source])
 
     const fetchPerformanceData = async () => {
         try {
@@ -62,29 +74,42 @@ export function BusinessPerformanceWidget() {
             const fourteenDaysAgo = subDays(startOfDay(now), 14).toISOString()
             const sevenDaysAgo = subDays(startOfDay(now), 7).toISOString()
 
-            // Fetch exactly what we need in parallel
-            // 1. All-time total orders (for success rate denominator)
-            const { count: totalCount } = await supabase
-                .from('orders')
-                .select('*', { count: 'exact', head: true })
-                .eq('user_id', dbUser!.id)
-                .is('shop_order_id', null)
+            let totalCount: number | null
+            let completedCount: number | null
+            let recentOrdersRaw: { price: number; created_at: string }[] | null
 
-            // 2. All-time completed orders (for success rate numerator)
-            const { count: completedCount } = await supabase
-                .from('orders')
-                .select('*', { count: 'exact', head: true })
-                .eq('user_id', dbUser!.id)
-                .eq('status', 'completed')
-                .is('shop_order_id', null)
-
-            // 3. Get completed orders from the last 14 days for revenue and trendy sparkline
-            const { data: recentOrdersRaw } = await supabase
-                .from('orders')
-                .select('price, created_at')
-                .eq('user_id', dbUser!.id)
-                .eq('status', 'completed')
-                .gte('created_at', fourteenDaysAgo)
+            if (source) {
+                totalCount = source.totalCount
+                completedCount = source.completedCount
+                recentOrdersRaw = source.completedLast14Days
+            } else {
+                // Fetch exactly what we need, in parallel
+                const [totalRes, completedRes, recentRes] = await Promise.all([
+                    // 1. All-time total orders (for success rate denominator)
+                    supabase
+                        .from('orders')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', dbUser!.id)
+                        .is('shop_order_id', null),
+                    // 2. All-time completed orders (for success rate numerator)
+                    supabase
+                        .from('orders')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', dbUser!.id)
+                        .eq('status', 'completed')
+                        .is('shop_order_id', null),
+                    // 3. Completed orders from the last 14 days, for revenue and the sparkline
+                    supabase
+                        .from('orders')
+                        .select('price, created_at')
+                        .eq('user_id', dbUser!.id)
+                        .eq('status', 'completed')
+                        .gte('created_at', fourteenDaysAgo),
+                ])
+                totalCount = totalRes.count
+                completedCount = completedRes.count
+                recentOrdersRaw = recentRes.data as any
+            }
 
             const recentOrders = (recentOrdersRaw ?? []) as { price: number; created_at: string }[]
 

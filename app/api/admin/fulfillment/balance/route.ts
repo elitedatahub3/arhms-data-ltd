@@ -77,14 +77,16 @@ export async function GET() {
         const { fetchSupplierBalance: fetchEazyDataBalance } = await import('@/lib/eazydata-service')
         const { fetchSupplierBalance: fetchAgentPortalBalance } = await import('@/lib/agentportal-service')
         const { fetchSupplierBalance: fetchNetPulseBalance } = await import('@/lib/netpulse-service')
+        const { fetchSupplierBalance: fetchHendyLinksBalance } = await import('@/lib/hendylinks-service')
 
-        const [dakazinaResult, codecraftResult, kingflexyResult, eazydataResult, agentportalResult, netpulseResult] = await Promise.all([
+        const [dakazinaResult, codecraftResult, kingflexyResult, eazydataResult, agentportalResult, netpulseResult, hendylinksResult] = await Promise.all([
             fetchSupplierBalance(),
             fetchCodeCraftBalance(),
             fetchKingFlexyBalance(),
             fetchEazyDataBalance(),
             fetchAgentPortalBalance(),
-            fetchNetPulseBalance()
+            fetchNetPulseBalance(),
+            fetchHendyLinksBalance()
         ])
 
         const results: Array<[string | null, SupplierResult]> = [
@@ -94,6 +96,7 @@ export async function GET() {
             ['eazydata', eazydataResult],
             ['agentportal', agentportalResult],
             ['netpulse', netpulseResult],
+            ['hendylinks', hendylinksResult],
         ]
 
         for (const [prefix, result] of results) {

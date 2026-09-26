@@ -1556,6 +1556,48 @@ export async function sendAdminShopWithdrawalRequestAlert(details: {
 }
 
 /**
+ * Commission Wallet payout requested — email to admin only.
+ *
+ * Separate from the shop alert: that one names a shop and links to
+ * /admin/shops/withdrawals, which holds a different queue. An admin following it for a
+ * commission payout would find nothing to approve.
+ */
+export async function sendAdminCommissionWithdrawalAlert(details: {
+    partnerName: string
+    partnerPhone?: string
+    amount: number
+    netAmount: number
+    accountName: string
+    accountNumber: string
+    network: string
+    requestedAt: string
+}, toEmail?: string): Promise<EmailResult> {
+    const adminEmail = toEmail || process.env.ADMIN_EMAIL || 'ARHMSdatalimited@gmail.com'
+    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
+    const content = `
+        <h1 class="greeting">Commission Payout Requested 💸</h1>
+        <p class="subtitle">An API partner has asked to withdraw their commission earnings</p>
+        <div class="info-card">
+            <div class="info-card-header"><div class="info-card-icon">💰</div><span class="info-card-title">Request</span></div>
+            <div class="info-row"><span class="info-label">Partner</span><span class="info-value">${details.partnerName}</span></div>
+            <div class="info-row"><span class="info-label">Phone</span><span class="info-value">${details.partnerPhone || '—'}</span></div>
+            <div class="info-row"><span class="info-label">Amount</span><span class="info-value">GHS ${details.amount.toFixed(2)}</span></div>
+            <div class="info-row"><span class="info-label">Net payout</span><span class="info-value">GHS ${details.netAmount.toFixed(2)}</span></div>
+            <div class="info-row"><span class="info-label">Pay to</span><span class="info-value">${details.accountName} — ${details.network} ${details.accountNumber}</span></div>
+            <div class="info-row"><span class="info-label">Requested</span><span class="info-value">${details.requestedAt}</span></div>
+        </div>
+        <div style="text-align: center; margin: 25px 0;"><span class="status-badge status-pending">Action Required</span></div>
+        <div class="cta-container"><a href="${siteUrl}/admin/commission-withdrawals" class="cta-button">Review Payout</a></div>
+    `
+    return sendEmail({
+        to: adminEmail,
+        toName: 'Admin',
+        subject: `💸 Commission payout requested - GHS ${details.netAmount.toFixed(2)} - ${details.partnerName}`,
+        htmlContent: generatePremiumTemplate('Commission Payout Requested', content),
+    })
+}
+
+/**
  * Alert 12 · New AFA Membership Application — Email to admin only
  */
 export async function sendAdminNewAfaApplicationAlert(details: {

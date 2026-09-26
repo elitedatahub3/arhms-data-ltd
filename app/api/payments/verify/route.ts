@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { processCompletedWalletPayment } from '@/lib/payments'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { checkPaymentStatus } from '@/lib/moolre-payment-service'
 import { checkPaymentStatus as hubtelCheckPaymentStatus } from '@/lib/hubtel-payment-service'
 import { checkPaymentStatus as payswitchCheckPaymentStatus } from '@/lib/payswitch-payment-service'
-import { claimHubtelStatusCheck, PAYSWITCH_CLIENT_THROTTLE_KEYS } from '@/lib/hubtel-status-throttle'
+import {
+    claimHubtelStatusCheck,
+    PAYSWITCH_CLIENT_THROTTLE_KEYS,
+    PAYSTACK_MOMO_CLIENT_THROTTLE_KEYS,
+} from '@/lib/hubtel-status-throttle'
+import { verifyTransaction } from '@/lib/paystack-momo-service'
 
 export async function GET(request: NextRequest) {
     try {
@@ -14,7 +20,7 @@ export async function GET(request: NextRequest) {
         const supabase = await createRouteHandlerClient()
         let { data: { user }, error: authError } = await supabase.auth.getUser()
 
-        // Fallback for classifieds that sends token in Authorization header
+        // Fallback for clients that send the token in an Authorization header instead of a cookie
         if (!user) {
             const authHeader = request.headers.get('authorization')
             if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -88,10 +94,120 @@ export async function GET(request: NextRequest) {
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?error=payment_failed`)
         }
 
-        // For Paystack payments: webhook handles completion; just return pending so frontend keeps polling
+        // For hosted-checkout Paystack: the webhook handles completion; just return
+        // pending so the frontend keeps polling.
         if ((paymentRecord as any).provider === 'paystack') {
             if (isInline) return NextResponse.json({ success: true, status: 'pending', message: 'Waiting for payment confirmation...' })
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet`)
+        }
+
+        // ── Paystack MoMo status check ────────────────────────────────────────
+        if ((paymentRecord as any).provider === 'paystack_momo') {
+            // Unlike hosted checkout, this rail cannot just wait for the webhook.
+            // Paystack emits charge.success and nothing else, so a declined or
+            // abandoned prompt produces NO callback at all — without asking the
+            // gateway, the tab would poll forever on a payment that is already dead.
+            //
+            // Bounded the same way as Hubtel and PaySwitch above. Past the cap the
+            // reconciliation sweep settles it with no tab open.
+            const decision = await claimHubtelStatusCheck(supabase, paymentRecord as any, {
+                graceMs: 45_000,
+                interval: 20_000,
+                maxChecks: 5,
+                keys: PAYSTACK_MOMO_CLIENT_THROTTLE_KEYS,
+            })
+
+            if (!decision.allowed) {
+                if (isInline) return NextResponse.json({ success: true, status: 'pending', message: 'Waiting for payment confirmation...' })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet`)
+            }
+
+            const verified = await verifyTransaction(reference)
+
+            // 'otp' means the customer still owes us a code, which is a pending state
+            // from this endpoint's point of view, not a failure.
+            if (verified.outcome === 'pending' || verified.outcome === 'otp') {
+                if (isInline) return NextResponse.json({ success: true, status: 'pending', message: 'Waiting for payment confirmation...' })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet`)
+            }
+
+            if (verified.outcome === 'failed') {
+                await (supabase.from('wallet_payments') as any)
+                    .update({ status: 'failed' })
+                    .eq('id', paymentRecord.id)
+                    .eq('status', 'pending')
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', message: 'Payment failed' })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?error=payment_failed`)
+            }
+
+            // Paid. Same rule as the Hubtel branch: DATA- and UTIL- must be settled
+            // here, because the generic tail below queries Moolre, which cannot verify
+            // a Paystack reference — falling through would credit the wallet instead
+            // of delivering what the customer actually bought.
+            if (reference.startsWith('DATA-')) {
+                const { processDataDirectOrder } = await import('@/lib/data-order-payments')
+                const result = await processDataDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Order processing failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/data-packages?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', orders: result.orders || [] })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/data-packages?success=true`)
+            }
+
+            if (reference.startsWith('UTIL-')) {
+                const { processUtilityDirectOrder } = await import('@/lib/utility-order-payments')
+                const result = await processUtilityDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Bill payment failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
+            }
+
+            if (reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                const result = await processAirtimeDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
+            // RETIRED: a paid BOOST- for a discontinued product. Say so plainly rather than
+            // letting the catch-all below settle it as a wallet top-up.
+            if (isRetiredBoostReference(reference)) {
+                reportRetiredBoostPayment('PaymentVerify', reference)
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: RETIRED_BOOST_MESSAGE }, { status: 410 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?error=boost_discontinued`)
+            }
+
+            // Everything else settles here and RETURNS. This branch must NOT fall
+            // through the way the Hubtel one does: the tail below queries Moolre,
+            // which cannot verify a Paystack reference and would leave a charge that
+            // has already been paid looking unverifiable forever.
+            const expectedAmountPesewas = Math.round(Number(paymentRecord.total_amount || paymentRecord.amount) * 100)
+            const settleResult = await processCompletedWalletPayment(
+                reference,
+                {
+                    reference,
+                    // Paystack's own figure is authoritative over anything we stored.
+                    amount: verified.amountPesewas ?? expectedAmountPesewas,
+                    metadata: (paymentRecord as any).metadata || {},
+                },
+                user.id
+            )
+
+            if (!settleResult.success) {
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: settleResult.error || 'Processing failed' }, { status: 500 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?error=${settleResult.error || 'processing_failed'}`)
+            }
+
+            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful' })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?success=true`)
         }
 
         // ── Hubtel status check ───────────────────────────────────────────────
@@ -167,6 +283,17 @@ export async function GET(request: NextRequest) {
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
             }
 
+            if (reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                const result = await processAirtimeDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
             // fall through to process payment below
         }
 
@@ -234,16 +361,22 @@ export async function GET(request: NextRequest) {
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
             }
 
-            // BOOST- has the same problem: the Moolre tail below would reject it.
-            if (reference.startsWith('BOOST-')) {
-                const { processBoostPayment } = await import('@/lib/classifieds-payments')
-                const result = await processBoostPayment(reference)
-                if (!result.success && !result.alreadyProcessed) {
-                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Boost processing failed' }, { status: 500 })
-                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/classifieds/seller/dashboard?boost_error=true`)
+            if (reference.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                const result = await processAirtimeDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
                 }
-                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Boost activated!' })
-                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/classifieds/seller/dashboard?boost_success=true`)
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
+            // RETIRED: same as above. The wallet settle path below must not see a BOOST-.
+            if (isRetiredBoostReference(reference)) {
+                reportRetiredBoostPayment('PaymentVerify', reference)
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: RETIRED_BOOST_MESSAGE }, { status: 410 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?error=boost_discontinued`)
             }
 
             // Wallet top-ups and upgrades fall through to the shared settle path,
@@ -318,16 +451,23 @@ export async function GET(request: NextRequest) {
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/utilities?success=true`)
         }
 
-        // For BOOST- references, delegate to the boost processor
-        if (reference.startsWith('BOOST-')) {
-            const { processBoostPayment } = await import('@/lib/classifieds-payments')
-            const result = await processBoostPayment(reference)
-            if (!result.success && !result.alreadyProcessed) {
-                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Boost processing failed' }, { status: 500 })
-                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/classifieds/seller/dashboard?boost_error=true`)
+        if (reference.startsWith('AIRPAY-')) {
+            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+            const result = await processAirtimeDirectOrder(reference, user.id)
+            if (!result.success) {
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Airtime purchase failed' }, { status: 500 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?error=order_failed`)
             }
-            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Boost activated!' })
-            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/classifieds/seller/dashboard?boost_success=true`)
+            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+        }
+
+        // RETIRED: a BOOST- for a discontinued product. Caught here or it would fall through
+        // to the wallet top-up settle at the bottom of this route and credit the payer.
+        if (isRetiredBoostReference(reference)) {
+            reportRetiredBoostPayment('PaymentVerify', reference)
+            if (isInline) return NextResponse.json({ success: false, status: 'failed', error: RETIRED_BOOST_MESSAGE }, { status: 410 })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?error=boost_discontinued`)
         }
 
         // For ussd_activation_ references, mint the short code. Without this the

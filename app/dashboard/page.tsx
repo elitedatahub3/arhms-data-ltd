@@ -28,6 +28,7 @@ import { RoleGreetingBox } from '@/components/dashboard/RoleGreetingBox'
 import { RecentOrdersWidget } from '@/components/dashboard/RecentOrdersWidget'
 import { BusinessPerformanceWidget } from '@/components/dashboard/BusinessPerformanceWidget'
 import { ShopDashboardSection } from '@/components/dashboard/ShopDashboardSection'
+import { SubAgentHelpCard } from '@/components/dashboard/SubAgentHelpCard'
 import { TodaysOrdersSummary } from '@/components/dashboard/TodaysOrdersSummary'
 import { DealerWelcomeModal } from '@/components/dashboard/DealerWelcomeModal'
 import { DealerExpiryBanner } from '@/components/dashboard/DealerExpiryBanner'
@@ -64,7 +65,7 @@ interface ShopStatus {
 
 
 export default function DashboardPage() {
-    const { dbUser } = useAuth()
+    const { dbUser, isSubAgent } = useAuth()
     const [stats, setStats] = useState<DashboardStats | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [shopStatus, setShopStatus] = useState<ShopStatus>({
@@ -324,7 +325,7 @@ export default function DashboardPage() {
                             {shopStatus.hasShop ? `Managing "${shopStatus.shopName}"` : "You haven't set up your shop yet."}
                         </p>
                     </div>
-                    <Link href="/dashboard/shop" className="relative z-10 mt-6">
+                    <Link href={isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop'} className="relative z-10 mt-6">
                         <Button variant="secondary" className="w-full font-bold rounded-xl h-12">
                             {shopStatus.hasShop ? "Go to Shop Profile" : "Create My Shop"}
                         </Button>
@@ -378,7 +379,7 @@ export default function DashboardPage() {
                                 { href: '/dashboard/wallet', label: 'Wallet History', icon: Wallet },
                                 { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                                 { href: '/dashboard/complaints', label: 'Help & Support', icon: AlertCircle },
-                                { href: '/dashboard/shop', label: 'Store Settings', icon: Store },
+                                { href: isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop', label: 'Store Settings', icon: Store },
                             ].map((link, i) => (
                                 <Link key={i} href={link.href}>
                                     <div className="flex items-center gap-3 p-3 rounded-xl hover:bg-secondary/50 transition-colors group cursor-pointer">
@@ -394,8 +395,8 @@ export default function DashboardPage() {
                 </div>
             </div>
 
-            {/* Shop Management (If applicable) */}
-            <ShopDashboardSection
+            {/* A sub-agent's shop is managed under My Shop (/dashboard/sub/*), not here */}
+            {!isSubAgent && <ShopDashboardSection
                 isLoading={shopStatus.isLoading}
                 hasShop={shopStatus.hasShop}
                 hasPricingConfigured={shopStatus.hasPricingConfigured}
@@ -407,7 +408,9 @@ export default function DashboardPage() {
                 wallet={shopStatus.wallet}
                 graphData={shopStatus.graphData}
                 orderStats={shopStatus.orderStats}
-            />
+            />}
+
+            <SubAgentHelpCard />
         </div>
     )
 }

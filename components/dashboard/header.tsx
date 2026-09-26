@@ -16,14 +16,14 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { roleConfig } from '@/lib/roles'
+import { roleConfig, subAgentRoleConfig } from '@/lib/roles'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { Menu, X, Bell, User, Settings, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export function DashboardHeader() {
-    const { dbUser, signOut, isAdmin, isSubAdmin } = useAuth()
+    const { dbUser, signOut, isAdmin, isSubAdmin, isSubAgent } = useAuth()
     const { toggleSidebar, isCollapsed, isInternalSidebarOpen } = useUI()
     const [unreadCount, setUnreadCount] = useState(0)
 
@@ -36,24 +36,27 @@ export function DashboardHeader() {
         setUnreadCount(count || 0)
     }
 
+    // Keyed on the id, not the row: a profile refetch must not tear down and
+    // re-open the realtime channel and re-count notifications.
+    const userId = dbUser?.id
     useEffect(() => {
-        if (!dbUser) return
+        if (!userId) return
 
-        fetchUnreadNotifications(dbUser.id)
+        fetchUnreadNotifications(userId)
 
         // Real-time subscription — update count and toast new arrivals
         const channel = supabase
-            .channel(`notifications:${dbUser.id}`)
+            .channel(`notifications:${userId}`)
             .on(
                 'postgres_changes' as any,
                 {
                     event: '*',
                     schema: 'public',
                     table: 'notifications',
-                    filter: `user_id=eq.${dbUser.id}`,
+                    filter: `user_id=eq.${userId}`,
                 },
                 (payload: any) => {
-                    fetchUnreadNotifications(dbUser.id)
+                    fetchUnreadNotifications(userId)
                     if (payload.eventType === 'INSERT' && payload.new) {
                         const n = payload.new
                         toast(n.title, {
@@ -69,7 +72,7 @@ export function DashboardHeader() {
             .subscribe()
 
         return () => { supabase.removeChannel(channel) }
-    }, [dbUser])
+    }, [userId])
 
     const getInitials = () => {
         if (!dbUser) return 'U'
@@ -77,7 +80,9 @@ export function DashboardHeader() {
     }
 
     const userRole = isAdmin ? 'admin' : isSubAdmin ? 'sub-admin' : (dbUser?.role || 'customer') as keyof typeof roleConfig
-    const currentRole = roleConfig[userRole] || roleConfig['customer']
+    const currentRole = isSubAgent && !isAdmin && !isSubAdmin
+        ? subAgentRoleConfig
+        : (roleConfig[userRole] || roleConfig['customer'])
 
     return (
         <header className={cn(
@@ -178,7 +183,7 @@ export function DashboardHeader() {
                                             currentRole.badgeClass
                                         )}
                                     >
-                                        {currentRole.label}
+                                        {isSubAgent ? 'Sub-Agent' : currentRole.label}
                                     </span>
                                 </div>
                                 <Avatar className="h-8 w-8 sm:h-9 sm:w-9 rounded-lg border-2 border-border/50 group-hover:border-primary/50 transition-all overflow-hidden">

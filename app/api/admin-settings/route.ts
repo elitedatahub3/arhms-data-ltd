@@ -40,6 +40,11 @@ export async function GET(request: Request) {
         const PUBLIC_SAFE_KEYS = [
             'paystack_fee_percent',
             'agent_paystack_fee_percent',
+            // The MoMo rail's own fee keys. The checkout pages show the customer the
+            // fee before they pay, so a 403 here would display one figure and charge
+            // another.
+            'paystack_momo_fee_percent',
+            'agent_paystack_momo_fee_percent',
             'announcement_enabled',
             'announcement_title',
             'announcement_message',
@@ -62,20 +67,14 @@ export async function GET(request: Request) {
             'express_mtn_hidden',
             'standard_mtn_hidden',
             'results_checker_only_mode',
-            'active_payment_provider_classifieds',
             'active_payment_provider_web',
             // Read client-side by the storefront checkout, which serves guests.
             'active_payment_provider_shop',
+            'active_payment_provider_ussd',
             'active_sms_provider',
             'rc_wallet_payment_enabled',
             'storefront_rc_enabled',
             'storefront_afa_enabled',
-            'classifieds_boost_fee_7d',
-            'classifieds_boost_fee_14d',
-            'classifieds_boost_fee_21d',
-            'classifieds_boost_fee_30d',
-            'classifieds_boost_fee_60d',
-            'classifieds_boost_fee_90d'
         ]
 
         const isAdmin = role === 'admin' || role === 'sub-admin'

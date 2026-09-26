@@ -83,7 +83,7 @@ const config = {
                 // Now on the vars. These were hardcoded #7B68EE / #06B6D4, which
                 // meant every shadcn hover surface (dropdown, select, sheet) was
                 // painting bright purple or cyan instead of a neutral, and made
-                // the --secondary / --accent declarations in .theme-marketplace
+                // the --secondary / --accent declarations in the sub-themes
                 // dead code. Both are fixed by the indirection.
                 secondary: {
                     DEFAULT: "hsl(var(--secondary))",

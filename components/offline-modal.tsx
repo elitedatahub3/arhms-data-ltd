@@ -2,21 +2,37 @@
 
 import { useEffect, useState, useCallback } from 'react'
 
+// Mobile networks report a momentary `offline` on every tower handover or
+// signal dip. Only a connection that stays down this long gets the modal —
+// otherwise it flashes over the page and back for blips nobody would notice.
+const OFFLINE_GRACE_MS = 3000
+
 export function OfflineModal() {
     const [isOffline, setIsOffline] = useState(false)
     const [isRetrying, setIsRetrying] = useState(false)
 
     useEffect(() => {
-        // Set initial state on mount (handles cases where page loads while already offline)
-        setIsOffline(!navigator.onLine)
+        let timer: ReturnType<typeof setTimeout> | undefined
 
-        const goOffline = () => setIsOffline(true)
-        const goOnline = () => setIsOffline(false)
+        const goOffline = () => {
+            clearTimeout(timer)
+            timer = setTimeout(() => {
+                if (!navigator.onLine) setIsOffline(true)
+            }, OFFLINE_GRACE_MS)
+        }
+        const goOnline = () => {
+            clearTimeout(timer)
+            setIsOffline(false)
+        }
+
+        // Handles the page loading while already offline.
+        if (!navigator.onLine) goOffline()
 
         window.addEventListener('offline', goOffline)
         window.addEventListener('online', goOnline)
 
         return () => {
+            clearTimeout(timer)
             window.removeEventListener('offline', goOffline)
             window.removeEventListener('online', goOnline)
         }
@@ -49,7 +65,9 @@ export function OfflineModal() {
             aria-modal="true"
             aria-label="You are offline"
             className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
-            style={{ background: 'rgba(5, 5, 10, 0.92)', backdropFilter: 'blur(12px)' }}
+            // No backdrop-filter: at 0.92 alpha the blur is invisible, but it is a
+            // full-viewport GPU pass on phones that can least afford one.
+            style={{ background: 'rgba(5, 5, 10, 0.94)' }}
         >
             <div
                 className="relative w-full max-w-sm rounded-3xl p-8 flex flex-col items-center text-center gap-4"

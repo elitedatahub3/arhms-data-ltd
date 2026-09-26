@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
-import { Redis } from '@upstash/redis'
-
-const redis = Redis.fromEnv()
+import { getShopMeta } from '@/lib/shop-meta-store'
 
 export async function POST(request: NextRequest) {
     try {
@@ -33,20 +32,13 @@ export async function POST(request: NextRequest) {
             const paidAmountKobo = Math.round(parseFloat(value) * 100)
 
             // o. SHOP ORDERS
-            // Moolre doesn't send metadata back, so we fetch it from Redis
+            // Moolre doesn't send metadata back, so we fetch it from Redis / the database
             if (externalref.startsWith('SHOP-')) {
-                const metadataStr = await redis.get<string>(`shop:meta:${externalref}`)
+                const metadata = await getShopMeta<any>(externalref)
 
-                if (!metadataStr) {
-                    console.error(`[MoolreWebhook] Metadata not found in Redis for Shop Order: ${externalref}`)
+                if (!metadata) {
+                    console.error(`[MoolreWebhook] Metadata not found for Shop Order: ${externalref}`)
                     return NextResponse.json({ received: true })
-                }
-
-                let metadata
-                try {
-                    metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr
-                } catch (e) {
-                    metadata = metadataStr
                 }
 
                 const { processShopOrder } = await import('@/lib/shop-order-processor')
@@ -70,7 +62,7 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ received: true })
             }
 
-            // Get payment record from DB for Wallet Topups, Agent Upgrades, and Boost
+            // Get payment record from DB for Wallet Topups and Agent Upgrades
             const { data: payment } = await supabase
                 .from('wallet_payments')
                 .select('total_amount, status, metadata')
@@ -111,16 +103,18 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ received: true })
             }
 
-            // o. BOOST PAYMENTS: References starting with BOOST- are classified listing boosts
-            if (externalref.startsWith('BOOST-')) {
-                const { processBoostPayment } = await import('@/lib/classifieds-payments')
-                console.log('[MoolreWebhook] Routing listing boost payment:', externalref)
-                const boostResult = await processBoostPayment(externalref, { reference: externalref, amount: paidAmountKobo })
+            // o. AIRTIME: References starting with AIRPAY- are direct-pay airtime top-ups
+            if (externalref.startsWith('AIRPAY-')) {
+                const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                console.log('[MoolreWebhook] Routing direct-pay airtime order:', externalref)
+                await processAirtimeDirectOrder(externalref)
+                return NextResponse.json({ received: true })
+            }
 
-                if (!boostResult.success && !boostResult.alreadyProcessed) {
-                    console.error('[MoolreWebhook] Boost processing failed:', boostResult.error)
-                    return NextResponse.json({ error: boostResult.error }, { status: 500 })
-                }
+            // o. RETIRED: BOOST- was the classifieds listing boost. Caught rather than dropped:
+            // unhandled it would reach the wallet top-up branch below and credit the payer.
+            if (isRetiredBoostReference(externalref)) {
+                reportRetiredBoostPayment('MoolreWebhook', externalref)
                 return NextResponse.json({ received: true })
             }
 

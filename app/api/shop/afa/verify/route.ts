@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { Redis } from '@upstash/redis'
 import { checkPaymentStatus } from '@/lib/moolre-payment-service'
+import { verifyTransaction } from '@/lib/paystack-momo-service'
+import { isPaystackMomoPending, clearPaystackMomoPending } from '@/lib/paystack-momo-checkout'
 import { finalizeAfaShopOrder, failAfaShopOrder } from '@/lib/afa/checkout'
 
 let redis: Redis | null = null
@@ -44,21 +46,37 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ success: false, status: 'failed', message: 'Payment was not completed.' })
         }
 
-        const moolreResponse = await checkPaymentStatus(ref)
+        // Ask whichever gateway actually collected. The pending marker is what says
+        // this was the Paystack MoMo rail; Moolre cannot answer for a reference it
+        // never issued, and would leave the guest polling on money already in.
+        if (await isPaystackMomoPending(ref)) {
+            const verified = await verifyTransaction(ref)
 
-        if (!moolreResponse.success || moolreResponse.txstatus === null) {
-            return NextResponse.json({ success: true, status: 'pending' })
-        }
+            if (verified.outcome === 'failed') {
+                await failAfaShopOrder(ref)
+                await clearPaystackMomoPending(ref)
+                return NextResponse.json({ success: false, status: 'failed', message: 'Payment was not completed.' })
+            }
+            if (verified.outcome !== 'paid') {
+                return NextResponse.json({ success: true, status: 'pending' })
+            }
+        } else {
+            const moolreResponse = await checkPaymentStatus(ref)
 
-        // Pending / processing
-        if (moolreResponse.txstatus === 0 || moolreResponse.txstatus === 3) {
-            return NextResponse.json({ success: true, status: 'pending' })
-        }
+            if (!moolreResponse.success || moolreResponse.txstatus === null) {
+                return NextResponse.json({ success: true, status: 'pending' })
+            }
 
-        // Failed / cancelled
-        if (moolreResponse.txstatus === 2) {
-            await failAfaShopOrder(ref)
-            return NextResponse.json({ success: false, status: 'failed', message: 'Payment was not completed.' })
+            // Pending / processing
+            if (moolreResponse.txstatus === 0 || moolreResponse.txstatus === 3) {
+                return NextResponse.json({ success: true, status: 'pending' })
+            }
+
+            // Failed / cancelled
+            if (moolreResponse.txstatus === 2) {
+                await failAfaShopOrder(ref)
+                return NextResponse.json({ success: false, status: 'failed', message: 'Payment was not completed.' })
+            }
         }
 
         // Paid — settle through the shared path.

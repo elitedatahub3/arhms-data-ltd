@@ -17,8 +17,6 @@ import { useUI } from '@/contexts/ui-context'
 // import { SupportChatWidget } from '@/components/dashboard/support-chat-widget'
 import { SuspendedAccount } from '@/components/dashboard/SuspendedAccount'
 import { CopyrightFooter } from '@/components/CopyrightFooter'
-import { SystemAnnouncementModal } from '@/components/system-announcement-modal'
-import { SubPortalShell } from '@/components/sub-portal/sub-shell'
 
 
 export default function DashboardLayout({
@@ -26,7 +24,7 @@ export default function DashboardLayout({
 }: {
     children: React.ReactNode
 }) {
-    const { user, dbUser, isLoading, isAdmin, isSubAdmin, refreshUser } = useAuth()
+    const { user, dbUser, isLoading, isAdmin, isSubAdmin, isSubAgent, subAgentCheckDone, refreshUser } = useAuth()
     const { isCollapsed } = useUI()
     const router = useRouter()
     const pathname = usePathname()
@@ -81,37 +79,16 @@ export default function DashboardLayout({
             pathname?.startsWith('/dashboard/wallet') ||
             pathname?.startsWith('/dashboard/sub')) ?? false
 
-    // Sub-agents use a de-branded portal, so the main ARHMS chrome (sidebar,
-    // header, mobile nav, modals) must not apply. This holds for EVERY dashboard
-    // route a sub-agent visits — not just /dashboard/sub — so tapping any link
-    // (e.g. Shop Setup) never bounces them into the main-branded site.
-    const [isSubAgent, setIsSubAgent] = useState(false)
-    const [notSubAgent, setNotSubAgent] = useState(false)
-    useEffect(() => {
-        let active = true
-        // 200 → the caller is a sub-agent; 403 → not one. Fail-open (both false)
-        // so a hiccup never wrongly de-brands a regular user's dashboard, nor
-        // bounces a real sub-agent out of their portal.
-        fetch('/api/dashboard/sub/data')
-            .then((r) => {
-                if (!active) return
-                if (r.ok) setIsSubAgent(true)
-                else if (r.status === 403) setNotSubAgent(true)
-            })
-            .catch(() => {})
-        return () => { active = false }
-    }, [])
-
     // Anyone who is not a sub-agent has no business on a /dashboard/sub page —
     // most often a Lead still signed in on a recruit's phone, who would
-    // otherwise see their own storefront presented as the recruit's.
+    // otherwise see their own storefront presented as the recruit's. Gated on
+    // subAgentCheckDone so this never fires on the initial, still-resolving
+    // false before the real answer comes back.
     useEffect(() => {
-        if (notSubAgent && pathname?.startsWith('/dashboard/sub')) {
+        if (subAgentCheckDone && !isSubAgent && pathname?.startsWith('/dashboard/sub')) {
             router.replace('/dashboard')
         }
-    }, [notSubAgent, pathname, router])
-
-    const isSubPortal = (pathname?.startsWith('/dashboard/sub') ?? false) || isSubAgent
+    }, [subAgentCheckDone, isSubAgent, pathname, router])
 
     useEffect(() => {
         if (rcRestricted && rcSettingLoaded && pathname && !rcPathAllowed) {
@@ -171,12 +148,6 @@ export default function DashboardLayout({
         )
     }
 
-    // De-branded sub-agent portal: its own shop-branded sidebar, none of the
-    // main ARHMS chrome. Auth + profile guards above still apply.
-    if (isSubPortal) {
-        return <SubPortalShell>{children}</SubPortalShell>
-    }
-
     const isSuspended = dbUser?.status === 'suspended' && (dbUser?.role === 'agent' || dbUser?.role === 'customer')
 
     if (isSuspended) {
@@ -184,7 +155,7 @@ export default function DashboardLayout({
             <div className="min-h-screen relative">
                 <DashboardSidebar />
                 <div className={cn(
-                    "relative transition-all duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
+                    "relative lg:transition-[padding] lg:duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
                     isCollapsed ? "lg:pl-20" : "lg:pl-80"
                 )}>
                     <DashboardHeader />
@@ -213,11 +184,10 @@ export default function DashboardLayout({
         <div className="min-h-screen relative">
             <PushNotificationManager />
             <ReferralClaimOnMount />
-            <SystemAnnouncementModal userRole={dbUser?.role} />
             <AgentExpiryModal />
             <DashboardSidebar />
             <div className={cn(
-                "relative transition-all duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
+                "relative lg:transition-[padding] lg:duration-300 ease-in-out min-h-screen flex flex-col w-full max-w-[100vw] overflow-x-hidden",
                 isCollapsed ? "lg:pl-20" : "lg:pl-80"
             )}>
                 <DashboardHeader />
@@ -229,7 +199,7 @@ export default function DashboardLayout({
                 </main>
                 <CopyrightFooter className="bg-background/60" />
             </div>
-            {!rcRestricted && <MobileBottomNav />}
+            {!rcRestricted && <MobileBottomNav variant={isSubAgent ? 'dashboard-sub' : 'dashboard'} />}
             {/* <SupportChatWidget /> */}
         </div>
     )

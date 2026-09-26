@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { sendEmail, generatePremiumTemplate } from '@/lib/email-service'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 import { z } from 'zod'
 import { adminLongTextSchema } from '@/lib/validation'
 import { Ratelimit } from '@upstash/ratelimit'
@@ -96,17 +97,22 @@ export async function POST(request: NextRequest) {
                 if (data) recipientsRaw.push(...(data as any[]))
             }
         } else {
-            let query = supabase
-                .from('users')
-                .select('id, first_name, email, role')
-                .not('email', 'is', null)
+            // Paged: an unbounded select stops at PostgREST's 1000-row cap, which would
+            // silently drop every recipient past the first thousand from the broadcast.
+            const { data, error } = await fetchAllRows<any>(() => {
+                let query = supabase
+                    .from('users')
+                    .select('id, first_name, email, role')
+                    .not('email', 'is', null)
+                    .order('id', { ascending: true })
 
-            if (roleFilter && roleFilter !== 'all') {
-                // Filter by role
-                query = query.eq('role', roleFilter)
-            }
+                if (roleFilter && roleFilter !== 'all') {
+                    // Filter by role
+                    query = query.eq('role', roleFilter)
+                }
 
-            const { data, error } = await query
+                return query
+            })
             if (error) {
                 console.error('[EmailBroadcast] Error fetching recipients:', error)
                 return NextResponse.json({ error: 'Failed to fetch recipients' }, { status: 500 })

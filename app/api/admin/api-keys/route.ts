@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
 
         const { searchParams } = new URL(request.url)
         const status = searchParams.get('status') // pending | active | revoked | all
+        const kind = searchParams.get('kind')     // standard | commission | all
         const page = parseInt(searchParams.get('page') || '1')
         const limit = parseInt(searchParams.get('limit') || '30')
         const offset = (page - 1) * limit
@@ -31,13 +32,14 @@ export async function GET(request: NextRequest) {
         const supabase = createServerClient()
         let query = (supabase.from('api_keys') as any)
             .select(`
-                id, key_prefix, name, status, last_used_at, created_at,
+                id, key_prefix, name, status, kind, last_used_at, created_at,
                 users!api_keys_user_id_fkey(id, first_name, last_name, email, role)
             `, { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(offset, offset + limit - 1)
 
         if (status && status !== 'all') query = query.eq('status', status)
+        if (kind && kind !== 'all') query = query.eq('kind', kind)
 
         const { data: keys, error, count } = await query
 

@@ -60,7 +60,7 @@ export default async function ShopPage({ params }: Props) {
     // Fetch shop using service-role so unauthenticated visitors can load the page
     const { data: shop } = await (supabaseAdmin
         .from('shop_profiles')
-        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at, ussd_code, ussd_status')
+        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at, ussd_code, ussd_status, utilities_enabled')
         .eq('shop_slug', shopSlug)
         .single() as any)
 
@@ -79,8 +79,8 @@ export default async function ShopPage({ params }: Props) {
             'storefront_mashup_enabled',
             'storefront_rc_enabled',
             'storefront_afa_enabled',
-            'storefront_marketplace_ad_enabled',
             'storefront_ussd_card_enabled',
+            'ussd_enabled',
             'ussd_dial_code',
             'airtime_fee_mtn_customer',
             'airtime_fee_mtn_agent',
@@ -91,6 +91,10 @@ export default async function ShopPage({ params }: Props) {
             'airtime_min_amount',
             'airtime_max_amount',
             'special_mtn_mashup_hidden',
+            // The SHOP-scope provider, not the web one. /api/shop/initialize decides
+            // with this and ignores whatever the browser sends, so the checkout sheet
+            // has to read the same key or it will ask for details the gateway never uses.
+            'active_payment_provider_shop',
         ]) as any)
 
     const adminSettingsMap: Record<string, string> = {}

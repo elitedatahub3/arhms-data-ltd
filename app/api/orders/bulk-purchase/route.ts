@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkMtnRegistrationBatch, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 import { generateReferenceCode } from '@/lib/utils'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
@@ -7,8 +8,6 @@ import { waitUntil } from '@vercel/functions'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { checkFraudSignals, logSuspiciousActivity } from '@/lib/security'
-import { checkMtnRegistrationBatch, registrationRequiredBody } from '@/lib/mtn-registration-gate'
-import { validateGhanaianPhone } from '@/lib/phone-validation'
 
 // Lazy-init so a missing env var or exhausted Redis limit does not crash the module
 let bulkRateLimit: Ratelimit | null = null
@@ -75,14 +74,14 @@ export async function POST(request: NextRequest) {
             console.error('[BulkPurchase] Rate limit check failed (Redis exhausted?), proceeding:', rlErr)
         }
 
-        let body: { orders: BulkOrderItem[]; acknowledgeRegistration?: boolean }
+        let body: { orders: BulkOrderItem[] }
         try {
             body = await request.json()
         } catch {
             return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
         }
 
-        const { orders: rawOrders, acknowledgeRegistration } = body
+        const { orders: rawOrders } = body
 
         if (!Array.isArray(rawOrders) || rawOrders.length === 0) {
             return NextResponse.json({ error: 'No orders provided' }, { status: 400 })
@@ -164,25 +163,19 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: `Some packages are invalid: ${invalidOrders.map((o: any) => o.error).join(', ')}` }, { status: 400 })
         }
 
-        // === MTN REGISTRATION GATE ===
-        // One upstream round-trip for the whole batch, before any money moves.
-        const registrationGate = await checkMtnRegistrationBatch(
+        // MTN registration gate. One upstream round trip for the whole batch, before
+        // the wallet is touched. A single unregistered line refuses the WHOLE batch:
+        // charging for part of a paste the agent submitted as one unit would leave them
+        // reconciling which lines went through against which did not.
+        const { unregistered } = await checkMtnRegistrationBatch(
             supabase,
             validatedOrders.map((o: any) => ({ phoneNumber: o.phoneNumber, packageNetwork: o.network }))
         )
-
-        if (registrationGate.unregistered.length > 0 && !acknowledgeRegistration) {
+        if (unregistered.length > 0) {
             return NextResponse.json(
-                registrationRequiredBody(registrationGate.unregistered, validatedOrders.length),
+                registrationRequiredBody(unregistered, validatedOrders.length),
                 { status: 409 }
             )
-        }
-
-        // Which specific lines are held, so only those skip fulfillment.
-        const unregisteredSet = new Set(registrationGate.unregistered)
-        const isHeldForRegistration = (phone: string) => {
-            const validation = validateGhanaianPhone(phone)
-            return validation.isValid && unregisteredSet.has(validation.normalizedNumber)
         }
 
         // === 3. Calculate total and deduct atomically ===
@@ -232,15 +225,11 @@ export async function POST(request: NextRequest) {
             payment_status: 'paid',
             reference_code: referenceCodes[i],
             fulfillment_method: 'auto',
-            awaiting_registration: isHeldForRegistration(order.phoneNumber),
-            registration_submitted_at: isHeldForRegistration(order.phoneNumber)
-                ? new Date().toISOString()
-                : null,
         }))
 
         const { data: createdOrders, error: ordersError } = await (supabase.from('orders') as any)
             .insert(orderInserts)
-            .select('id, reference_code, network, size, phone_number, awaiting_registration')
+            .select('id, reference_code, network, size, phone_number')
 
         if (ordersError) {
             console.error('Bulk order insert error:', ordersError)
@@ -334,22 +323,9 @@ export async function POST(request: NextRequest) {
  * Returns outcome so caller can aggregate for admin alert.
  */
 async function processOrderNotifications(
-    order: { id: string; reference_code: string; network: string; phone_number: string; size: string; awaiting_registration?: boolean },
+    order: { id: string; reference_code: string; network: string; phone_number: string; size: string },
     user: { email: string; name: string }
 ): Promise<FulfillmentOutcome> {
-    // Held for MTN registration: the whitelist would reject this call, so don't make
-    // it. Not a failure — it is the outcome the buyer explicitly agreed to, so it must
-    // not land in the admin exception summary.
-    if (order.awaiting_registration === true) {
-        const { sendMtnVerificationPendingSMS } = await import('@/lib/sms-service')
-        await sendMtnVerificationPendingSMS(order.phone_number, {
-            network: order.network,
-            size: order.size,
-        }).catch((err: Error) => console.error('[BulkPurchase] Verification-pending SMS failed:', err))
-
-        return { referenceCode: order.reference_code, network: order.network, failed: false, type: 'success' }
-    }
-
     // No "order received" SMS — beneficiaries only hear from us on delivery.
     // On a bulk run this also stops one text per line item landing at once.
     return triggerFulfillment(order, user)

@@ -347,7 +347,13 @@ function ResultsCheckerContent() {
                     customerPhone,
                     momoPhone: customerPhone,
                     momoNetwork: paymentNetwork,
-                    otpCode: otpCode.trim()
+                    otpCode: otpCode.trim(),
+                    // The reference of the charge the code belongs to. Without it the
+                    // route has no way to know this is a retry and mints a fresh order
+                    // on every attempt — already an orphan-row bug under Moolre, and
+                    // fatal for Paystack, whose submit_otp needs the original
+                    // reference to identify the charge at all.
+                    reference: paymentReference,
                 })
             })
             const data = await res.json()

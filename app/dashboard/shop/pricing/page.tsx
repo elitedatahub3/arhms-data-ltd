@@ -67,6 +67,20 @@ const AIRTIME_NETWORKS = ['MTN', 'Telecel', 'AT']
 export default function ShopPricingPage() {
     const { dbUser, isAdmin, isSubAdmin } = useAuth()
     const router = useRouter()
+
+    // A sub-agent belongs on their own pricing screen. This page prices against
+    // the platform's role cost, while a sub is bounded by their upline's price
+    // — saving here used to slip that bound entirely. The API refuses them too;
+    // this just avoids showing a form that cannot be submitted.
+    useEffect(() => {
+        let active = true
+        fetch('/api/dashboard/sub/data')
+            .then((r) => {
+                if (active && r.ok) router.replace('/dashboard/sub/pricing')
+            })
+            .catch(() => {})
+        return () => { active = false }
+    }, [router])
     const [shop, setShop] = useState<ShopProfile | null>(null)
     const [packages, setPackages] = useState<Package[]>([])
     const [pricing, setPricing] = useState<Record<string, string>>({})

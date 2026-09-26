@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+﻿import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { calculatePaystackFee, generateReferenceCode } from '@/lib/utils'
@@ -8,7 +8,16 @@ import { checkHubtelPromptLimit, recordHubtelPrompt } from '@/lib/hubtel-prompt-
 import { initiatePayment as payswitchInitiatePayment, PAYSWITCH_CHANNEL_MAP } from '@/lib/payswitch-payment-service'
 import { assignPayswitchTransactionId } from '@/lib/payswitch-reference'
 import { resolveProviderForScope, type PaymentProvider } from '@/lib/payment-provider'
-import { buildUtilityIntent, utilitySettingKeys, isUtilityVisibleTo, UTILITY_LAUNCH_KEY } from '@/lib/utility-order-intent'
+import { WEB_FEE_SETTING_KEYS, resolveWebFeePercent } from '@/lib/gateway-fees'
+import { paystackMomoProviderFor } from '@/lib/paystack-momo-service'
+import {
+    startPaystackMomoCharge,
+    submitPaystackMomoOtp,
+    assertOwnPendingPayment,
+    type MomoChargeResult,
+} from '@/lib/paystack-momo-checkout'
+import { buildUtilityIntent, utilitySettingKeys, isUtilitySurfaceOpen, UTILITY_LAUNCH_KEY, utilitySurfaceSettingKeys } from '@/lib/utility-order-intent'
+import { computeUtilityMarkup } from '@/lib/utility-shop-pricing'
 
 /**
  * Direct-pay (MoMo / card) utility bill payment.
@@ -19,7 +28,7 @@ import { buildUtilityIntent, utilitySettingKeys, isUtilityVisibleTo, UTILITY_LAU
  * lib/utility-order-payments.ts creates the real order once the gateway confirms
  * payment, and is the only thing that ever spends from the prepaid account.
  *
- * The reference is `UTIL-…` — that prefix is what routes the callback in every
+ * The reference is `UTIL-â€¦` â€” that prefix is what routes the callback in every
  * collection webhook and reconciliation poller.
  *
  * Ghana Water's sessionId is looked up here so the bill can be priced against a live
@@ -35,14 +44,6 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        const supabaseUserClient = await createRouteHandlerClient()
-        const { data: { user: authUser }, error: authError } = await supabaseUserClient.auth.getUser()
-
-        if (authError || !authUser) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const userId = authUser.id
         const supabase = createServerClient() as any
 
         let body: any
@@ -55,19 +56,55 @@ export async function POST(request: NextRequest) {
         const {
             service, accountNumber, amount, phone, email,
             momoPhone, momoNetwork, otpCode, reference: existingRef,
+            shopSlug,
         } = body
 
         if (typeof service !== 'string') {
             return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
         }
 
-        // ── Load profile + settings ───────────────────────────────────────────
+        // ── Who is buying ────────────────────────────────────────────────────
+        // Two callers share this route. A signed-in customer buys for themselves.
+        // A storefront buyer is a GUEST — there is no session to read — so the shop
+        // owner stands as the account of record, exactly as storefront data and
+        // airtime orders do. Everything downstream (wallet, role-based platform fee,
+        // order ownership) then works unchanged.
+        let userId: string
+        let shop: { id: string; shop_name: string; owner_id: string; utility_fee_percent: number; utilities_enabled: boolean } | null = null
+
+        if (typeof shopSlug === 'string' && shopSlug.trim()) {
+            const { data: shopRow } = await supabase
+                .from('shop_profiles')
+                .select('id, shop_name, owner_id, utility_fee_percent, utilities_enabled, approval_status, is_active')
+                .eq('shop_slug', shopSlug.trim())
+                .maybeSingle()
+
+            if (!shopRow || shopRow.approval_status !== 'approved' || shopRow.is_active !== true) {
+                return NextResponse.json({ error: 'Shop not found' }, { status: 404 })
+            }
+            if (shopRow.utilities_enabled !== true) {
+                return NextResponse.json({ error: 'This shop does not accept bill payments.' }, { status: 403 })
+            }
+
+            shop = shopRow
+            userId = shopRow.owner_id
+        } else {
+            const supabaseUserClient = await createRouteHandlerClient()
+            const { data: { user: authUser }, error: authError } = await supabaseUserClient.auth.getUser()
+
+            if (authError || !authUser) {
+                return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+            }
+            userId = authUser.id
+        }
+
+        // â”€â”€ Load profile + settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         const [{ data: profile }, { data: settingsRows }] = await Promise.all([
             supabase.from('users').select('email, first_name, last_name, phone_number, role').eq('id', userId).single(),
             supabase.from('admin_settings').select('key, value').in('key', [
                 ...utilitySettingKeys(service),
-                'paystack_fee_percent',
-                'agent_paystack_fee_percent',
+                ...WEB_FEE_SETTING_KEYS,
+                ...utilitySurfaceSettingKeys(),
                 'active_payment_provider_web',
                 UTILITY_LAUNCH_KEY,
             ]),
@@ -76,33 +113,68 @@ export async function POST(request: NextRequest) {
         const settings: Record<string, any> = {}
         for (const row of (settingsRows || [])) settings[row.key] = row.value
 
-        // Live in production but not yet open — a hidden page is not a closed one,
+        // Live in production but not yet open â€” a hidden page is not a closed one,
         // and this is the route that moves money.
-        if (!isUtilityVisibleTo(profile?.role, settings)) {
+        if (!isUtilitySurfaceOpen(shop ? 'storefront' : 'dashboard', profile?.role, settings)) {
             return NextResponse.json({ error: 'Bill payments are not available yet.' }, { status: 403 })
         }
 
         const userRole: 'agent' | 'customer' = profile?.role === 'agent' ? 'agent' : 'customer'
         const gateway: PaymentProvider = resolveProviderForScope(settings.active_payment_provider_web, 'web')
 
-        // ── Validate + verify + price (all server-side) ───────────────────────
-        const built = await buildUtilityIntent({ service, accountNumber, amount, phone, email }, settings, userRole)
+        // â”€â”€ Validate + verify + price (all server-side) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        const built = await buildUtilityIntent(
+            { service, accountNumber, amount, phone, email, acknowledgeUnlinkedMeter: body?.acknowledgeUnlinkedMeter === true },
+            settings,
+            userRole
+        )
         if (!built.ok) {
             return NextResponse.json({ error: built.error }, { status: built.status })
         }
         const intent = built.intent
 
-        // ── Gateway fee on top of our own fee ─────────────────────────────────
+        // â”€â”€ Gateway fee on top of our own fee â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Same rule as the data checkout: Paystack and Hubtel charge us, Moolre and
         // PaySwitch charge the payer directly.
-        const subtotal = intent.totalPaid
+        // ── Reseller margin ──────────────────────────────────────────────────
+        // Only on a storefront sale. computeUtilityMarkup enforces the one rule that
+        // matters — platform fee plus every reseller margin never exceeds the cap —
+        // and returns the split already trimmed to fit, so what is added here can
+        // never put the customer over it.
+        const markup = shop
+            ? await computeUtilityMarkup(supabase, {
+                shopId: shop.id,
+                service: intent.service,
+                ownerRole: userRole,
+                billAmount: intent.billAmount,
+            })
+            : null
+
+        const resellerFee = markup ? markup.resellerAmount : 0
+
+        if (markup?.trimmed) {
+            // The customer is charged the capped figure regardless; this says the
+            // configuration asked for more than the cap allows, which an admin
+            // should straighten out.
+            console.warn(
+                `[UtilityGatewayInit] Shop ${shop?.id} markup trimmed to the ${markup.capPercent}% cap ` +
+                `on ${intent.service} (wanted more than ${markup.resellerPercent}%).`
+            )
+        }
+
+        const subtotal = parseFloat((intent.totalPaid + resellerFee).toFixed(2))
         let gatewayFee = 0
         let totalAmount = subtotal
 
-        if (gateway === 'paystack') {
-            const feePercent = parseFloat(
-                (userRole === 'agent' ? settings.agent_paystack_fee_percent : settings.paystack_fee_percent) || '0'
-            )
+        if (gateway === 'paystack' || gateway === 'paystack_momo') {
+            // fallbackPercent 0 preserves this route's original `|| '0'`: an
+            // unconfigured key has always meant a free utility transfer here, unlike
+            // the wallet and data flows which fall back to 1.95.
+            const feePercent = resolveWebFeePercent(settings, {
+                role: userRole,
+                provider: gateway,
+                fallbackPercent: 0,
+            })
             gatewayFee = calculatePaystackFee(subtotal, feePercent)
             totalAmount = parseFloat((subtotal + gatewayFee).toFixed(2))
         } else if (gateway === 'hubtel') {
@@ -111,7 +183,7 @@ export async function POST(request: NextRequest) {
             totalAmount = hubtelFee.total
         }
 
-        // ── Get or create wallet (wallet_payments needs a wallet_id) ──────────
+        // â”€â”€ Get or create wallet (wallet_payments needs a wallet_id) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         let { data: wallet } = await supabase.from('wallets').select('id').eq('user_id', userId).single()
         if (!wallet) {
             const { data: newWallet, error: walletError } = await supabase
@@ -126,7 +198,7 @@ export async function POST(request: NextRequest) {
             wallet = newWallet
         }
 
-        // ── Create (or reuse, on OTP retry) the payment intent ────────────────
+        // â”€â”€ Create (or reuse, on OTP retry) the payment intent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         const reference = existingRef || `UTIL-${generateReferenceCode()}`
         let paymentId: string | null = null
 
@@ -152,7 +224,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Everything processUtilityDirectOrder needs to build the order. The
-        // sessionId is deliberately absent — see the note at the top of this file.
+        // sessionId is deliberately absent â€” see the note at the top of this file.
         const intentMetadata = {
             kind: 'utility_order',
             user_id: userId,
@@ -166,6 +238,22 @@ export async function POST(request: NextRequest) {
             bill_amount: intent.billAmount,
             fee_rate: intent.feeRate,
             fee_amount: intent.feeAmount,
+
+            // Storefront only. The split is SNAPSHOTTED here, at the moment the
+            // customer is quoted, and paid out from this copy when the bill settles
+            // — which may be hours later, by which time a Lead could have changed
+            // their margin or a sub could have left the chain.
+            ...(shop ? {
+                shop_id: shop.id,
+                shop_name: shop.shop_name,
+                reseller_fee_amount: resellerFee,
+                reseller_split: markup?.legs.map(l => ({
+                    shop_id: l.shopId,
+                    owner_id: l.ownerId,
+                    percent: l.percent,
+                    amount: l.amount,
+                })) ?? [],
+            } : {}),
         }
 
         if (!paymentId) {
@@ -194,7 +282,7 @@ export async function POST(request: NextRequest) {
 
         const description = `ARHMS ${intent.label} - ${intent.accountNumber}`
 
-        // ── PAYSTACK ──────────────────────────────────────────────────────────
+        // â”€â”€ PAYSTACK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (gateway === 'paystack') {
             if (!process.env.PAYSTACK_SECRET_KEY || !process.env.NEXT_PUBLIC_APP_URL) {
                 console.error('[UtilityGatewayInit] Paystack env vars missing')
@@ -242,7 +330,48 @@ export async function POST(request: NextRequest) {
             })
         }
 
-        // ── HUBTEL ────────────────────────────────────────────────────────────
+        // â”€â”€ PAYSTACK MOBILE MONEY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        if (gateway === 'paystack_momo') {
+            if (!momoPhone || !momoNetwork || !paystackMomoProviderFor(momoNetwork)) {
+                return NextResponse.json({ error: 'Valid Mobile Money network is required' }, { status: 400 })
+            }
+
+            const finish = async (result: MomoChargeResult) => {
+                if (!result.ok) {
+                    if (result.safeToMarkFailed && !existingRef) {
+                        await supabase.from('wallet_payments')
+                            .update({ status: 'failed' })
+                            .eq('id', paymentId)
+                            .eq('status', 'pending')
+                    }
+                    return NextResponse.json(result.body, { status: result.httpStatus })
+                }
+                if (result.outcome === 'paid') {
+                    const { processUtilityDirectOrder } = await import('@/lib/utility-order-payments')
+                    await processUtilityDirectOrder(reference)
+                }
+                return NextResponse.json({ ...result.body, amount: totalAmount, fee: gatewayFee })
+            }
+
+            if (otpCode && existingRef) {
+                if (!await assertOwnPendingPayment(supabase, existingRef, userId)) {
+                    return NextResponse.json({ error: 'That payment is no longer waiting for a code' }, { status: 404 })
+                }
+                return finish(await submitPaystackMomoOtp({ reference: existingRef, otp: String(otpCode), payerPhone: momoPhone }))
+            }
+
+            return finish(await startPaystackMomoCharge({
+                reference,
+                amountGhs: totalAmount,
+                payerPhone: momoPhone,
+                network: momoNetwork,
+                email: profile?.email,
+                metadata: { user_id: userId, kind: 'utility_order', service: intent.service },
+                userId,
+            }))
+        }
+
+        // â”€â”€ HUBTEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (gateway === 'hubtel') {
             if (!momoNetwork || !HUBTEL_CHANNEL_MAP[momoNetwork]) {
                 return NextResponse.json({ error: 'Valid Mobile Money network is required' }, { status: 400 })
@@ -303,7 +432,7 @@ export async function POST(request: NextRequest) {
             })
         }
 
-        // ── PAYSWITCH ─────────────────────────────────────────────────────────
+        // â”€â”€ PAYSWITCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (gateway === 'payswitch') {
             if (!momoPhone || !momoNetwork || !PAYSWITCH_CHANNEL_MAP[momoNetwork]) {
                 return NextResponse.json({ error: 'Valid Mobile Money phone number and network are required' }, { status: 400 })
@@ -341,7 +470,7 @@ export async function POST(request: NextRequest) {
             })
         }
 
-        // ── MOOLRE ────────────────────────────────────────────────────────────
+        // â”€â”€ MOOLRE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (!momoPhone || !momoNetwork || !MOOLRE_PAYMENT_CHANNEL_MAP[momoNetwork]) {
             return NextResponse.json(
                 { error: 'Valid MoMo phone number and network are required for mobile money payments' },
@@ -359,7 +488,7 @@ export async function POST(request: NextRequest) {
             otpCode,
         })
 
-        // OTP just verified — send the actual payment request
+        // OTP just verified â€” send the actual payment request
         if (moolreResponse.success && String(moolreResponse.status) === '1' && otpCode) {
             moolreResponse = await moolreInitiatePayment({
                 amount: totalAmount,

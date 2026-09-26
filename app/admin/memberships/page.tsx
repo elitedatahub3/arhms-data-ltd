@@ -67,6 +67,14 @@ export default function AdminMembershipsPage() {
         'permanent': '149.99'
     })
     const [showStrikethrough, setShowStrikethrough] = useState(false)
+    type AgentPlan = '3d' | '14d' | '30d' | 'permanent'
+    const [enabledPlans, setEnabledPlans] = useState<Record<AgentPlan, boolean>>({
+        '3d': true,
+        '14d': true,
+        '30d': true,
+        'permanent': true
+    })
+    const [savingPlanToggle, setSavingPlanToggle] = useState<AgentPlan | null>(null)
 
     // Dealer state
     const [dealers, setDealers] = useState<any[]>([])
@@ -107,6 +115,14 @@ export default function AdminMembershipsPage() {
                     'permanent': String(pPerm)
                 })
                 setShowStrikethrough(showStrike)
+                const isPlanEnabled = (plan: AgentPlan) =>
+                    settingsData.find((s: any) => s.key === `agent_plan_enabled_${plan}`)?.value !== 'false'
+                setEnabledPlans({
+                    '3d': isPlanEnabled('3d'),
+                    '14d': isPlanEnabled('14d'),
+                    '30d': isPlanEnabled('30d'),
+                    'permanent': isPlanEnabled('permanent')
+                })
             }
 
 
@@ -258,6 +274,26 @@ export default function AdminMembershipsPage() {
         }
     }
 
+    const handlePlanToggle = async (plan: AgentPlan, enabled: boolean) => {
+        setSavingPlanToggle(plan)
+        try {
+            const response = await fetch('/api/admin/update-prices', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ planEnabled: { plan, enabled } })
+            })
+            const data = await response.json()
+            if (!response.ok) throw new Error(data.error || 'Failed to update plan')
+            setEnabledPlans(prev => ({ ...prev, [plan]: enabled }))
+            clearPricingCache()
+            toast.success(enabled ? 'Plan turned ON' : 'Plan turned OFF')
+        } catch (error: any) {
+            toast.error(error.message)
+        } finally {
+            setSavingPlanToggle(null)
+        }
+    }
+
     const handleExtend = async () => {
         if (!extendUser || !extendDays) return
 
@@ -391,42 +427,44 @@ export default function AdminMembershipsPage() {
                     </CardHeader>
                     <CardContent className="pt-6 space-y-6">
                         <div className="space-y-4">
-                            <div className="space-y-2">
-                                <Label>3 Days Access (GHS) - Starter</Label>
-                                <Input
-                                    type="number"
-                                    value={prices['3d']}
-                                    onChange={(e) => setPrices({ ...prices, '3d': e.target.value })}
-                                    className="font-bold text-lg"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>14 Days Access (GHS)</Label>
-                                <Input
-                                    type="number"
-                                    value={prices['14d']}
-                                    onChange={(e) => setPrices({ ...prices, '14d': e.target.value })}
-                                    className="font-bold text-lg border-amber-200"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>30 Days Access (GHS)</Label>
-                                <Input
-                                    type="number"
-                                    value={prices['30d']}
-                                    onChange={(e) => setPrices({ ...prices, '30d': e.target.value })}
-                                    className="font-bold text-lg"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label className="flex items-center gap-1"><ShieldCheck className="w-4 h-4 text-indigo-500" /> Permanent Access (GHS)</Label>
-                                <Input
-                                    type="number"
-                                    value={prices['permanent']}
-                                    onChange={(e) => setPrices({ ...prices, 'permanent': e.target.value })}
-                                    className="font-bold text-lg border-indigo-200"
-                                />
-                            </div>
+                            {([
+                                { plan: '3d', label: '3 Days Access (GHS) - Starter', inputClass: '' },
+                                { plan: '14d', label: '14 Days Access (GHS)', inputClass: 'border-amber-200' },
+                                { plan: '30d', label: '30 Days Access (GHS)', inputClass: '' },
+                                { plan: 'permanent', label: 'Permanent Access (GHS)', inputClass: 'border-indigo-200' },
+                            ] as { plan: AgentPlan; label: string; inputClass: string }[]).map(({ plan, label, inputClass }) => (
+                                <div key={plan} className="space-y-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <Label className="flex items-center gap-1">
+                                            {plan === 'permanent' && <ShieldCheck className="w-4 h-4 text-indigo-500" />}
+                                            {label}
+                                        </Label>
+                                        <div className="flex items-center gap-2">
+                                            <span className={cn(
+                                                "text-[10px] font-black uppercase",
+                                                enabledPlans[plan] ? "text-emerald-600" : "text-slate-400"
+                                            )}>
+                                                {enabledPlans[plan] ? 'On' : 'Off'}
+                                            </span>
+                                            <Switch
+                                                checked={enabledPlans[plan]}
+                                                onCheckedChange={(checked) => handlePlanToggle(plan, checked)}
+                                                disabled={savingPlanToggle === plan}
+                                                aria-label={`Turn ${label} on or off`}
+                                            />
+                                        </div>
+                                    </div>
+                                    <Input
+                                        type="number"
+                                        value={prices[plan]}
+                                        onChange={(e) => setPrices({ ...prices, [plan]: e.target.value })}
+                                        className={cn("font-bold text-lg", inputClass, !enabledPlans[plan] && "opacity-50")}
+                                    />
+                                </div>
+                            ))}
+                            <p className="text-xs text-muted-foreground">
+                                Plans switched OFF are hidden from customers and can't be bought.
+                            </p>
                         </div>
                         <div className="space-y-3 pt-2 border-t">
                             <div className="flex items-center space-x-2">

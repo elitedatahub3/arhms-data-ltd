@@ -15,12 +15,9 @@ import {
     BarChart3,
     Bell,
     CheckCircle2,
-    Code2,
-    GraduationCap,
     HeadphonesIcon,
     Layers,
     MessageSquare,
-    Monitor,
     Shield,
     Smartphone,
     Store,
@@ -29,21 +26,7 @@ import {
     Zap,
 } from 'lucide-react'
 import { BrandLogo } from '@/components/BrandLogo'
-import { ListingCard } from '@/components/marketplace/listing-card'
-
-// Shape of a featured marketplace listing — matches ListingCard's `listing` prop
-// and the columns selected by getFeaturedListings() in app/page.tsx.
-type FeaturedListing = {
-    id: string
-    title: string
-    description: string
-    price_pesewas: number
-    condition: string
-    region?: string
-    created_at: string
-    promotion_tier?: number
-    classified_listing_images?: Array<{ image_url: string; sort_order: number }>
-}
+import { HeroCarousel } from '@/components/landing/HeroCarousel'
 
 interface LandingClientShellProps {
     initialGuestUrl: string
@@ -51,7 +34,6 @@ interface LandingClientShellProps {
     initialPlanPrices?: Record<TierId, number>
     initialWhatsappGroupLink?: string
     initialWhatsappChannelLink?: string
-    initialFeaturedListings?: FeaturedListing[]
 }
 
 type TierId = '3d' | '14d' | '30d' | 'permanent'
@@ -64,7 +46,6 @@ const DEFAULT_PLAN_PRICES: Record<TierId, number> = {
 }
 
 const BRAND_BLUE = '#2563eb'
-const BRAND_PURPLE = '#7c3aed'
 const BRAND_GRADIENT = 'linear-gradient(90deg, #7c3aed 0%, #2563eb 52%, #0ea5e9 100%)'
 
 const planCards: Array<{ id: TierId; name: string; duration: string; badge: string; highlight?: boolean }> = [
@@ -95,95 +76,18 @@ const faqItems = [
     { q: 'How do customers track orders or report issues?', a: 'Customers can use the public order tracker, while logged-in users can review orders, notifications, and complaints from dashboard pages.' },
 ]
 
-// ── Dot indicators ───────────────────────────────────────────────────────────────
-function SlideDots({ current, total, onDotClick }: { current: number; total: number; onDotClick: (i: number) => void }) {
-    return (
-        <div className="flex items-center justify-between mt-6 pt-5 border-t border-black/10 dark:border-white/10">
-            <div className="flex items-center gap-1.5">
-                {Array.from({ length: total }).map((_, i) => (
-                    <button
-                        key={i}
-                        type="button"
-                        onClick={() => onDotClick(i)}
-                        style={{
-                            height: 8,
-                            width: i === current ? 28 : 8,
-                            borderRadius: 99,
-                            transition: 'all 0.3s ease',
-                        }}
-                        className={i === current ? 'bg-[#2563eb]' : 'bg-black/10 dark:bg-white/20'}
-                        aria-label={`Slide ${i + 1}`}
-                    />
-                ))}
-            </div>
-            <Link
-                href="/shop/status"
-                className="flex items-center gap-1.5 text-[10px] font-bold transition-colors active:opacity-70 text-black/30 dark:text-white/30"
-            >
-                <CheckCircle2 className="w-3 h-3" /> Track an Order
-            </Link>
-        </div>
-    )
-}
-
-// ── Hero CTA buttons ──────────────────────────────────────────────────────────────
-function HeroBtn({ href, variant = 'primary', children, className }: { href: string; variant?: 'primary' | 'white' | 'dark'; children: React.ReactNode; className?: string }) {
-    const baseClasses = 'flex items-center justify-center gap-1.5 w-full h-14 rounded-full font-extrabold text-[13px] tracking-widest uppercase cursor-pointer transition-all active:scale-95 sm:h-[42px] sm:w-auto sm:px-6'
-    
-    let variantClasses = ''
-    if (variant === 'primary') {
-        variantClasses = 'bg-gradient-to-r from-[#7c3aed] via-[#2563eb] to-[#0ea5e9] text-white shadow-[0_12px_30px_rgba(37,99,235,0.28)]'
-    } else if (variant === 'white') {
-        variantClasses = 'bg-transparent dark:bg-white text-[#111] border-[1.5px] border-[#2563eb]/20 dark:border-white/15'
-    } else if (variant === 'dark') {
-        variantClasses = 'bg-[#2563eb]/5 dark:bg-white/5 text-[#111] dark:text-white border-[1.5px] border-[#2563eb]/10 dark:border-white/10'
-    }
-
-    // Warm internal routes (/auth/login, /auth/signup) so the tap lands on an
-    // already-cached payload instead of a cold round-trip. External storefront
-    // URLs can't be prefetched by the router, so opt them out.
-    const isInternal = href.startsWith('/')
-
-    return (
-        <Link href={href} prefetch={isInternal ? true : false} className={cn(baseClasses, variantClasses, className)}>
-            {children}
-        </Link>
-    )
-}
-
-// ── Platform icons for Download App ──────────────────────────────────────────────
-function AppleIcon({ className }: { className?: string }) {
-    return (
-        <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-            <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
-        </svg>
-    )
-}
-
-function AndroidIcon({ className }: { className?: string }) {
-    return (
-        <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-            <path d="M17.523 15.341a1 1 0 0 1-1-1V9.659a1 1 0 0 1 2 0v4.682a1 1 0 0 1-1 1zm-11.046 0a1 1 0 0 1-1-1V9.659a1 1 0 0 1 2 0v4.682a1 1 0 0 1-1 1zM8 6.32 6.9 4.42a.344.344 0 0 1 .597-.344L8.6 5.9A6.955 6.955 0 0 1 12 5.16c1.02 0 1.99.22 2.865.618l1.1-1.902a.344.344 0 0 1 .597.345l-1.1 1.878A6.994 6.994 0 0 1 19 12.5H5A6.994 6.994 0 0 1 8 6.32zM9.5 10a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1zm5 0a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1zM5 14h14v5.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V14z" />
-        </svg>
-    )
-}
-
 // ─────────────────────────────────────────────────────────────────────────────────
 export function LandingClientShell({
     initialGuestUrl,
     initialAdminPhone,
     initialPlanPrices,
-    initialFeaturedListings = [],
 }: LandingClientShellProps) {
     const router = useRouter()
     const [headerScrolled, setHeaderScrolled] = useState(false)
     const [guestUrl] = useState(initialGuestUrl)
     const [adminPhone] = useState(initialAdminPhone)
     const [planPrices] = useState<Record<TierId, number>>(initialPlanPrices || DEFAULT_PLAN_PRICES)
-    const [slide, setSlide] = useState(0)
-    const [touchStartX, setTouchStartX] = useState<number | null>(null)
     const [isLoggedIn, setIsLoggedIn] = useState(false)
-    const SLIDE_COUNT = 5
 
     const isValidGuestUrl = Boolean(guestUrl && !guestUrl.endsWith('/shop/demo') && guestUrl.includes('/shop/'))
 
@@ -206,30 +110,22 @@ export function LandingClientShell({
         } catch (_) {}
     }, [router])
 
-    useEffect(() => {
-        const t = setInterval(() => setSlide(s => (s + 1) % SLIDE_COUNT), 10000)
-        return () => clearInterval(t)
-    }, [])
-
-    const cardBase = 'absolute inset-0 w-full rounded-3xl p-6 sm:p-8 text-left transition-all duration-500'
-    const slideState = (i: number) => slide === i
-        ? 'opacity-100 translate-x-0 pointer-events-auto'
-        : slide > i
-            ? 'opacity-0 -translate-x-5 pointer-events-none'
-            : 'opacity-0 translate-x-5 pointer-events-none'
-
     return (
-        // bg-bubbles is applied here rather than inherited from <body>: this
-        // wrapper is its own full-height surface, and in dark mode it paints a
-        // gradient over the page, so the body's field never showed through. The
-        // dark: utility still wins in dark mode, which is intended — the discs
-        // belong to the light surface.
-        <div className="min-h-screen text-foreground overflow-x-hidden bg-bubbles dark:bg-[linear-gradient(160deg,#020617_0%,#070c1f_40%,#020617_100%)]">
+        // No background of its own in light mode: the bubble field comes from
+        // <body>, where it is painted once on a fixed layer (see .bg-bubbles in
+        // globals.css) instead of being tiled down this whole page. In dark mode
+        // this wrapper paints its gradient over it, as before — the discs belong
+        // to the light surface.
+        // overflow-x-clip, not hidden: `hidden` turns the wrapper into a scroll
+        // container, which Android Chrome handles badly as the URL bar collapses.
+        <div className="min-h-screen text-foreground overflow-x-clip dark:bg-[linear-gradient(160deg,#020617_0%,#070c1f_40%,#020617_100%)]">
 
             {/* ══ NAV ══════════════════════════════════════════════════════════════ */}
+            {/* No backdrop-blur: the scrolled bar is 95% opaque, so the blur was
+                invisible while costing a full-width GPU pass on every scroll frame. */}
             <nav className={cn(
-                'fixed top-0 w-full z-[100] transition-all duration-500 h-16 sm:h-20 flex items-center',
-                headerScrolled ? 'backdrop-blur-2xl border-b shadow-sm border-black/10 dark:border-white/10 bg-white/95 dark:bg-[#020617]/95' : 'bg-transparent'
+                'fixed top-0 w-full z-[100] transition-[background-color,border-color,box-shadow] duration-200 h-16 sm:h-20 flex items-center',
+                headerScrolled ? 'border-b shadow-sm border-black/10 dark:border-white/10 bg-white/95 dark:bg-[#020617]/95' : 'bg-transparent'
             )}>
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 w-full flex items-center justify-between">
                     <a href="#" className="flex items-center gap-2 min-w-0">
@@ -244,7 +140,7 @@ export function LandingClientShell({
                     </a>
 
                     <div className="hidden md:flex items-center gap-7">
-                        {[['Products','#features'],['Marketplace','#marketplace'],['Wallet','#plans'],['Resell','#plans'],['AFA','#support']].map(([l,h]) => (
+                        {[['Products','#features'],['Wallet','#plans'],['Resell','#plans'],['AFA','#support']].map(([l,h]) => (
                             <a key={l} href={h} className="text-xs font-semibold transition-colors text-black/50 dark:text-white/60">{l}</a>
                         ))}
                     </div>
@@ -273,222 +169,7 @@ export function LandingClientShell({
             </nav>
 
             {/* ══ HERO ══════════════════════════════════════════════════════════════ */}
-            <section
-                className="relative min-h-screen flex flex-col items-center justify-center px-4 sm:px-6 lg:px-10 overflow-hidden pt-16"
-                onTouchStart={e => setTouchStartX(e.touches[0].clientX)}
-                onTouchEnd={e => {
-                    if (touchStartX === null) return
-                    const dx = e.changedTouches[0].clientX - touchStartX
-                    if (Math.abs(dx) > 40) setSlide(s => dx < 0 ? (s + 1) % SLIDE_COUNT : (s - 1 + SLIDE_COUNT) % SLIDE_COUNT)
-                    setTouchStartX(null)
-                }}
-            >
-                {/* Background ambience — light mode only */}
-                <div className="pointer-events-none absolute inset-0 overflow-hidden dark:hidden">
-                    <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(37,99,235,0.08) 0%, transparent 70%)', filter: 'blur(40px)' }} />
-                    <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.05) 0%, transparent 65%)', filter: 'blur(50px)' }} />
-                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[560px] h-[200px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(37,99,235,0.06) 0%, transparent 70%)', filter: 'blur(30px)' }} />
-                </div>
-
-                {/* Background glow orbs — dark mode only */}
-                <div className="pointer-events-none absolute inset-0 overflow-hidden hidden dark:block">
-                    <div className="absolute -top-24 -right-24 w-[700px] h-[700px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(79,70,229,0.5) 0%, transparent 62%)', filter: 'blur(44px)' }} />
-                    <div className="absolute top-1/4 -left-48 w-[560px] h-[560px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(37,99,235,0.3) 0%, transparent 68%)', filter: 'blur(32px)' }} />
-                    <div className="absolute bottom-0 right-1/3 w-[500px] h-[500px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(37,99,235,0.16) 0%, transparent 65%)', filter: 'blur(52px)' }} />
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] rounded-full" style={{ background: 'radial-gradient(ellipse, rgba(124,58,237,0.22) 0%, transparent 58%)', filter: 'blur(60px)' }} />
-                </div>
-
-                <div className="relative z-10 w-full max-w-sm mx-auto flex flex-col items-center gap-4 sm:max-w-lg">
-
-                    {/* Logo */}
-                    <div className="w-[88px] h-[88px] rounded-full overflow-hidden flex items-center justify-center" style={{ backgroundColor: '#fff', boxShadow: '0 0 0 4px rgba(255,255,255,0.15), 0 20px 60px rgba(0,0,0,0.35)' }}>
-                        <div className="relative w-16 h-16">
-                            <Image src="/arhms-logo.png" alt="ARHMS Logo" fill className="object-contain" priority />
-                        </div>
-                    </div>
-
-                    {/* Brand name */}
-                    <div className="text-center -mt-1">
-                        <p className="font-black text-2xl sm:text-3xl tracking-tight text-[#111111] dark:text-white">
-                            ARHMS <span style={{ color: BRAND_BLUE }}>TECHNOLOGIES</span>
-                        </p>
-                        <p className="text-[10px] font-bold uppercase tracking-[0.28em] mt-1 text-black/40 dark:text-white/40">
-                            Smart Solutions. Endless Possibilities.
-                        </p>
-                    </div>
-
-                    {/* Badge */}
-                    <div className="flex items-center gap-2 px-4 py-2 rounded-full border bg-[#2563eb]/5 dark:bg-white/5 border-[#2563eb]/30">
-                        <Zap className="w-3.5 h-3.5" style={{ color: BRAND_BLUE, fill: BRAND_BLUE }} />
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-foreground/80">Ultra Fast Instant Delivery</span>
-                    </div>
-
-                    {/* Radial glow behind card — dark mode only */}
-                    <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 hidden dark:block" style={{ top: '8%', width: 440, height: 560, borderRadius: '50%', background: 'radial-gradient(ellipse, rgba(37,99,235,0.2) 0%, rgba(79,70,229,0.12) 40%, transparent 70%)', filter: 'blur(52px)', zIndex: 0 }} />
-
-                    {/* ── Carousel ─────────────────────────────── */}
-                    <div className="w-full relative z-10" style={{ minHeight: 640 }}>
-
-                        {/* Slide 1 — Welcome */}
-                        <div className={cn(cardBase, slideState(0), 'hero-slide-1')}>
-                            <p className="text-[10px] font-black uppercase tracking-[0.35em] mb-3" style={{ color: BRAND_BLUE }}>Welcome to</p>
-                            <h1 className="font-black text-[2rem] sm:text-4xl leading-tight tracking-tight mb-3 text-[#111111] dark:text-white">
-                                ARHMS <span style={{ color: BRAND_BLUE }}>TECHNOLOGIES</span>
-                            </h1>
-                            <p className="text-sm font-medium leading-relaxed mb-6 text-black/55 dark:text-white/55">
-                                Ghana&apos;s all-in-one platform for mobile data, airtime, Results Checkers, and business growth. Instant delivery, always.
-                            </p>
-                            <div className="flex flex-col gap-2.5">
-                                <HeroBtn href="/auth/login" variant="primary">Sign In</HeroBtn>
-                                <HeroBtn href="/auth/signup" variant="white">Create Account</HeroBtn>
-                                {isValidGuestUrl && <HeroBtn href={guestUrl} variant="dark"><Store className="w-4 h-4" /> Buy as Guest</HeroBtn>}
-                                <HeroBtn href="/dashboard/install" variant="dark">
-                                    <Smartphone className="w-4 h-4" />
-                                    Download App
-                                    <span className="flex items-center gap-1 ml-1" style={{ opacity: 0.5 }}>
-                                        <AppleIcon className="w-3.5 h-3.5" />
-                                        <AndroidIcon className="w-3.5 h-3.5" />
-                                        <Monitor className="w-3.5 h-3.5" />
-                                    </span>
-                                </HeroBtn>
-                            </div>
-                            <SlideDots current={0} total={SLIDE_COUNT} onDotClick={setSlide} />
-                        </div>
-
-                        {/* Slide 2 — Result Checker */}
-                        <div className={cn(cardBase, slideState(1), 'hero-slide-2')}>
-                            <p className="text-[10px] font-black uppercase tracking-[0.35em] mb-3" style={{ color: BRAND_BLUE }}>WASSCE &amp; BECE</p>
-                            <h2 className="font-black text-[2rem] sm:text-4xl leading-tight tracking-tight mb-3 text-[#111111] dark:text-white">
-                                Check Your <span style={{ color: BRAND_BLUE }}>Results</span>
-                            </h2>
-                            <p className="text-sm font-medium leading-relaxed mb-5 text-black/55 dark:text-white/60">
-                                Instantly check WAEC, BECE exam results for any student. Fast, reliable, and always available.
-                            </p>
-                            <div className="flex flex-wrap gap-2 mb-6">
-                                {['WAEC Results', 'BECE Results', 'Instant Check', 'Any School', 'Live Updates'].map(f => (
-                                    <span key={f} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wide text-black/70 dark:text-white/85" style={{ background: 'rgba(37,99,235,0.08)', border: '1px solid rgba(37,99,235,0.22)' }}>
-                                        <CheckCircle2 className="w-3 h-3" style={{ color: BRAND_BLUE }} />{f}
-                                    </span>
-                                ))}
-                            </div>
-                            <HeroBtn href="/dashboard/results-checker" variant="primary"><GraduationCap className="w-4 h-4" /> Check Results Now</HeroBtn>
-                            <SlideDots current={1} total={SLIDE_COUNT} onDotClick={setSlide} />
-                        </div>
-
-                        {/* Slide 3 — Create Your Shop */}
-                        <div className={cn(cardBase, slideState(2), 'hero-slide-3 overflow-hidden')}>
-                            <div className="hidden dark:block">
-                                <div style={{ position: 'absolute', top: '-30%', right: '-15%', width: 220, height: 220, borderRadius: '50%', background: 'rgba(255,255,255,0.12)', filter: 'blur(50px)', pointerEvents: 'none' }} />
-                                <div style={{ position: 'absolute', bottom: '-20%', left: '-10%', width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', filter: 'blur(40px)', pointerEvents: 'none' }} />
-                                <div style={{ position: 'absolute', top: '40%', right: '10%', width: 100, height: 100, borderRadius: '50%', background: 'rgba(253,230,138,0.15)', filter: 'blur(30px)', pointerEvents: 'none' }} />
-                            </div>
-                            <div className="relative z-10">
-                                <p className="text-[10px] font-black uppercase tracking-[0.35em] mb-3 text-[#2563eb] dark:text-white/85">Create Your Shop</p>
-                                <h2 className="font-black text-[2rem] sm:text-4xl leading-tight tracking-tight mb-3 text-[#111111] dark:text-white">
-                                    Launch Your <span className="text-[#2563eb] dark:text-[#93c5fd]">Shop</span>
-                                </h2>
-                                <p className="text-sm font-medium leading-relaxed mb-5 text-black/55 dark:text-white/80">
-                                    Create a branded storefront with your name, logo, pricing, and checkout link. Share it anywhere and start earning.
-                                </p>
-                                <div className="flex flex-wrap gap-2 mb-6">
-                                    {['Public Shop URL','Custom Pricing','Order Tracking','WhatsApp Support','Brand Logo'].map(f => (
-                                        <span key={f} className="hero-pill inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wide text-black/70 dark:text-white/95">
-                                            <CheckCircle2 className="w-3 h-3 text-[#2563eb] dark:text-[#bfdbfe]" />{f}
-                                        </span>
-                                    ))}
-                                </div>
-                                <HeroBtn href="/auth/signup" variant="primary"><Store className="w-4 h-4" /> Open Your Shop</HeroBtn>
-                                <SlideDots current={2} total={SLIDE_COUNT} onDotClick={setSlide} />
-                            </div>
-                        </div>
-
-                        {/* Slide 4 — Developer API */}
-                        <div className={cn(cardBase, slideState(3), 'hero-slide-4')}>
-                            <p className="text-[10px] font-black uppercase tracking-[0.35em] mb-3" style={{ color: BRAND_PURPLE }}>For Builders</p>
-                            <h2 className="font-black text-[2rem] sm:text-4xl leading-tight tracking-tight mb-3 text-[#111111] dark:text-white">
-                                Powerful <span style={{ color: BRAND_PURPLE }}>API</span> Access
-                            </h2>
-                            <p className="text-sm font-medium leading-relaxed mb-5 text-black/55 dark:text-white/55">
-                                Integrate ARHMS data, airtime, and result checking into your own apps. RESTful API with instant responses.
-                            </p>
-                            <div className="flex flex-wrap gap-2 mb-6">
-                                {['REST API', 'Webhooks', 'Sandbox Mode', 'Live Dashboard', 'Instant Response'].map(f => (
-                                    <span key={f} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wide text-black/70 dark:text-white/85" style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)' }}>
-                                        <Code2 className="w-3 h-3" style={{ color: BRAND_PURPLE }} />{f}
-                                    </span>
-                                ))}
-                            </div>
-                            <HeroBtn href="/auth/signup" variant="primary"><Code2 className="w-4 h-4" /> Get API Access</HeroBtn>
-                            <SlideDots current={3} total={SLIDE_COUNT} onDotClick={setSlide} />
-                        </div>
-
-                        {/* Slide 5 — Marketplace */}
-                        <div className={cn(cardBase, slideState(4), 'hero-slide-5')}>
-                            <p className="text-[10px] font-black uppercase tracking-[0.35em] mb-3" style={{ color: '#059669' }}>ARHMS Marketplace</p>
-                            <h2 className="font-black text-[2rem] sm:text-4xl leading-tight tracking-tight mb-3 text-[#111111] dark:text-white">
-                                Buy &amp; Sell <span style={{ color: '#059669' }}>Locally</span>
-                            </h2>
-                            <p className="text-sm font-medium leading-relaxed mb-5 text-black/55 dark:text-white/60">
-                                Discover great deals from verified sellers across Ghana — or list your own items for free in minutes.
-                            </p>
-                            <div className="flex flex-wrap gap-2 mb-6">
-                                {['Verified Sellers', 'Local Deals', 'Post Free Ads', 'Any Category', 'Chat Direct'].map(f => (
-                                    <span key={f} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wide text-black/70 dark:text-white/85" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.22)' }}>
-                                        <CheckCircle2 className="w-3 h-3" style={{ color: '#059669' }} />{f}
-                                    </span>
-                                ))}
-                            </div>
-                            <HeroBtn href={process.env.NEXT_PUBLIC_MARKETPLACE_URL || 'https://marketplace.arhmsgh.com'} variant="primary"><Store className="w-4 h-4" /> Explore Marketplace</HeroBtn>
-                            <SlideDots current={4} total={SLIDE_COUNT} onDotClick={setSlide} />
-                        </div>
-                    </div>
-
-                    {/* Light-mode surface separator */}
-                    <div className="hero-separator block dark:hidden w-full h-px" />
-
-                    {/* Light-mode mirror reflection */}
-                    <div className="hero-reflect-wrap block dark:hidden w-full relative pointer-events-none">
-                        {[0, 1, 2, 3, 4].map(i => (
-                            <div key={i} className={cn('hero-reflect', `hero-reflect-${i + 1}`, slideState(i))} />
-                        ))}
-                    </div>
-                </div>
-            </section>
-
-            {/* ══ MARKETPLACE ═══════════════════════════════════════════════════════ */}
-            {initialFeaturedListings.length > 0 && (
-                <section id="marketplace" className="landing-section py-32 px-6 lg:px-10">
-                    <div className="max-w-7xl mx-auto">
-                        <div className="text-center mb-14 space-y-4">
-                            <h2 className="text-xs font-black uppercase tracking-[0.5em] text-[#059669]">ARHMS Marketplace</h2>
-                            <h3 className="text-4xl md:text-6xl font-black tracking-tighter text-foreground">
-                                Buy &amp; Sell <span className="text-[#059669]">Locally</span> in Ghana
-                            </h3>
-                            <p className="max-w-3xl mx-auto text-muted-foreground font-medium">
-                                Discover great deals from verified sellers near you — or list your own items for free in minutes.
-                            </p>
-                        </div>
-                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                            {initialFeaturedListings.map((listing) => (
-                                <ListingCard key={listing.id} listing={listing} />
-                            ))}
-                        </div>
-                        <div className="flex flex-col sm:flex-row gap-4 justify-center mt-12">
-                            <Link href="/marketplace-domain">
-                                <Button className="h-12 px-8 rounded-2xl font-black uppercase tracking-widest" style={{ background: '#059669' }}>
-                                    <Store className="w-4 h-4 mr-2" /> Explore Marketplace
-                                </Button>
-                            </Link>
-                            <Link href="/marketplace-domain/browse">
-                                <Button variant="outline" className="h-12 px-8 rounded-2xl font-black uppercase tracking-widest">Browse All Listings</Button>
-                            </Link>
-                            <Link href="/marketplace-domain/sell">
-                                <Button variant="outline" className="h-12 px-8 rounded-2xl font-black uppercase tracking-widest">Start Selling</Button>
-                            </Link>
-                        </div>
-                    </div>
-                </section>
-            )}
+            <HeroCarousel guestUrl={guestUrl} isValidGuestUrl={isValidGuestUrl} />
 
             {/* ══ HOW IT WORKS ══════════════════════════════════════════════════════ */}
             <section className="dark-mirror-section py-28 px-6 lg:px-10">
@@ -534,7 +215,7 @@ export function LandingClientShell({
                     </div>
                     <div className="grid md:grid-cols-2 xl:grid-cols-5 gap-6">
                         {featureCards.map((feature, i) => (
-                            <div key={`${feature.title}-${i}`} className="card-premium p-7 group hover:border-[#2563eb]/50 transition-all duration-500">
+                            <div key={`${feature.title}-${i}`} className="card-premium p-7 group hover:border-[#2563eb]/50 transition-colors duration-300">
                                 <div className="w-12 h-12 rounded-2xl bg-[#2563eb]/10 flex items-center justify-center mb-6 group-hover:bg-[#2563eb] transition-colors">
                                     <feature.icon className="w-5 h-5 text-[#2563eb] group-hover:text-white transition-colors" />
                                 </div>
@@ -563,7 +244,7 @@ export function LandingClientShell({
                     <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6">
                         {planCards.map((plan) => (
                             <Card key={plan.id} className={cn('card-premium p-8 relative overflow-hidden', plan.highlight && 'border-[#2563eb]/50 shadow-[0_10px_40px_-10px_rgba(37,99,235,0.3)]')}>
-                                <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-[#2563eb]/10 blur-2xl" />
+                                <div className="absolute -top-16 -right-16 w-56 h-56 rounded-full bg-[radial-gradient(circle,rgba(37,99,235,0.14)_0%,transparent_65%)]" />
                                 <div className="relative z-10 space-y-4">
                                     <p className="inline-flex text-[10px] font-black uppercase tracking-[0.18em] px-3 py-1 rounded-full bg-[#2563eb] text-white">{plan.badge}</p>
                                     <h4 className="text-3xl font-black tracking-tight">{plan.name}</h4>
@@ -617,7 +298,7 @@ export function LandingClientShell({
                             </div>
                         </div>
                         <div className="relative">
-                            <div className="absolute inset-0 bg-[#2563eb]/20 rounded-3xl blur-[100px] -z-10" />
+                            <div className="absolute -inset-16 -z-10 bg-[radial-gradient(ellipse_at_center,rgba(37,99,235,0.18)_0%,transparent_70%)]" />
                             <Card className="card-premium p-10 overflow-hidden relative">
                                 <div className="absolute top-0 right-0 p-8 opacity-10"><Layers className="w-40 h-40" /></div>
                                 <div className="relative z-10 space-y-8">
@@ -759,7 +440,7 @@ export function LandingClientShell({
             <section className="landing-section py-32 px-6 lg:px-10">
                 <div className="max-w-7xl mx-auto">
                     <Card className="relative overflow-hidden rounded-[40px] border-0 bg-foreground p-12 md:p-24 text-background text-center shadow-2xl">
-                        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[#2563eb]/20 rounded-full blur-[100px] -mr-64 -mt-64" />
+                        <div className="absolute top-0 right-0 w-[700px] h-[700px] rounded-full bg-[radial-gradient(circle,rgba(37,99,235,0.22)_0%,transparent_65%)] -mr-80 -mt-80" />
                         <div className="relative z-10 space-y-12">
                             <h2 className="text-5xl md:text-8xl font-black tracking-tighter leading-[0.9]">
                                 Ready to Upgrade <br /><span className="text-[#2563eb]">Your Business?</span>

@@ -22,7 +22,6 @@ no route can get below without changing the shared bundle itself.
 |---|---|---|---|
 | `/dashboard/layout` | 384.0 | 1316.7 | reseller |
 | `/dashboard/data-packages/page` | 371.5 | 1272.9 | reseller |
-| `/classifieds/page` | 371.1 | 1265.1 | secondary |
 | `/admin/layout` | 368.3 | 1262.8 | staff |
 | `/layout` (root) | 367.3 | 1395.8 | all |
 | `/page` (landing) | 364.0 | 1257.5 | **guest** |

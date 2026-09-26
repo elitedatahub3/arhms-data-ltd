@@ -13,10 +13,8 @@ const STATIC_ALLOWED_ORIGINS = [
     'https://project-d3owc.vercel.app',
     'https://arhmsgh.com',
     'https://www.arhmsgh.com',
-    'https://marketplace.arhmsgh.com',
     'http://localhost:3000',
     'http://localhost:8081',
-    'http://marketplace.localhost:3000',
 ] as const
 
 function normalizeOrigin(value?: string | null): string | null {
@@ -77,6 +75,8 @@ const rateLimiters = redis ? {
     ordersBulk: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(3, '1 m') }),
     // Open to every logged-in user, and each call consumes shared Agent Portal quota
     mtnRegCheck: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(5, '1 m') }),
+    // Admin-only, but each call fans out to up to 50 Eazy Data lookups
+    up2uCheck: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(10, '1 m') }),
     // ── Payments ──────────────────────────────────────────────
     paymentsInitialize: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(30, '1 m') }),
     paymentsVerify: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(30, '1 m') }),
@@ -108,15 +108,6 @@ const rateLimiters = redis ? {
     // ── Support & Cron ────────────────────────────────────────
     supportChat: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(10, '1 m') }),
     cron: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(10, '1 m') }),
-    // ── Marketplace (classifieds → marketplace subdomain) ─────
-    marketplaceSearch: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(30, '1 m') }),
-    marketplaceFeed: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(60, '1 m') }),
-    marketplaceListingWrite: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(10, '1 h') }),
-    marketplaceContactReveal: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(20, '1 m') }),
-    marketplaceBoostInit: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(10, '1 m') }),
-    marketplaceReport: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(5, '1 h') }),
-    marketplaceMessages: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(30, '1 m') }),
-    marketplaceUpload: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(20, '1 h') }),
     // ── General catch-all ─────────────────────────────────────
     general: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(100, '1 m') }),
 } : null
@@ -144,6 +135,10 @@ function getSubdomain(request: NextRequest): string | null {
 
     return null
 }
+
+// Per-user memo cookies for the dashboard's UX redirects (see the dashboard guard).
+const PHONE_OK_COOKIE = 'arhms_phone_ok'
+const SUB_CHECK_COOKIE = 'arhms_sub_chk'
 
 // Helper to add cache-prevention headers
 function addNoCacheHeaders(response: NextResponse) {
@@ -217,29 +212,18 @@ export async function middleware(request: NextRequest) {
         return NextResponse.next({ request: { headers: request.headers } })
     }
 
-    // === MARKETPLACE SUBDOMAIN ROUTING ===
-    // marketplace.arhmsgh.com serves the classifieds app (app/classifieds/*).
-    // Auth routes (/auth/*) redirect to the main domain (centralized auth).
-    // Only the bare root is rewritten to /classifieds so the landing URL stays
-    // clean; every in-app link is an absolute /classifieds/... path that falls
-    // through untouched — those pages are served directly AND the classifieds
-    // route guards further below still run. API routes and static assets also
-    // fall through to their real locations.
-    if (isMarketplace && pathname.startsWith('/auth')) {
-        const mainDomainUrl = new URL(pathname + request.nextUrl.search, process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com')
-        return NextResponse.redirect(mainDomainUrl)
-    }
-
-    if (isMarketplace && pathname === '/') {
-        const rewriteUrl = new URL('/classifieds', request.url)
-        return NextResponse.rewrite(rewriteUrl, {
-            request: {
-                headers: new Headers({
-                    ...Object.fromEntries(request.headers),
-                    'x-subdomain': 'marketplace',
-                }),
-            },
-        })
+    // === RETIRED: MARKETPLACE SUBDOMAIN ===
+    // marketplace.arhmsgh.com used to serve the classifieds app. That product was removed,
+    // so the whole subdomain now sends visitors to the main site instead of a dead page.
+    // The query string is kept so a ?ref= referral link still attributes: the main domain's
+    // own run of this middleware captures it. /auth/* keeps its old behaviour of going to
+    // the same path on the main domain, so an old login link still lands somewhere useful.
+    if (isMarketplace) {
+        const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
+        const target = pathname.startsWith('/auth')
+            ? new URL(pathname + request.nextUrl.search, mainDomain)
+            : new URL('/' + request.nextUrl.search, mainDomain)
+        return NextResponse.redirect(target)
     }
 
     // === REFERRAL LINK CAPTURE ===
@@ -280,13 +264,20 @@ export async function middleware(request: NextRequest) {
             httpOnly: false,
             secure: process.env.NODE_ENV === 'production',
             // Shared across subdomains in prod, mirroring the auth cookie domain in
-            // lib/supabase.ts, so a link opened on marketplace.arhmsgh.com still
-            // attributes when the user signs up on www.arhmsgh.com.
+            // lib/supabase.ts, so a link opened on one subdomain still attributes when
+            // the user signs up on another.
             ...(request.nextUrl.hostname.endsWith('arhmsgh.com')
                 ? { domain: '.arhmsgh.com' }
                 : {}),
         })
         return addNoCacheHeaders(stash)
+    }
+
+    // === RETIRED: CLASSIFIEDS AND MARKETPLACE PATHS ===
+    // Both products were removed. An old shared listing link, a bookmark or a search result
+    // goes to the home page rather than a 404.
+    if (pathname.startsWith('/classifieds') || pathname.startsWith('/marketplace-domain')) {
+        return addNoCacheHeaders(NextResponse.redirect(new URL('/', request.url)))
     }
 
     // === CORS PREFLIGHT HANDLER ===
@@ -335,7 +326,7 @@ export async function middleware(request: NextRequest) {
     )
 
 
-    let authUser = null
+    let authUser: { id: string } | null = null
 
     // === ANONYMOUS FAST PATH ===
     // supabase.auth.getUser() is a network round-trip to the Supabase auth
@@ -360,14 +351,22 @@ export async function middleware(request: NextRequest) {
                 setTimeout(() => reject(new Error('Session timeout')), 10000)
             )
 
-            const userPromise = supabase.auth.getUser()
+            // getClaims() rather than getUser(): with asymmetric JWT signing keys
+            // it verifies the token locally against the cached JWKS — no round
+            // trip to the auth server on every page tap and every Link prefetch.
+            // On a project still using a symmetric secret it falls back to the
+            // same network check getUser() made, so it is never weaker. It also
+            // refreshes an expired session through the cookie adapter above,
+            // exactly as getUser() did. Only `.id` is read downstream.
+            const claimsPromise = supabase.auth.getClaims()
 
             const { data } = await Promise.race([
-                userPromise,
+                claimsPromise,
                 timeout
             ]) as any
 
-            authUser = data?.user || null
+            const sub = data?.claims?.sub
+            authUser = sub ? { id: sub as string } : null
         } catch (error) {
             console.error('Middleware session error:', error)
             // On error or timeout, treat as no session
@@ -413,6 +412,10 @@ export async function middleware(request: NextRequest) {
             identifier = authUser?.id ?? ip
         } else if (pathname === '/api/admin/get-prices') {
             limiter = rateLimiters?.general
+            identifier = authUser?.id ? `${authUser.id}-${ip}` : ip
+        } else if (pathname === '/api/admin/up2u-check') {
+            // Must sit above the /api/admin catch-all or it never matches
+            limiter = rateLimiters?.up2uCheck
             identifier = authUser?.id ? `${authUser.id}-${ip}` : ip
         } else if (pathname.startsWith('/api/admin')) {
             limiter = rateLimiters?.admin
@@ -483,6 +486,17 @@ export async function middleware(request: NextRequest) {
         } else if (pathname === '/api/users/delete-account') {
             limiter = rateLimiters?.deleteAccount
             identifier = authUser?.id ? `${authUser.id}-${ip}` : ip
+        } else if (pathname === '/api/dashboard/sub/rc') {
+            // Buying vouchers is ordinary repeat work for a sub, so this takes
+            // the general shop ceiling rather than the hourly AFA one.
+            limiter = rateLimiters?.shopPricing
+            identifier = authUser?.id ?? ip
+        } else if (pathname === '/api/dashboard/sub/afa') {
+            // Same ceiling as the dashboard form, but keyed on the user: a sub
+            // registering several walk-ins from one shop is normal traffic, and
+            // the IP-only key would throttle their whole shop.
+            limiter = rateLimiters?.afaRegistration
+            identifier = authUser?.id ?? ip
         } else if (pathname === '/api/user/afa-registration') {
             limiter = rateLimiters?.afaRegistration
             identifier = ip
@@ -514,8 +528,9 @@ export async function middleware(request: NextRequest) {
             limiter = rateLimiters?.supportChat
             identifier = ip
         } else if (pathname.startsWith('/api/cron')) {
-            limiter = rateLimiters?.cron
-            identifier = ip
+            // Deliberately unlimited: every cron route authenticates with CRON_SECRET (32+ chars)
+            // itself, and cron-job.org's frequent schedule was burning Upstash's monthly quota.
+            limiter = undefined
         } else if (pathname.startsWith('/api/user')) {
             limiter = rateLimiters?.user
             identifier = authUser?.id ?? ip
@@ -552,7 +567,20 @@ export async function middleware(request: NextRequest) {
         // This prevents a race condition where the DB write hasn't propagated yet.
         const justVerified = request.cookies.get('phone_just_verified')?.value === '1'
 
-        if (!justVerified) {
+        // This check and the sub-agent one below used to hit the database on every
+        // dashboard tap AND every Link prefetch — two extra round trips before the
+        // page could start. Both are UX redirects, not security boundaries (RLS and
+        // the route handlers enforce access), so:
+        //  * prefetches skip them — the real navigation re-runs middleware without
+        //    the prefetch header, so the redirect still happens when it matters;
+        //  * a pass is remembered in a per-user cookie. Forging it only lets a user
+        //    skip their own profile-completion prompt.
+        const isPrefetch =
+            request.headers.get('next-router-prefetch') === '1' ||
+            request.headers.get('purpose') === 'prefetch'
+        const phoneAlreadyOk = request.cookies.get(PHONE_OK_COOKIE)?.value === authUser.id
+
+        if (!justVerified && !isPrefetch && !phoneAlreadyOk) {
             try {
                 const phoneTimeout = new Promise((_, reject) =>
                     setTimeout(() => reject(new Error('Phone check timeout')), 5000)
@@ -579,6 +607,13 @@ export async function middleware(request: NextRequest) {
                         return addNoCacheHeaders(NextResponse.redirect(new URL('/auth/complete-profile', request.url)))
                     }
                     // phone_verified check removed to allow users to go straight to dashboard
+                    res.cookies.set(PHONE_OK_COOKIE, authUser.id, {
+                        path: '/',
+                        maxAge: 60 * 60 * 24,
+                        httpOnly: true,
+                        sameSite: 'lax',
+                        secure: process.env.NODE_ENV === 'production',
+                    })
                 }
             } catch (error) {
                 // Fail open — never block dashboard access due to infra issues
@@ -590,24 +625,39 @@ export async function middleware(request: NextRequest) {
         // dashboard. Only the exact /dashboard landing is redirected (their home);
         // other /dashboard/* pages stay reachable, and /dashboard/sub is exempt so
         // there is no redirect loop. Fails open on any error/timeout.
-        if (pathname === '/dashboard') {
-            try {
-                const subTimeout = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Sub check timeout')), 5000)
-                )
-                const subQuery = supabase
-                    .from('sub_agents')
-                    .select('id')
-                    .eq('user_id', authUser.id)
-                    .maybeSingle()
+        if (pathname === '/dashboard' && !isPrefetch) {
+            // Only a negative result is cached ("<userId>:0", ten minutes). A cached
+            // positive would outlive a sub-agent's removal and bounce them between
+            // here and /dashboard/sub, whose layout sends non-subs back. Sub-agents
+            // live on /dashboard/sub, so re-checking their rare visits costs nothing.
+            const notSubCached = request.cookies.get(SUB_CHECK_COOKIE)?.value === `${authUser.id}:0`
 
-                const { data: sub } = await Promise.race([subQuery, subTimeout]) as any
+            if (!notSubCached) {
+                try {
+                    const subTimeout = new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('Sub check timeout')), 5000)
+                    )
+                    const subQuery = supabase
+                        .from('sub_agents')
+                        .select('id')
+                        .eq('user_id', authUser.id)
+                        .maybeSingle()
 
-                if (sub) {
-                    return addNoCacheHeaders(NextResponse.redirect(new URL('/dashboard/sub', request.url)))
+                    const { data: sub } = await Promise.race([subQuery, subTimeout]) as any
+
+                    if (sub) {
+                        return addNoCacheHeaders(NextResponse.redirect(new URL('/dashboard/sub', request.url)))
+                    }
+                    res.cookies.set(SUB_CHECK_COOKIE, `${authUser.id}:0`, {
+                        path: '/',
+                        maxAge: 60 * 10,
+                        httpOnly: true,
+                        sameSite: 'lax',
+                        secure: process.env.NODE_ENV === 'production',
+                    })
+                } catch (error) {
+                    console.error('[Middleware] Sub-agent check failed, failing open:', error)
                 }
-            } catch (error) {
-                console.error('[Middleware] Sub-agent check failed, failing open:', error)
             }
         }
     }
@@ -669,68 +719,6 @@ export async function middleware(request: NextRequest) {
         }
     }
 
-    // === CLASSIFIEDS ROUTE GUARDS ===
-    if (pathname.startsWith('/classifieds')) {
-        // Public routes: /classifieds and /classifieds/[id]
-        if (pathname === '/classifieds' || /^\/classifieds\/[^\/]+$/.test(pathname)) {
-            return addNoCacheHeaders(setCORSHeaders(res, request, origin))
-        }
-
-        // Seller-only routes: /classifieds/seller/*
-        if (pathname.startsWith('/classifieds/seller')) {
-            // The seller phone login page is itself a login screen — logged-out
-            // users MUST be able to reach it (otherwise it loops back here).
-            if (pathname === '/classifieds/seller/login') {
-                return addNoCacheHeaders(setCORSHeaders(res, request, origin))
-            }
-            if (!authUser) {
-                return addNoCacheHeaders(NextResponse.redirect(new URL(`/classifieds/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)))
-            }
-            // TODO: Check if user has is_seller flag in Phase 2
-            return addNoCacheHeaders(setCORSHeaders(res, request, origin))
-        }
-
-        // Buyer-only routes: /classifieds/buyer/*
-        if (pathname.startsWith('/classifieds/buyer')) {
-            if (!authUser) {
-                return addNoCacheHeaders(NextResponse.redirect(new URL(`/classifieds/auth/login?redirect=${encodeURIComponent(pathname)}`, request.url)))
-            }
-            return addNoCacheHeaders(setCORSHeaders(res, request, origin))
-        }
-
-        // Admin-only routes: /classifieds/admin/*
-        if (pathname.startsWith('/classifieds/admin')) {
-            if (!authUser) {
-                return addNoCacheHeaders(NextResponse.redirect(new URL('/auth/login', request.url)))
-            }
-            // Check if user is admin
-            try {
-                const timeout = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Role check timeout')), 8000)
-                )
-
-                const roleQuery = supabase
-                    .from('users')
-                    .select('role')
-                    .eq('id', authUser.id)
-                    .single()
-
-                const { data: user } = await Promise.race([
-                    roleQuery,
-                    timeout
-                ]) as any
-
-                if (!user || !['admin', 'sub-admin'].includes(user.role)) {
-                    return addNoCacheHeaders(NextResponse.redirect(new URL('/classifieds', request.url)))
-                }
-            } catch (error) {
-                console.error('Classifieds admin role check error:', error)
-                return addNoCacheHeaders(NextResponse.redirect(new URL('/classifieds', request.url)))
-            }
-            return addNoCacheHeaders(setCORSHeaders(res, request, origin))
-        }
-    }
-
     // === AUTH PAGE GUARDS ===
     if (pathname.startsWith('/auth')) {
         // These routes must always be allowed through regardless of session state:
@@ -763,7 +751,11 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
     matcher: [
-        // Exclude static files and /api/v1/* (v1 CORS handled via next.config.ts, auth via route handlers)
-        '/((?!_next/static|_next/image|favicon.ico|api/v1|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2)$).*)'
+        // Exclude static files and the developer API (/api/v1, /api/v2). Their CORS is
+        // set in next.config.ts and their auth is the API key, checked in the route
+        // handlers. Running the middleware over them would reject any browser-side
+        // call from a partner's own domain via the origin allowlist below, and charge
+        // every server-to-server request for a Supabase session lookup it never uses.
+        '/((?!_next/static|_next/image|favicon.ico|api/v1|api/v2|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2)$).*)'
     ],
 }

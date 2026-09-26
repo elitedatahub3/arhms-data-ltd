@@ -30,7 +30,33 @@ export async function POST(request: NextRequest) {
 
         // 3. CONTINUE WITH PRICE UPDATE LOGIC
         const body = await request.json()
-        const { prices, showStrikethrough, dealerPrice6m, dealerPrice3m } = body
+        const { prices, showStrikethrough, dealerPrice6m, dealerPrice3m, planEnabled } = body
+
+        // Handle a single agent plan being switched on or off: { planEnabled: { plan: '3d', enabled: false } }
+        if (planEnabled !== undefined) {
+            const planToggleSchema = z.object({
+                plan: z.enum(['3d', '14d', '30d', 'permanent']),
+                enabled: z.boolean(),
+            })
+            const toggleResult = planToggleSchema.safeParse(planEnabled)
+            if (!toggleResult.success) {
+                return NextResponse.json({ error: 'Invalid plan toggle' }, { status: 400 })
+            }
+
+            const supabaseAdmin = createClient(
+                process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                process.env.SUPABASE_SERVICE_ROLE_KEY!,
+                { auth: { autoRefreshToken: false, persistSession: false } }
+            )
+
+            const key = `agent_plan_enabled_${toggleResult.data.plan}`
+            await supabaseAdmin.from('admin_settings').delete().eq('key', key)
+            const { error } = await supabaseAdmin.from('admin_settings').insert({ key, value: String(toggleResult.data.enabled) } as any)
+            if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+            revalidateTag(PUBLIC_CONFIG_CACHE_TAG)
+            return NextResponse.json({ success: true, plan: toggleResult.data.plan, enabled: toggleResult.data.enabled })
+        }
 
         if (!prices && dealerPrice6m === undefined && dealerPrice3m === undefined) {
             return NextResponse.json({ error: 'Prices are required' }, { status: 400 })

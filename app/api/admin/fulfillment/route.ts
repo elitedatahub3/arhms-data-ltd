@@ -25,6 +25,19 @@ export async function GET(request: NextRequest) {
         // Use service role client to bypass RLS
         const supabase = createServerClient()
 
+        // The date range means what it says — except when you ask for the queue.
+        //
+        // Picking a date answers "what happened then", so "All" is scoped to it
+        // strictly: Today shows today, and nothing older leaks in. Picking
+        // Pending, Processing or Verifying asks a different question — "what is
+        // still outstanding" — and a stuck order is nearly always older than the
+        // window being looked at, so those three ignore dates and show the whole
+        // queue. That is the only way both readings can be true at once.
+        const OPEN_STATUSES = ['pending', 'processing']
+
+        // 'verifying' is a held 'processing' order — still open work.
+        const viewingOpenOnly = status === 'verifying' || OPEN_STATUSES.includes(status || '')
+
         // `supplier_status` is a later migration than this route. Selected through a
         // flag so that a DB without it degrades to the old column list instead of
         // PostgREST rejecting the whole query and blanking the fulfillment list —
@@ -73,11 +86,15 @@ export async function GET(request: NextRequest) {
                 q = q.eq('network', network)
             }
 
-            if (startDate) {
-                q = q.gte('created_at', startDate)
-            }
-            if (endDate) {
-                q = q.lte('created_at', endDate)
+            if (viewingOpenOnly) {
+                // A work queue, not a report — show everything outstanding.
+            } else {
+                if (startDate) {
+                    q = q.gte('created_at', startDate)
+                }
+                if (endDate) {
+                    q = q.lte('created_at', endDate)
+                }
             }
 
             if (search) {

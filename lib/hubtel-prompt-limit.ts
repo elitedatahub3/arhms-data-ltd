@@ -34,8 +34,18 @@ const redis = Redis.fromEnv()
 const MAX_PROMPTS_PER_WINDOW = 8
 const WINDOW_SECONDS = 60 * 60
 
-function keyFor(msisdn: string): string {
-    return `hubtel:prompt:${msisdn}`
+/**
+ * The counter is namespaced per gateway.
+ *
+ * One shared window across gateways would mean a customer who exhausted their
+ * prompts on one rail is refused on another for an hour, with nothing in the UI
+ * able to explain why — and switching the active gateway would inherit a lockout
+ * earned somewhere else. The ceiling is per number per rail.
+ */
+export type PromptLimitScope = 'hubtel' | 'paystack_momo'
+
+function keyFor(msisdn: string, scope: PromptLimitScope): string {
+    return `${scope}:prompt:${msisdn}`
 }
 
 export interface PromptLimitResult {
@@ -63,12 +73,15 @@ export interface PromptLimitResult {
  * Postgres-backed and still fails closed; that is the control that actually stops
  * a stranger's number being prompted at all.
  */
-export async function checkHubtelPromptLimit(phone: string): Promise<PromptLimitResult> {
+export async function checkHubtelPromptLimit(
+    phone: string,
+    scope: PromptLimitScope = 'hubtel'
+): Promise<PromptLimitResult> {
     const msisdn = normalizeMsisdn(phone)
     if (!msisdn) return { allowed: false, error: 'Invalid phone number.' }
 
     try {
-        const count = await redis.get<number>(keyFor(msisdn))
+        const count = await redis.get<number>(keyFor(msisdn, scope))
         if ((Number(count) || 0) >= MAX_PROMPTS_PER_WINDOW) {
             return {
                 allowed: false,
@@ -93,12 +106,15 @@ export async function checkHubtelPromptLimit(phone: string): Promise<PromptLimit
  * A failure here is logged and swallowed: the payment is already in flight, and
  * refusing to acknowledge it would help nobody.
  */
-export async function recordHubtelPrompt(phone: string): Promise<void> {
+export async function recordHubtelPrompt(
+    phone: string,
+    scope: PromptLimitScope = 'hubtel'
+): Promise<void> {
     const msisdn = normalizeMsisdn(phone)
     if (!msisdn) return
 
     try {
-        const key = keyFor(msisdn)
+        const key = keyFor(msisdn, scope)
         const count = await redis.incr(key)
         // First prompt in this window starts the clock. A fixed window is enough
         // here — this guards against floods, not precise accounting.
@@ -117,13 +133,24 @@ export async function recordHubtelPrompt(phone: string): Promise<void> {
  * customers who buy most. Clearing the window here is what keeps a busy wallet from
  * hitting the ceiling in the middle of a normal afternoon's purchases.
  */
-export async function clearHubtelPromptCount(phone: string): Promise<void> {
+export async function clearHubtelPromptCount(
+    phone: string,
+    scope: PromptLimitScope = 'hubtel'
+): Promise<void> {
     const msisdn = normalizeMsisdn(phone)
     if (!msisdn) return
 
     try {
-        await redis.del(keyFor(msisdn))
+        await redis.del(keyFor(msisdn, scope))
     } catch (e) {
         console.error('[HubtelPromptLimit] could not clear prompt count (non-fatal):', e)
     }
 }
+
+/** The same three, bound to the Paystack MoMo window. */
+export const checkPaystackMomoPromptLimit = (phone: string) =>
+    checkHubtelPromptLimit(phone, 'paystack_momo')
+export const recordPaystackMomoPrompt = (phone: string) =>
+    recordHubtelPrompt(phone, 'paystack_momo')
+export const clearPaystackMomoPromptCount = (phone: string) =>
+    clearHubtelPromptCount(phone, 'paystack_momo')

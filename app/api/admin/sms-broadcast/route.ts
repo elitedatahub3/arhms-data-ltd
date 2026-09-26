@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { sendSMS } from '@/lib/sms-service'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 import { z } from 'zod'
 import { adminLongTextSchema } from '@/lib/validation'
 import { Ratelimit } from '@upstash/ratelimit'
@@ -102,16 +103,21 @@ export async function POST(request: NextRequest) {
                     if (data) usersData.push(...(data as any[]))
                 }
             } else {
-                let query = supabase
-                    .from('users')
-                    .select('id, first_name, phone_number, role')
-                    .not('phone_number', 'is', null)
-                    
-                if (roleFilter && roleFilter !== 'all' && roleFilter !== 'shop_owner') {
-                    query = query.eq('role', roleFilter)
-                }
-                
-                const { data, error } = await query
+                // Paged: an unbounded select stops at PostgREST's 1000-row cap, which would
+                // silently drop every recipient past the first thousand from the broadcast.
+                const { data, error } = await fetchAllRows<any>(() => {
+                    let query = supabase
+                        .from('users')
+                        .select('id, first_name, phone_number, role')
+                        .not('phone_number', 'is', null)
+                        .order('id', { ascending: true })
+
+                    if (roleFilter && roleFilter !== 'all' && roleFilter !== 'shop_owner') {
+                        query = query.eq('role', roleFilter)
+                    }
+
+                    return query
+                })
                 if (error) {
                     console.error('[SMSBroadcast] Error fetching users:', error)
                     return NextResponse.json({ error: 'Failed to fetch recipients' }, { status: 500 })
@@ -142,11 +148,12 @@ export async function POST(request: NextRequest) {
                     if (data) shopsData.push(...(data as any[]))
                 }
             } else {
-                const { data, error } = await supabase
+                const { data, error } = await fetchAllRows<any>(() => supabase
                     .from('shop_profiles')
                     .select('id, shop_name, owner_phone')
                     .not('owner_phone', 'is', null)
-                    
+                    .order('id', { ascending: true }))
+
                 if (error) console.error('[SMSBroadcast] Error fetching shops:', error)
                 if (data) shopsData = data
             }

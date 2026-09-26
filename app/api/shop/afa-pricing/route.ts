@@ -54,6 +54,22 @@ export async function POST(request: NextRequest) {
         // Service-role client: admin_settings is not readable under the caller's RLS.
         const db = createServerClient() as any
 
+        // A sub-agent's AFA price is bounded by their upline's, not by their own
+        // role cost — this route knows nothing of that bound, so it would let
+        // them price straight past it.
+        const { data: subMembership } = await db
+            .from('sub_agents')
+            .select('id')
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+        if (subMembership) {
+            return NextResponse.json(
+                { error: 'Set your AFA price from your own Pricing page, where your upline’s price is the floor.' },
+                { status: 403 }
+            )
+        }
+
         const costResult = await resolveAfaCostPrice(db, owned.ownerRole)
         if (!costResult.ok) {
             return NextResponse.json({ error: costResult.error }, { status: 500 })

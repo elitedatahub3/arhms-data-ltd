@@ -11,6 +11,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/auth-context'
+import { readPendingSignupEmail, clearPendingSignupEmail } from '@/lib/portal-signup'
 
 export default function PortalLoginPage() {
   const { signIn, signOut, user, dbUser, isLoading } = useAuth()
@@ -25,10 +26,17 @@ export default function PortalLoginPage() {
   const [otherAccount, setOtherAccount] = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
 
-  // Already signed in → only an actual sub-agent belongs in the portal. Sending
-  // everyone to /dashboard/sub was how a Lead's own storefront ended up on the
-  // recruit's "My Shop" page, so the recruit believed a shop already existed for
-  // them and could never create their own.
+  // Already signed in → forward only a session that is BOTH a sub-agent and the
+  // person we are expecting.
+  //
+  // Forwarding on sub-agent-ness alone was how a Lead's own storefront ended up
+  // on a recruit's "My Shop" page (f29823b). That check silently stopped working
+  // once subs could recruit: an L1 recruiter IS a sub, so their session passed
+  // and the recruit was walked straight into the recruiter's portal — same bug,
+  // one level down, and invisible because every guard was satisfied.
+  //
+  // A recruit who just signed up leaves their email behind; if the live session
+  // is anyone else, treat it as a foreign account no matter what it is.
   useEffect(() => {
     if (isLoading) return
     if (!user) {
@@ -36,6 +44,19 @@ export default function PortalLoginPage() {
       setCheckingSession(false)
       return
     }
+
+    const pendingEmail = readPendingSignupEmail()
+
+    if (pendingEmail) {
+      setEmail(pendingEmail)
+      const signedInAs = String(user.email || '').trim().toLowerCase()
+      if (signedInAs && signedInAs !== pendingEmail) {
+        setOtherAccount(true)
+        setCheckingSession(false)
+        return
+      }
+    }
+
     let active = true
     // 200 → sub-agent; 403 → some other account. Any other failure falls through
     // to the portal as before, so a network blip never strands a real sub-agent.
@@ -47,6 +68,7 @@ export default function PortalLoginPage() {
           setCheckingSession(false)
           return
         }
+        clearPendingSignupEmail()
         window.location.href = '/dashboard/sub'
       })
       .catch(() => {
@@ -70,6 +92,7 @@ export default function PortalLoginPage() {
         setLoading(false)
         return
       }
+      clearPendingSignupEmail()
       // Middleware sends sub-agents from /dashboard → /dashboard/sub.
       window.location.href = '/dashboard'
     } catch {

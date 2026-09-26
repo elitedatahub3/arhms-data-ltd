@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { createServerClient } from '@/lib/supabase'
+import { checkMtnRegistrationBatch, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 import { calculatePaystackFee, generateReferenceCode } from '@/lib/utils'
 import { initiatePayment, MOOLRE_PAYMENT_CHANNEL_MAP } from '@/lib/moolre-payment-service'
 import { initiatePayment as hubtelInitiatePayment, HUBTEL_CHANNEL_MAP, calculateHubtelFee, toHubtelMsisdn } from '@/lib/hubtel-payment-service'
@@ -9,8 +10,14 @@ import { resolveDataPrice } from '@/lib/data-order-pricing'
 import { initiatePayment as payswitchInitiatePayment, PAYSWITCH_CHANNEL_MAP } from '@/lib/payswitch-payment-service'
 import { assignPayswitchTransactionId } from '@/lib/payswitch-reference'
 import { resolveProviderForScope, type PaymentProvider } from '@/lib/payment-provider'
-import { checkMtnRegistrationBatch, registrationRequiredBody } from '@/lib/mtn-registration-gate'
-import { validateGhanaianPhone } from '@/lib/phone-validation'
+import { WEB_FEE_SETTING_KEYS, resolveWebFeePercent } from '@/lib/gateway-fees'
+import { paystackMomoProviderFor } from '@/lib/paystack-momo-service'
+import {
+    startPaystackMomoCharge,
+    submitPaystackMomoOtp,
+    assertOwnPendingPayment,
+    type MomoChargeResult,
+} from '@/lib/paystack-momo-checkout'
 
 /**
  * Direct Pay for data bundles.
@@ -63,7 +70,6 @@ export async function POST(request: NextRequest) {
             momoNetwork,
             otpCode,
             reference: existingRef,
-            acknowledgeRegistration,
         } = body
 
         // ── Normalize single vs bulk into one list ────────────────────────────
@@ -124,8 +130,7 @@ export async function POST(request: NextRequest) {
         const [{ data: profile }, { data: settingsRows }] = await Promise.all([
             supabase.from('users').select('email, first_name, last_name, phone_number, role').eq('id', userId).single(),
             supabase.from('admin_settings').select('key, value').in('key', [
-                'paystack_fee_percent',
-                'agent_paystack_fee_percent',
+                ...WEB_FEE_SETTING_KEYS,
                 'active_payment_provider_web',
             ]),
         ])
@@ -188,26 +193,25 @@ export async function POST(request: NextRequest) {
             })
         }
 
-        // ── MTN REGISTRATION GATE ─────────────────────────────────────────────
-        // Before the gateway is called, not after: an unregistered number must never
-        // trigger a debit prompt on the buyer's phone for data that cannot land yet.
-        const registrationGate = await checkMtnRegistrationBatch(
-            supabase,
-            metadataItems.map(i => ({ phoneNumber: i.phone_number, packageNetwork: i.network }))
-        )
-
-        if (registrationGate.unregistered.length > 0 && !acknowledgeRegistration) {
-            return NextResponse.json(
-                registrationRequiredBody(registrationGate.unregistered, metadataItems.length),
-                { status: 409 }
+        // MTN registration gate. Direct Pay takes money BEFORE any order row exists,
+        // so this has to refuse before the gateway prompt is sent — a refusal after the
+        // charge would need a manual refund. Skipped when an OTP is being submitted
+        // against a reference we already gated and charged for.
+        //
+        // Nothing sets item.awaiting_registration any more, so lib/data-order-payments.ts
+        // reads it as false for every new payment; it still honours a true value so
+        // references initialized before the gate shipped settle correctly.
+        if (!otpCode) {
+            const { unregistered } = await checkMtnRegistrationBatch(
+                supabase,
+                metadataItems.map((i: any) => ({ phoneNumber: i.phone_number, packageNetwork: i.network }))
             )
-        }
-
-        // Carried through payment metadata so the settlement path can hold these orders.
-        const unregisteredSet = new Set(registrationGate.unregistered)
-        for (const item of metadataItems) {
-            const validation = validateGhanaianPhone(item.phone_number)
-            item.awaiting_registration = validation.isValid && unregisteredSet.has(validation.normalizedNumber)
+            if (unregistered.length > 0) {
+                return NextResponse.json(
+                    registrationRequiredBody(unregistered, metadataItems.length),
+                    { status: 409 }
+                )
+            }
         }
 
         const subtotal = parseFloat(
@@ -226,17 +230,12 @@ export async function POST(request: NextRequest) {
             const hubtelFees = calculateHubtelFee(subtotal)
             fee = hubtelFees.fee
             totalAmount = hubtelFees.total
-        } else if (gateway === 'paystack' || gateway === 'payswitch') {
+        } else if (gateway === 'paystack' || gateway === 'paystack_momo' || gateway === 'payswitch') {
             // PaySwitch bills the merchant, not the payer, so it needs the same
-            // percentage added on our side that Paystack does. (Moolre, below,
-            // charges the payer directly — hence its zero fee.)
-            const feeKey = userRole === 'agent' ? 'agent_paystack_fee_percent' : 'paystack_fee_percent'
-            const feeSetting = settingsMap[feeKey] ?? settingsMap['paystack_fee_percent']
-            let feePercent = 1.95
-            if (feeSetting !== undefined && feeSetting !== null) {
-                const parsed = typeof feeSetting === 'string' ? parseFloat(feeSetting) : Number(feeSetting)
-                if (!isNaN(parsed)) feePercent = parsed
-            }
+            // percentage added on our side that Paystack does — as does the Paystack
+            // MoMo rail, which is the same merchant account reached differently.
+            // (Moolre, below, charges the payer directly — hence its zero fee.)
+            const feePercent = resolveWebFeePercent(settingsMap, { role: userRole, provider: gateway })
             fee = calculatePaystackFee(subtotal, feePercent)
             totalAmount = parseFloat((subtotal + fee).toFixed(2))
         } else {
@@ -365,6 +364,52 @@ export async function POST(request: NextRequest) {
                 amount: totalAmount,
                 fee,
             })
+        }
+
+        // ── PAYSTACK MOBILE MONEY ─────────────────────────────────────────────
+        // The Charge API rather than transaction/initialize: the prompt goes to the
+        // handset and there is no page to redirect to.
+        if (gateway === 'paystack_momo') {
+            if (!momoPhone || !momoNetwork || !paystackMomoProviderFor(momoNetwork)) {
+                return NextResponse.json({ error: 'Valid Mobile Money network is required' }, { status: 400 })
+            }
+
+            const finish = async (result: MomoChargeResult) => {
+                if (!result.ok) {
+                    // Not marked failed on a duplicate reference or a network throw:
+                    // both mean a charge may exist, and a failed row can never be
+                    // settled afterwards.
+                    if (result.safeToMarkFailed && !existingRef) {
+                        await supabase.from('wallet_payments')
+                            .update({ status: 'failed' })
+                            .eq('id', paymentId)
+                            .eq('status', 'pending')
+                    }
+                    return NextResponse.json(result.body, { status: result.httpStatus })
+                }
+                if (result.outcome === 'paid') {
+                    const { processDataDirectOrder } = await import('@/lib/data-order-payments')
+                    await processDataDirectOrder(reference)
+                }
+                return NextResponse.json({ ...result.body, amount: totalAmount, fee })
+            }
+
+            if (otpCode && existingRef) {
+                if (!await assertOwnPendingPayment(supabase, existingRef, userId)) {
+                    return NextResponse.json({ error: 'That payment is no longer waiting for a code' }, { status: 404 })
+                }
+                return finish(await submitPaystackMomoOtp({ reference: existingRef, otp: String(otpCode), payerPhone: momoPhone }))
+            }
+
+            return finish(await startPaystackMomoCharge({
+                reference,
+                amountGhs: totalAmount,
+                payerPhone: momoPhone,
+                network: momoNetwork,
+                email: (profile as any)?.email,
+                metadata: { user_id: userId, kind: 'data_order', item_count: metadataItems.length },
+                userId,
+            }))
         }
 
         // ── HUBTEL ────────────────────────────────────────────────────────────

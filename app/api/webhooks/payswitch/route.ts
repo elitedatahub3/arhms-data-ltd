@@ -18,13 +18,12 @@
  * prefix routing, the same idempotency check, the same pesewa amount verification.
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
 import { checkPaymentStatus } from '@/lib/payswitch-payment-service'
 import { resolvePayswitchReference } from '@/lib/payswitch-reference'
-import { Redis } from '@upstash/redis'
-
-const redis = Redis.fromEnv()
+import { getShopMeta } from '@/lib/shop-meta-store'
 
 /** Always 200: a non-2xx makes PaySwitch retry, and none of these are retryable. */
 function ack() {
@@ -84,19 +83,12 @@ export async function POST(request: NextRequest) {
             status.amount !== undefined ? Math.round(status.amount * 100) : null
 
         // ── SHOP ORDERS ───────────────────────────────────────────────────────
-        // Storefront metadata lives in Redis, not wallet_payments.
+        // Storefront metadata lives in Redis / shop_payment_meta, not wallet_payments.
         if (reference.startsWith('SHOP-')) {
-            const metadataStr = await redis.get<string>(`shop:meta:${reference}`)
-            if (!metadataStr) {
-                console.error('[PayswitchWebhook] Metadata not found in Redis for shop order:', reference)
+            const metadata: any = await getShopMeta<any>(reference)
+            if (!metadata) {
+                console.error('[PayswitchWebhook] Metadata not found for shop order:', reference)
                 return ack()
-            }
-
-            let metadata: any
-            try {
-                metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr
-            } catch {
-                metadata = metadataStr
             }
 
             // PaySwitch normally reports the amount; if it does not, reconstruct it
@@ -212,15 +204,17 @@ export async function POST(request: NextRequest) {
             return ack()
         }
 
-        if (reference.startsWith('BOOST-')) {
-            const { processBoostPayment } = await import('@/lib/classifieds-payments')
-            console.log('[PayswitchWebhook] Routing listing boost payment:', reference)
-            const boostResult = await processBoostPayment(reference, { reference, amount: amountPesewas })
+        if (reference.startsWith('AIRPAY-')) {
+            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+            console.log('[PayswitchWebhook] Routing direct-pay airtime order:', reference)
+            await processAirtimeDirectOrder(reference)
+            return ack()
+        }
 
-            if (!boostResult.success && !boostResult.alreadyProcessed) {
-                console.error('[PayswitchWebhook] Boost processing failed:', boostResult.error)
-                return NextResponse.json({ error: boostResult.error }, { status: 500 })
-            }
+        // RETIRED: BOOST- was the classifieds listing boost. Caught rather than dropped:
+        // unhandled it would reach the wallet top-up branch below and credit the payer.
+        if (isRetiredBoostReference(reference)) {
+            reportRetiredBoostPayment('PayswitchWebhook', reference)
             return ack()
         }
 

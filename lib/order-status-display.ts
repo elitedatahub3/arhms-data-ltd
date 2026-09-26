@@ -44,6 +44,10 @@ export const VERIFYING_LABELS = [
     'awaiting verification',
     'pending verification',
     'under review',
+    // Dakazina's wording. WAITING is one of the five statuses their dashboard
+    // fires webhooks on, and it means the order is placed but held before they
+    // push it out — the same state the labels above describe.
+    'waiting',
 ] as const
 
 const VERIFYING_LABEL_SET = new Set<string>(VERIFYING_LABELS)

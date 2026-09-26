@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react'
 import { useAuth } from '@/contexts/auth-context'
+import { refreshDashboardSummary } from '@/hooks/use-dashboard-summary'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -15,6 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import {
     Wallet,
     Plus,
@@ -50,6 +52,11 @@ function WalletContent() {
     const [paystackFeePercent, setPaystackFeePercent] = useState(1.95)
     const [otpRequired, setOtpRequired] = useState(false)
     const [otpCode, setOtpCode] = useState('')
+    // The gateway's own words for the customer. Paystack varies the instruction per
+    // charge — a one-time password on some numbers, a PIN prompt on others — so
+    // asserting one of them in fixed copy tells roughly a third of customers to do
+    // the wrong thing.
+    const [otpMessage, setOtpMessage] = useState('')
     const [paymentReference, setPaymentReference] = useState<string | null>(null)
     const [webPaymentProvider, setWebPaymentProvider] = useState<PaymentProvider>('moolre')
     const searchParams = useSearchParams()
@@ -79,6 +86,7 @@ function WalletContent() {
         if (success === 'true') {
             toast.success('Wallet topped up successfully!')
             fetchWalletData()
+            refreshDashboardSummary()
             router.replace('/dashboard/wallet')
         } else if (paystackRef && !success && !error) {
             // Returning from Paystack checkout — start polling for webhook completion
@@ -126,6 +134,7 @@ function WalletContent() {
                         setIsProcessing(false)
                         toast.success('Payment completed successfully!')
                         fetchWalletData()
+                        refreshDashboardSummary()
                         setTopUpAmount('')
                         router.replace('/dashboard/wallet')
                     } else if (data.status === 'failed') {
@@ -242,6 +251,22 @@ function WalletContent() {
 
             const data = await response.json()
 
+            // A charge is already live for this number — hand the customer back to it
+            // instead of an error they cannot act on. Starting a new payment would
+            // cancel the code the previous one sent.
+            if (!response.ok && data.resumable && data.reference) {
+                setPaymentReference(data.reference)
+                if (data.otpRequired) {
+                    setOtpMessage(data.error || '')
+                    setOtpRequired(true)
+                } else {
+                    toast.info(data.error || 'A payment prompt is already waiting on your phone.')
+                    setPollingRef(data.reference)
+                }
+                setIsProcessing(false)
+                return
+            }
+
             if (!response.ok) {
                 throw new Error(data.error || 'Failed to initialize payment')
             }
@@ -259,9 +284,19 @@ function WalletContent() {
                 return
             }
 
-            // Moolre: show OTP modal
+            // Moolre and Paystack MoMo: an OTP step only when the gateway asked for
+            // one. This used to open the modal unconditionally, which was harmless
+            // while Moolre always wanted a code — Paystack asks only on Telecel and
+            // AirtelTigo, so an unguarded modal would sit there on MTN waiting for a
+            // code that is never sent while the prompt goes unanswered on the handset.
             setPaymentReference(data.reference)
-            setOtpRequired(true)
+            if (data.otpRequired) {
+                setOtpMessage(data.message || '')
+                setOtpRequired(true)
+            } else {
+                toast.success(data.message || 'Payment prompt sent! Please approve on your phone.')
+                setPollingRef(data.reference)
+            }
             setIsProcessing(false)
         } catch (error: any) {
             toast.error(error.message || 'Failed to process payment')
@@ -661,6 +696,53 @@ function WalletContent() {
                     )}
                 </CardContent>
             </Card>
+
+            {/* The gateway asked for a one-time code. Every other checkout in the app
+                has had this dialog; this page had the state, the handler and the
+                auto-submit effect but nothing to type into, so a code that arrived
+                could never be entered. Telecel and AirtelTigo take this path far more
+                often than MTN, which is why it went unnoticed. */}
+            <Dialog
+                open={otpRequired}
+                onOpenChange={(open) => { if (!open) { setOtpRequired(false); setOtpCode('') } }}
+            >
+                <DialogContent className="w-[95%] max-w-sm rounded-2xl">
+                    <DialogHeader>
+                        <DialogTitle>Enter OTP</DialogTitle>
+                        <DialogDescription>
+                            {/* Paystack's instruction arrives without a full stop, so it
+                                has to be punctuated before ours is appended or the two
+                                sentences run together on screen. */}
+                            {(otpMessage || `Your network sent a one-time code to ${paymentPhone || 'your phone'}`)
+                                .trim().replace(/([^.!?])$/, '$1.')}
+                            {' '}Enter it below to authorise this top-up. If nothing arrives within a minute, close this and try again.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <Input
+                        autoFocus
+                        inputMode="numeric"
+                        placeholder="Enter OTP"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                        className="text-center text-lg tracking-widest"
+                    />
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => { setOtpRequired(false); setOtpCode('') }}
+                        >
+                            Cancel
+                        </Button>
+                        {/* A 6-digit code submits itself via the effect above; the
+                            button is for networks that send a shorter one. */}
+                        <Button onClick={handleVerifyOtp} disabled={isProcessing || !otpCode.trim()}>
+                            {isProcessing ? (
+                                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Verifying...</>
+                            ) : 'Verify'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
         </div>
     )

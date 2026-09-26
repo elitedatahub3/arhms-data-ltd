@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
 import { logCallback } from '@/lib/hubtel-payment-log'
-import { Redis } from '@upstash/redis'
-
-const redis = Redis.fromEnv()
+import { getShopMeta } from '@/lib/shop-meta-store'
 
 
 /**
@@ -70,26 +69,20 @@ export async function POST(request: NextRequest) {
 
         // ── SHOP ORDERS ──────────────────────────────────────────────────────────
         if (ClientReference.startsWith('SHOP-')) {
-            const metadataStr = await redis.get<string>(`shop:meta:${ClientReference}`)
+            const metadata = await getShopMeta<any>(ClientReference)
 
-            if (!metadataStr) {
-                console.error(`[HubtelWebhook] Metadata not found in Redis for Shop Order: ${ClientReference}`)
-                // Paid, but the cart expired out of Redis — the customer is out of pocket
-                // with no order. Flag it rather than letting it pass as a success.
+            if (!metadata) {
+                console.error(`[HubtelWebhook] Metadata not found for Shop Order: ${ClientReference}`)
+                // Paid, but the cart is in neither Redis nor the database — the customer
+                // is out of pocket with no order. Flag it rather than letting it pass
+                // as a success.
                 await logCallback({
                     clientReference: ClientReference,
                     responseCode: event.ResponseCode,
                     status: 'failed',
-                    message: 'Paid but shop order metadata had expired from Redis — order not created.',
+                    message: 'Paid but shop order metadata could not be found — order not created.',
                 })
                 return NextResponse.json({ received: true })
-            }
-
-            let metadata
-            try {
-                metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr
-            } catch (e) {
-                metadata = metadataStr
             }
 
             const { processShopOrder } = await import('@/lib/shop-order-processor')
@@ -119,7 +112,7 @@ export async function POST(request: NextRequest) {
         // Service Fulfilment callback at /api/hubtel/fulfill — not this
         // Receive-Money webhook.
 
-        // For Wallet Top-ups, Agent Upgrades, and Classifieds Boosts — look up via wallet_payments
+        // For Wallet Top-ups and Agent Upgrades — look up via wallet_payments
         const { data: payment } = await supabase
             .from('wallet_payments')
             .select('total_amount, status, metadata')
@@ -174,19 +167,20 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ received: true })
         }
 
-        // ── CLASSIFIEDS BOOST ─────────────────────────────────────────────────────
-        if (ClientReference.startsWith('BOOST-')) {
-            const { processBoostPayment } = await import('@/lib/classifieds-payments')
-            console.log('[HubtelWebhook] Routing listing boost payment:', ClientReference)
-            const boostResult = await processBoostPayment(ClientReference, {
-                reference: ClientReference,
-                amount: paidAmountKobo,
-            })
+        // ── AIRTIME (Direct Pay) ─────────────────────────────────────────────────
+        // AIRPAY-, not AIR- — the latter is a Hubtel airtime fulfillment leg going
+        // OUT, which this webhook must not confuse with money coming IN.
+        if (ClientReference.startsWith('AIRPAY-')) {
+            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+            console.log('[HubtelWebhook] Routing direct-pay airtime order:', ClientReference)
+            await processAirtimeDirectOrder(ClientReference)
+            return NextResponse.json({ received: true })
+        }
 
-            if (!boostResult.success && !boostResult.alreadyProcessed) {
-                console.error('[HubtelWebhook] Boost processing failed:', boostResult.error)
-                return NextResponse.json({ error: boostResult.error }, { status: 500 })
-            }
+        // ── RETIRED: CLASSIFIEDS BOOST ────────────────────────────────────────────
+        // Caught rather than dropped: unhandled it would reach the wallet top-up branch below.
+        if (isRetiredBoostReference(ClientReference)) {
+            reportRetiredBoostPayment('HubtelWebhook', ClientReference)
             return NextResponse.json({ received: true })
         }
 

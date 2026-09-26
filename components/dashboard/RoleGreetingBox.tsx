@@ -27,7 +27,7 @@ interface RoleGreetingBoxProps {
 }
 
 export function RoleGreetingBox({ stats }: RoleGreetingBoxProps) {
-    const { dbUser, isAdmin, isSubAdmin } = useAuth()
+    const { dbUser, isAdmin, isSubAdmin, isSubAgent } = useAuth()
     const [currentTime, setCurrentTime] = useState(new Date())
     const [autoUpgrade, setAutoUpgrade] = useState(false)
 
@@ -106,6 +106,7 @@ export function RoleGreetingBox({ stats }: RoleGreetingBoxProps) {
     const roleLabel = 
         isAdmin ? 'System Administrator' :
         isSubAdmin ? 'Sub-Administrator' :
+        isSubAgent ? 'Sub-Agent' :
         dbUser.role === 'dealer' ? 'Authorized Dealer' :
         dbUser.role === 'agent' ? 'Authorized Agent' :
         'Valued Customer'

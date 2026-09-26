@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { checkPaymentStatus } from '@/lib/moolre-payment-service'
 import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
@@ -19,9 +20,6 @@ export async function GET(request: NextRequest) {
         walletChecked: 0,
         walletCredited: 0,
         walletFailed: 0,
-        boostChecked: 0,
-        boostCredited: 0,
-        boostFailed: 0,
         shopChecked: 0,
         shopProcessed: 0,
         shopFailed: 0,
@@ -82,18 +80,20 @@ export async function GET(request: NextRequest) {
                             } else {
                                 console.error(`[CronMoolre] ❌ Utility bill ${payment.reference} failed:`, utilResult.error)
                             }
-                        } else if (payment.reference.startsWith('BOOST-')) {
-                            // Process boost payments
-                            results.boostChecked++
-                            const { processBoostPayment } = await import('@/lib/classifieds-payments')
-                            const boostResult = await processBoostPayment(payment.reference)
-                            if (boostResult.success || boostResult.alreadyProcessed) {
-                                results.boostCredited++
-                                console.log(`[CronMoolre] ✅ Boost payment ${payment.reference} credited`)
+                        } else if (payment.reference.startsWith('AIRPAY-')) {
+                            // Direct-pay airtime top-ups
+                            const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                            const airResult = await processAirtimeDirectOrder(payment.reference)
+                            if (airResult.success || airResult.alreadyProcessed) {
+                                results.walletCredited++
+                                console.log(`[CronMoolre] ✅ Airtime order ${payment.reference} settled`)
                             } else {
-                                results.boostFailed++
-                                console.error(`[CronMoolre] ❌ Boost payment ${payment.reference} failed:`, boostResult.error)
+                                console.error(`[CronMoolre] ❌ Airtime order ${payment.reference} failed:`, airResult.error)
                             }
+                        } else if (isRetiredBoostReference(payment.reference)) {
+                            // Confirmed paid, but the product is gone. Throwing leaves the row pending so it is reported every run until refunded.
+                            reportRetiredBoostPayment('CronMoolre', payment.reference)
+                            throw new Error(RETIRED_BOOST_MESSAGE)
                         } else if (
                             payment.reference.startsWith('agent_upgrade_') ||
                             metadata.upgrade_type === 'agent'

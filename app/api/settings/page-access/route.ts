@@ -12,7 +12,10 @@ export async function GET() {
     try {
         const config = await getCachedPublicConfig()
 
-        return NextResponse.json(config.pageAccess, {
+        // ussd_enabled rides along with the page-access flags: it gates the
+        // /dashboard/shop/ussd and /dashboard/sub/ussd links, and usePageAccess is
+        // already the one fetch every nav makes.
+        return NextResponse.json({ ...config.pageAccess, ussd_enabled: String(config.ussdEnabled) }, {
             headers: {
                 'Cache-Control': 'no-store, must-revalidate',
             },

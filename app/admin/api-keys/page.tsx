@@ -40,6 +40,8 @@ interface ApiKeyRow {
     key_prefix: string
     name: string
     status: 'pending' | 'active' | 'revoked'
+    /** Absent on rows created before v2; those are all data keys. */
+    kind?: 'standard' | 'commission'
     last_used_at: string | null
     created_at: string
     users: {
@@ -57,10 +59,18 @@ const STATUS_BADGE: Record<string, string> = {
     revoked: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
 }
 
+// Commission keys reach airtime and bill payments, which cannot be recalled once the
+// provider accepts them. Worth telling apart at a glance from a data key.
+const KIND_BADGE: Record<string, { label: string; className: string }> = {
+    standard:   { label: 'Data',       className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+    commission: { label: 'Commission', className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
+}
+
 export default function AdminApiKeysPage() {
     const [keys, setKeys] = useState<ApiKeyRow[]>([])
     const [loading, setLoading] = useState(true)
     const [statusFilter, setStatusFilter] = useState('all')
+    const [kindFilter, setKindFilter] = useState('all')
     const [search, setSearch] = useState('')
     const [actionKey, setActionKey] = useState<{ id: string; action: 'approve' | 'revoke' } | null>(null)
     const [isActioning, setIsActioning] = useState(false)
@@ -70,13 +80,14 @@ export default function AdminApiKeysPage() {
         try {
             const params = new URLSearchParams()
             if (statusFilter !== 'all') params.set('status', statusFilter)
+            if (kindFilter !== 'all') params.set('kind', kindFilter)
             const res = await fetch(`/api/admin/api-keys?${params}`)
             const json = await res.json()
             setKeys(json.keys || [])
         } finally {
             setLoading(false)
         }
-    }, [statusFilter])
+    }, [statusFilter, kindFilter])
 
     useEffect(() => { fetchKeys() }, [fetchKeys])
 
@@ -157,6 +168,16 @@ export default function AdminApiKeysPage() {
                                 <SelectItem value="revoked">Revoked</SelectItem>
                             </SelectContent>
                         </Select>
+                        <Select value={kindFilter} onValueChange={setKindFilter}>
+                            <SelectTrigger className="w-40">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All types</SelectItem>
+                                <SelectItem value="standard">Data</SelectItem>
+                                <SelectItem value="commission">Commission</SelectItem>
+                            </SelectContent>
+                        </Select>
                         <Button variant="ghost" size="icon" onClick={fetchKeys}>
                             <RefreshCw className="w-4 h-4" />
                         </Button>
@@ -185,6 +206,12 @@ export default function AdminApiKeysPage() {
                                             </p>
                                             <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full uppercase', STATUS_BADGE[k.status])}>
                                                 {k.status}
+                                            </span>
+                                            <span className={cn(
+                                                'text-[10px] font-bold px-2 py-0.5 rounded-full uppercase',
+                                                KIND_BADGE[k.kind ?? 'standard'].className
+                                            )}>
+                                                {KIND_BADGE[k.kind ?? 'standard'].label}
                                             </span>
                                             <span className="text-[10px] text-muted-foreground bg-secondary/50 px-2 py-0.5 rounded-full uppercase font-semibold">
                                                 {k.users.role}

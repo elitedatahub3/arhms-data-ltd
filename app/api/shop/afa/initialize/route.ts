@@ -15,6 +15,13 @@ import {
 } from '@/lib/payswitch-payment-service'
 import { mapPayswitchTransaction } from '@/lib/payswitch-reference'
 import { resolveProviderForScope, type PaymentProvider } from '@/lib/payment-provider'
+import { paystackMomoProviderFor } from '@/lib/paystack-momo-service'
+import {
+    startPaystackMomoCharge,
+    submitPaystackMomoOtp,
+    markPaystackMomoPending,
+    clearPaystackMomoPending,
+} from '@/lib/paystack-momo-checkout'
 import { validateAfaFormData } from '@/lib/afa-validation'
 import { resolveAfaCostPrice } from '@/lib/afa-pricing'
 
@@ -220,6 +227,42 @@ export async function POST(request: NextRequest) {
                 console.error('[shop/afa/initialize] Redis cache error (non-fatal):', redisErr)
             }
 
+            // ── PAYSTACK MOBILE MONEY BRANCH ──────────────────────────────────
+            if (provider === 'paystack_momo') {
+                const payerNetwork = networkForPhone(cleanPhone)
+                if (!paystackMomoProviderFor(payerNetwork)) {
+                    return NextResponse.json({ error: 'Unsupported payment network' }, { status: 400 })
+                }
+
+                // No wallet_payments row here, so the marker is the only handle the
+                // reconciliation sweep has on this registration.
+                await markPaystackMomoPending(referenceCode, { kind: 'afa', slug: shopSlug })
+
+                const charge = await startPaystackMomoCharge({
+                    reference: referenceCode,
+                    amountGhs: totalAmount,
+                    payerPhone: cleanPhone,
+                    network: payerNetwork,
+                    email: validEmail || undefined,
+                    // The applicant's name never has to reach a payment field — the
+                    // settle path reads it back from the order row.
+                    metadata: { kind: 'afa', shop_id: shop.id, order_id: order.id },
+                })
+
+                if (!charge.ok) {
+                    if (charge.safeToMarkFailed) {
+                        await (db.from('afa_orders') as any)
+                            .update({ payment_status: 'failed' })
+                            .eq('reference_code', referenceCode)
+                            .eq('payment_status', 'pending_payment')
+                        await clearPaystackMomoPending(referenceCode)
+                    }
+                    return NextResponse.json(charge.body, { status: charge.httpStatus })
+                }
+
+                return NextResponse.json(charge.body)
+            }
+
             // ── PAYSTACK BRANCH ───────────────────────────────────────────────
             if (provider === 'paystack') {
                 const guestEmail = validEmail || `guest-${cleanPhone}@checkout.arhmsgh.com`
@@ -372,6 +415,30 @@ export async function POST(request: NextRequest) {
         // ── OTP retry path (Moolre only) ──────────────────────────────────────
         if (!otpCode) {
             return NextResponse.json({ error: 'OTP code is required to complete payment' }, { status: 400 })
+        }
+
+        // Moolre-only by construction until now: this tail sits after the create-order
+        // block, so a Paystack OTP would have been posted at Moolre against a
+        // reference it never issued.
+        if (provider === 'paystack_momo') {
+            const { data: retryOrder } = await (db.from('afa_orders') as any)
+                .select('phone, payment_status')
+                .eq('reference_code', existingRef)
+                .maybeSingle()
+
+            // A guest has no account and the reference is guessable, so the payer's
+            // own number is what proves this charge is theirs to finish.
+            if (!retryOrder
+                || retryOrder.payment_status !== 'pending_payment'
+                || String(retryOrder.phone || '') !== String(cleanPhone)) {
+                return NextResponse.json(
+                    { error: 'That payment is no longer waiting for a code' },
+                    { status: 404 }
+                )
+            }
+
+            const otpResult = await submitPaystackMomoOtp({ reference: existingRef, otp: String(otpCode), payerPhone: cleanPhone })
+            return NextResponse.json(otpResult.body, otpResult.ok ? undefined : { status: otpResult.httpStatus })
         }
 
         const channelId = MOOLRE_PAYMENT_CHANNEL_MAP[networkForPhone(cleanPhone)]

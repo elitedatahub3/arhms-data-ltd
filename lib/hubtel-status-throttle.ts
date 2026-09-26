@@ -65,6 +65,22 @@ export const PAYSWITCH_CRON_THROTTLE_KEYS: HubtelThrottleKeys = {
     count: 'cron_payswitch_check_count',
 }
 
+/**
+ * Paystack MoMo budgets. Paystack's verify endpoint is not behind the metered
+ * static proxy, so the quota argument above does not apply — but the other reason
+ * does: Paystack never webhooks a failure, so an unapproved prompt produces no
+ * callback at all and a tab left open on one would poll until it was closed.
+ */
+export const PAYSTACK_MOMO_CLIENT_THROTTLE_KEYS: HubtelThrottleKeys = {
+    lastCheck: 'last_paystack_momo_check',
+    count: 'paystack_momo_check_count',
+}
+
+export const PAYSTACK_MOMO_CRON_THROTTLE_KEYS: HubtelThrottleKeys = {
+    lastCheck: 'last_cron_paystack_momo_check',
+    count: 'cron_paystack_momo_check_count',
+}
+
 export interface HubtelThrottleOptions {
     /** Silence window after the payment was created, letting the webhook land first. */
     graceMs: number

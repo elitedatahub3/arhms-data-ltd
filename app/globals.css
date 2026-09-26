@@ -5,7 +5,7 @@
 @layer base {
   :root {
     /* ── Signature gradient primitives ──────────────────────────────────────
-       L0-only. Sub-themes (.theme-marketplace, .theme-shop) may never override
+       L0-only. Sub-themes (.theme-shop) may never override
        these; they may only write the accent channel further down. */
     --brand-1: 262 83% 58%;   /* #7C3AED violet */
     --brand-2: 243 75% 59%;   /* #4F46E5 indigo */
@@ -65,8 +65,8 @@
     --secondary-foreground: 233 30% 20%;
     --accent: var(--accent-soft);
     /* Derived, not literal: a sub-theme may only write the accent channel, so
-       deriving the foreground from it is what lets .theme-marketplace get
-       emerald-on-emerald without being allowed to declare this directly. */
+       deriving the foreground from it is what lets a sub-theme such as .theme-shop
+       get a matching on-accent colour without being allowed to declare this directly. */
     --accent-foreground: var(--accent-strong);
 
     /* ── Status. L0-only: never themed, so "paid" never turns into brand. ─── */
@@ -190,6 +190,17 @@
     scroll-padding-top: 60px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* The grey flash Android paints over a tapped element lags behind the
+       press and reads as sluggishness; the app's own active: states give the
+       feedback instead. */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* No double-tap-to-zoom on controls, so older Android WebViews fire the tap
+     immediately instead of holding it to see whether a second tap follows.
+     Pinch-zoom is unaffected. */
+  a, button, [role="button"], summary, label, input, select, textarea {
+    touch-action: manipulation;
   }
 
   body {
@@ -199,6 +210,14 @@
     letter-spacing: 0;
     overflow-x: hidden;
   }
+  /* clip where supported: `hidden` on body makes it a scroll container, which
+     breaks sticky/fixed children and makes the page jump on Android as the URL
+     bar collapses and returns. `clip` hides the overflow without that. */
+  @supports (overflow: clip) {
+    body {
+      overflow-x: clip;
+    }
+  }
 
   /* ── Bubble field ────────────────────────────────────────────────────────
      Soft blue discs floating on the white surface. This is what keeps "pure
@@ -206,12 +225,37 @@
      from a handful of very low-alpha circles rather than from tinting the
      background itself.
 
-     Painted with radial-gradients rather than elements, so it costs one
-     background on an existing box — no extra DOM, no extra composited layer,
-     and nothing for the browser to lay out. `fixed` keeps the field still
-     while content scrolls over it. */
+     Painted with radial-gradients on a single pseudo-element pinned to the
+     viewport, so the field stays still while content scrolls over it.
+
+     History: `background-attachment: fixed` was tried first and is unreliable
+     on mobile (Chrome on Android and iOS Safari fall back to `scroll`, and the
+     percentage positions then resolve against the whole page, leaving the
+     first screen empty). The replacement tiled the field down the full page
+     height — which fixed that, but made a long page like the landing
+     rasterize eight gradients per 1100px tile as it scrolled, showing as
+     blank/flickering tiles on low-end Android when scrolling back up.
+
+     A `position: fixed` pseudo-element is neither: it is a real box the size
+     of the viewport, composited once as its own layer and never repainted
+     during scroll. Height is 100vh, which Chrome on Android resolves to the
+     largest viewport, so the layer does not resize (and repaint) as the URL
+     bar hides and returns. `isolation: isolate` keeps the z-index: -1 layer
+     above this element's own background and below its content. */
   .bg-bubbles {
     background-color: hsl(var(--background));
+    isolation: isolate;
+  }
+  .bg-bubbles::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100vh;
+    z-index: -1;
+    pointer-events: none;
+    background-repeat: no-repeat;
     /* Each disc gets an EXPLICIT pixel radius. Sizing them by percentage made
        every circle scale with the viewport, so on a laptop they ballooned into
        two vague washes instead of reading as distinct bubbles. Fixed radii keep
@@ -226,27 +270,13 @@
       radial-gradient(circle 110px at 88% 72%, hsl(218 82% 62% / 0.16) 0 88%, transparent 92%),
       radial-gradient(circle 170px at 24% 86%, hsl(220 78% 60% / 0.17) 0 88%, transparent 92%),
       radial-gradient(circle  88px at 58% 94%, hsl(221 76% 58% / 0.14) 0 88%, transparent 92%);
-    /* A repeating tile of a FIXED height, not a single viewport-sized layer.
-       `background-attachment: fixed` is unreliable on mobile — Chrome on Android
-       and iOS Safari fall back to `scroll`, and once they do the painting area
-       becomes the entire page instead of the viewport. On a long landing page
-       that pushes the percentage positions (12%, 86%, 94%) hundreds or
-       thousands of pixels down, so the first screen renders empty — which is
-       exactly what happened.
-
-       Sizing the tile at 100% x 1100px makes every disc's position resolve
-       against 1100px no matter how tall the page is, and repeating it means the
-       field carries all the way down. No dependence on `fixed`, so it behaves
-       identically on every browser. */
-    background-repeat: repeat;
-    background-size: 100% 1100px;
   }
 
   /* On black glass the discs stop being bubbles and become reflections: two
      wide, very low-alpha brand washes bled in from the top corners, plus a
      cool sheen low on the right. Any stronger and they read as grey smudges
      and give back the milky look that true black is here to avoid. */
-  .dark .bg-bubbles {
+  .dark .bg-bubbles::before {
     background-image:
       radial-gradient(circle at 78% 8%,  hsl(var(--brand-1) / 0.07) 0%, transparent 62%),
       radial-gradient(circle at 2%  46%, hsl(var(--brand-2) / 0.05) 0%, transparent 60%),
@@ -256,7 +286,7 @@
   /* The bubble field is decorative. Anyone who has asked for reduced data or
      reduced motion gets the plain surface. */
   @media (prefers-reduced-transparency: reduce) {
-    .bg-bubbles {
+    .bg-bubbles::before {
       background-image: none;
     }
   }
@@ -393,18 +423,6 @@
     box-shadow: 0 25px 60px rgba(124,58,237,0.2);
   }
 
-  /* Slide 5 — Marketplace (emerald) */
-  .hero-slide-5 {
-    background: linear-gradient(145deg,#ffffff,#ecfdf5);
-    border: 1px solid rgba(16,185,129,0.18);
-    box-shadow: 0 25px 60px rgba(16,185,129,0.08);
-  }
-  .dark .hero-slide-5 {
-    background: linear-gradient(145deg,#04140d,#03110a);
-    border: 1px solid rgba(16,185,129,0.22);
-    box-shadow: 0 25px 60px rgba(16,185,129,0.18);
-  }
-
   /* ── Hero card mirror reflection (light mode only) ──────────────────── */
   .hero-reflect {
     position: absolute;
@@ -416,7 +434,9 @@
     transform: scaleY(-1);
     -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.28) 0%, transparent 90%);
     mask-image: linear-gradient(to bottom, rgba(0,0,0,0.28) 0%, transparent 90%);
-    filter: blur(1.5px);
+    /* No filter: blur. The mask already fades the reflection out, and a blur
+       filter re-rasterizes all four layers on every frame of the slide
+       transition. */
     pointer-events: none;
     transition: opacity 500ms, transform 500ms;
   }
@@ -424,7 +444,6 @@
   .hero-reflect-2 { background: linear-gradient(145deg, #eef2ff, #ffffff); }
   .hero-reflect-3 { background: linear-gradient(145deg, #eff6ff, #ffffff); }
   .hero-reflect-4 { background: linear-gradient(145deg, #f5f3ff, #ffffff); }
-  .hero-reflect-5 { background: linear-gradient(145deg, #ecfdf5, #ffffff); }
 
   .hero-separator {
     background: linear-gradient(to right, transparent, rgba(37,99,235,0.10) 30%, rgba(124,58,237,0.10) 70%, transparent);
@@ -952,73 +971,4 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
-}
-
-/* ============================================================
-   MARKETPLACE THEME (KFG Market on marketplace.arhmsgh.com)
-   ============================================================ */
-/* Accent channel only. The emerald-tinted neutrals that used to live here are
-   gone on purpose: marketplace surfaces, radii and elevation are now identical
-   to the rest of the app, and only the accent differs. Status colours are
-   L0-only, so the old --destructive override (which was amber, for "Sponsored"
-   labels) is dropped — .badge-sponsored already sets its own amber directly.
-
-   The emerald is also darkened from 39% to 30% lightness: 160 84% 39% is only
-   ~3.4:1 on white and failed WCAG AA for text and icons. */
-.theme-marketplace {
-  --accent-solid: 160 84% 30%;
-  --accent-strong: 160 84% 24%;
-  --accent-soft: 152 60% 95%;
-  --accent-softer: 152 60% 98%;
-  --accent-contrast: 0 0% 100%;
-  --accent-ring: 160 84% 34%;
-  --gradient-accent:
-    linear-gradient(135deg, hsl(168 82% 34%) 0%, hsl(160 84% 32%) 50%, hsl(186 90% 40%) 100%);
-  --glow-accent: 0 6px 18px -6px hsl(160 84% 32% / 0.40);
-}
-
-.theme-marketplace.dark {
-  --accent-solid: 158 68% 48%;
-  --accent-strong: 158 72% 56%;
-  --accent-soft: 160 34% 15%;
-  --accent-softer: 160 28% 11%;
-  --accent-contrast: 160 60% 7%;
-  --accent-ring: 158 68% 52%;
-  --gradient-accent:
-    linear-gradient(135deg, hsl(166 70% 44%) 0%, hsl(158 68% 48%) 50%, hsl(186 84% 52%) 100%);
-  --glow-accent: 0 6px 18px -6px hsl(158 68% 48% / 0.42);
-}
-
-/* Sponsored/Featured label styling for marketplace */
-.theme-marketplace .badge-sponsored {
-  @apply bg-amber-400 text-amber-950 font-semibold;
-}
-
-/* ── Reusable marketplace UI helpers (emerald system) ───────────────── */
-/* Listing card hover lift — used across feed, hero, favorites */
-.theme-marketplace .mkt-listing-card {
-  @apply transition-all duration-300 hover:-translate-y-1 hover:shadow-lg;
-}
-
-/* Condition / trust badges — consistent color coding everywhere */
-.theme-marketplace .badge-condition-new {
-  @apply bg-primary/10 text-primary border border-primary/20 font-medium;
-}
-.theme-marketplace .badge-condition-used {
-  @apply bg-muted text-muted-foreground border border-border font-medium;
-}
-.theme-marketplace .badge-verified {
-  @apply bg-primary/10 text-primary border border-primary/20 font-medium;
-}
-
-/* Emerald hero wash for landing / page banners */
-.theme-marketplace .mkt-hero {
-  background:
-    radial-gradient(1200px 400px at 50% -10%, hsl(160 84% 39% / 0.14), transparent 70%),
-    linear-gradient(to bottom, hsl(152 76% 96%), hsl(var(--background)));
-}
-.theme-marketplace.dark .mkt-hero {
-  background:
-    radial-gradient(1200px 400px at 50% -10%, hsl(160 84% 42% / 0.20), transparent 70%),
-    linear-gradient(to bottom, hsl(160 30% 7%), hsl(var(--background)));
 }

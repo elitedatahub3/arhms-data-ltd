@@ -44,6 +44,22 @@ export async function POST(request: NextRequest) {
         // 4. Use service-role client to fetch cost prices and upsert (bypasses RLS)
         const db = createServerClient() as any
 
+        // A sub-agent's voucher prices are bounded by their upline's, not by the
+        // role cap above — this route knows nothing of that bound, so it would
+        // let them price straight past it.
+        const { data: subMembership } = await db
+            .from('sub_agents')
+            .select('id')
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+        if (subMembership) {
+            return NextResponse.json(
+                { error: 'Set your Results Checker prices from your own Pricing page, where your upline’s price is the floor.' },
+                { status: 403 }
+            )
+        }
+
         // Validate each item against cost price
         if (items.length > 0) {
             const typeIds = items.map((i: any) => i.rcTypeId)

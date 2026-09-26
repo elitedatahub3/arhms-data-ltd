@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
     Store, ArrowLeft, CheckCircle2, Clock,
     Banknote, Search, Loader2,
-    Receipt, TrendingUp, AlertCircle, Smartphone, Landmark,
+    Receipt, TrendingUp, AlertCircle, Smartphone, Landmark, Send, Undo2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -43,10 +43,11 @@ interface WithdrawalRequest {
     network: string | null
     balance_snapshot: number | null
     description: string
-    status: 'pending' | 'completed' | 'moolre_pending'
+    status: 'pending' | 'completed' | 'moolre_pending' | 'shop_owner_pending' | 'rejected'
     type: 'profit' | 'withdrawal'
     created_at: string
     admin_note: string | null
+    sub_approval_status: 'not_required' | 'pending' | 'approved' | 'rejected' | null
     shop_wallet_id: string
     payment_type: 'momo' | 'bank' | null
     moolre_transaction_id: string | null
@@ -79,6 +80,54 @@ interface ShopOption {
 }
 
 // ─────────────────────────────────────────────
+// Status presentation
+// ─────────────────────────────────────────────
+// 'shop_owner_pending' is a sub-agent's request still parked with their upline
+// Lead. The sub is debited the moment they ask, so those rows are money already
+// out of a wallet — the admin releases or refunds them from this queue.
+
+type WithdrawalStatus = WithdrawalRequest['status']
+type RowAction = 'moolre' | 'manual' | 'release' | 'refund'
+
+const STATUS_LABEL: Record<WithdrawalStatus, string> = {
+    pending: 'Pending',
+    moolre_pending: 'Moolre Pending',
+    shop_owner_pending: 'Awaiting Lead',
+    completed: 'Completed',
+    rejected: 'Rejected',
+}
+
+const STATUS_ACCENT: Record<WithdrawalStatus, string> = {
+    pending: 'border-l-yellow-500',
+    moolre_pending: 'border-l-blue-500',
+    shop_owner_pending: 'border-l-orange-500',
+    completed: 'border-l-emerald-500',
+    rejected: 'border-l-red-500',
+}
+
+const STATUS_BADGE: Record<WithdrawalStatus, string> = {
+    pending: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-500 border border-yellow-500/20 animate-pulse',
+    moolre_pending: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20',
+    shop_owner_pending: 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20 animate-pulse',
+    completed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-500 border border-emerald-500/20',
+    rejected: 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20',
+}
+
+// The same states, tuned for the dark mobile cards
+const STATUS_BADGE_ON_DARK: Record<WithdrawalStatus, string> = {
+    pending: 'bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 animate-pulse',
+    moolre_pending: 'bg-blue-500/20 text-blue-400 border border-blue-500/30',
+    shop_owner_pending: 'bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse',
+    completed: 'bg-emerald-500/20 text-emerald-500 border border-emerald-500/30',
+    rejected: 'bg-red-500/20 text-red-400 border border-red-500/30',
+}
+
+// A row that ever carried a sub approval stage belongs to a sub-agent, even once
+// a release has flipped its status to a plain 'pending'.
+const isSubRequest = (w: WithdrawalRequest) =>
+    !!w.sub_approval_status && w.sub_approval_status !== 'not_required'
+
+// ─────────────────────────────────────────────
 // Page
 // ─────────────────────────────────────────────
 
@@ -91,8 +140,8 @@ export default function AdminWithdrawalsPage() {
     const [shops, setShops] = useState<ShopOption[]>([])
     const [loading, setLoading] = useState(true)
 
-    // Per-row processing states: { [id]: 'moolre' | 'manual' | null }
-    const [processingAction, setProcessingAction] = useState<Record<string, 'moolre' | 'manual' | null>>({})
+    // Per-row processing states: { [id]: RowAction | null }
+    const [processingAction, setProcessingAction] = useState<Record<string, RowAction | null>>({})
 
     const [activeTab, setActiveTab] = useState<'withdrawals' | 'credits'>('withdrawals')
     const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -235,6 +284,45 @@ export default function AdminWithdrawalsPage() {
         }
     }
 
+    // ─── Sub-agent requests parked with their Lead ──────────────────────────────
+    // The sub is debited when they submit, but the row waits at
+    // 'shop_owner_pending' for their upline Lead to approve it. No screen in the
+    // app ever does, so the admin finishes it here: release into the normal payout
+    // queue, or decline and put the money back in the sub's wallet.
+    const handleSubWithdrawal = async (w: WithdrawalRequest, action: 'release' | 'refund') => {
+        setProcessingAction(prev => ({ ...prev, [w.id]: action }))
+
+        try {
+            const res = await fetch('/api/admin/sub-withdrawals', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    transactionId: w.id,
+                    action,
+                }),
+            })
+
+            const data = await res.json()
+
+            if (!res.ok) {
+                toast.error(data.error || 'Failed to action this request')
+                return
+            }
+
+            if (action === 'release') {
+                toast.success('✅ Released to the payout queue. Pay it like any other request.')
+            } else {
+                toast.success(`↩️ Declined — ${formatCurrency(w.amount)} returned to the sub-agent's wallet.`)
+            }
+
+            fetchWithdrawals()
+        } catch (err: any) {
+            toast.error(err.message || 'Network error')
+        } finally {
+            setProcessingAction(prev => ({ ...prev, [w.id]: null }))
+        }
+    }
+
     const filteredWithdrawals = withdrawals.filter(w => {
         const matchesShop = shopFilter === 'all' || w.shop.owner_id === shopFilter
         const matchesSearch = !searchTerm ||
@@ -264,6 +352,12 @@ export default function AdminWithdrawalsPage() {
         pendingAmount: filteredWithdrawals
             .filter(w => w.status === 'pending')
             .reduce((sum, w) => sum + (w.net_amount || 0), 0),
+        // Sub requests still waiting on a Lead — gross amount, because that is
+        // what was debited and what a refund puts back.
+        strandedCount: filteredWithdrawals.filter(w => w.status === 'shop_owner_pending').length,
+        strandedAmount: filteredWithdrawals
+            .filter(w => w.status === 'shop_owner_pending')
+            .reduce((sum, w) => sum + (w.amount || 0), 0),
     }), [filteredWithdrawals, filteredCredits])
 
     return (
@@ -321,9 +415,11 @@ export default function AdminWithdrawalsPage() {
                             <SelectTrigger className="h-10"><SelectValue placeholder="All Status" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Status</SelectItem>
+                                <SelectItem value="shop_owner_pending">Awaiting Lead (Sub)</SelectItem>
                                 <SelectItem value="pending">Pending</SelectItem>
                                 <SelectItem value="moolre_pending">Moolre Pending</SelectItem>
                                 <SelectItem value="completed">Completed</SelectItem>
+                                <SelectItem value="rejected">Rejected</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
@@ -368,6 +464,21 @@ export default function AdminWithdrawalsPage() {
                 </div>
             </div>
 
+            {/* Sub-agent requests their Lead never actioned */}
+            {activeTab === 'withdrawals' && stats.strandedCount > 0 && (
+                <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 p-4 flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400 shrink-0 mt-0.5" />
+                    <div>
+                        <p className="text-sm font-bold text-orange-700 dark:text-orange-400">
+                            {stats.strandedCount} sub-agent request{stats.strandedCount === 1 ? '' : 's'} awaiting a Lead · {formatCurrency(stats.strandedAmount)}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            The sub has already been debited. Release into the payout queue to pay as usual, or refund it back to their wallet.
+                        </p>
+                    </div>
+                </div>
+            )}
+
             {/* Content */}
             <Card>
                 <CardContent className="p-0">
@@ -406,14 +517,14 @@ export default function AdminWithdrawalsPage() {
                                                 {filteredWithdrawals.map((w) => {
                                                     const isProcessingMoolre = processingAction[w.id] === 'moolre'
                                                     const isProcessingManual = processingAction[w.id] === 'manual'
+                                                    const isProcessingRelease = processingAction[w.id] === 'release'
+                                                    const isProcessingRefund = processingAction[w.id] === 'refund'
                                                     const isAnyProcessing = !!processingAction[w.id]
 
                                                     return (
                                                         <tr key={w.id} className={cn(
                                                             "hover:bg-muted/30 transition-colors border-l-4 border-b",
-                                                            w.status === 'pending' ? 'border-l-yellow-500' :
-                                                                w.status === 'moolre_pending' ? 'border-l-blue-500' :
-                                                                    'border-l-emerald-500'
+                                                            STATUS_ACCENT[w.status] ?? 'border-l-emerald-500'
                                                         )}>
                                                             <td className="px-4 py-4 text-xs text-muted-foreground">
                                                                 {new Date(w.created_at).toLocaleDateString()}<br />
@@ -423,6 +534,11 @@ export default function AdminWithdrawalsPage() {
                                                                 <p className="font-semibold text-sm">{w.shop.shop_name}</p>
                                                                 <p className="text-[10px] text-muted-foreground font-medium">{w.shop.owner_name}</p>
                                                                 <p className="text-[10px] text-muted-foreground">{w.shop.owner_phone}</p>
+                                                                {isSubRequest(w) && (
+                                                                    <span className="inline-block mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 uppercase tracking-wider">
+                                                                        Sub-agent
+                                                                    </span>
+                                                                )}
                                                             </td>
                                                             <td className="px-4 py-4">
                                                                 <p className="font-medium">{w.account_name}</p>
@@ -477,14 +593,44 @@ export default function AdminWithdrawalsPage() {
                                                             <td className="px-4 py-4 text-center">
                                                                 <span className={cn(
                                                                     'text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider',
-                                                                    w.status === 'pending' ? 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-500 border border-yellow-500/20 animate-pulse' :
-                                                                        w.status === 'moolre_pending' ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20' :
-                                                                            'bg-emerald-500/10 text-emerald-600 dark:text-emerald-500 border border-emerald-500/20'
+                                                                    STATUS_BADGE[w.status] ?? STATUS_BADGE.completed
                                                                 )}>
-                                                                    {w.status === 'moolre_pending' ? 'Moolre Pending' : w.status}
+                                                                    {STATUS_LABEL[w.status] ?? w.status}
                                                                 </span>
                                                             </td>
                                                             <td className="px-4 py-4 text-right">
+                                                                {/* Sub request the Lead never actioned — admin does it for them */}
+                                                                {w.status === 'shop_owner_pending' && (
+                                                                    <div className="flex justify-end gap-2">
+                                                                        <Button
+                                                                            size="sm"
+                                                                            className="h-8 bg-orange-600 hover:bg-orange-700 text-white font-bold gap-1 text-xs"
+                                                                            onClick={() => {
+                                                                                if (confirm(`Release GH₵${w.net_amount.toFixed(2)} for ${w.account_name} into the payout queue? You will then pay it like any other request.`)) {
+                                                                                    handleSubWithdrawal(w, 'release')
+                                                                                }
+                                                                            }}
+                                                                            disabled={isAnyProcessing}
+                                                                        >
+                                                                            {isProcessingRelease ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                                            Release
+                                                                        </Button>
+                                                                        <Button
+                                                                            size="sm"
+                                                                            variant="outline"
+                                                                            className="h-8 border-red-500/40 text-red-600 hover:bg-red-500/10 font-bold gap-1 text-xs"
+                                                                            onClick={() => {
+                                                                                if (confirm(`Decline this request and return GH₵${w.amount.toFixed(2)} to the sub-agent's wallet?`)) {
+                                                                                    handleSubWithdrawal(w, 'refund')
+                                                                                }
+                                                                            }}
+                                                                            disabled={isAnyProcessing}
+                                                                        >
+                                                                            {isProcessingRefund ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
+                                                                            Refund
+                                                                        </Button>
+                                                                    </div>
+                                                                )}
                                                                 {w.status === 'pending' && (
                                                                     <div className="flex justify-end gap-2">
                                                                         {/* Pay with Moolre — only for momo payment type */}
@@ -548,29 +694,32 @@ export default function AdminWithdrawalsPage() {
                                         {filteredWithdrawals.map((w) => {
                                             const isProcessingMoolre = processingAction[w.id] === 'moolre'
                                             const isProcessingManual = processingAction[w.id] === 'manual'
+                                            const isProcessingRelease = processingAction[w.id] === 'release'
+                                            const isProcessingRefund = processingAction[w.id] === 'refund'
                                             const isAnyProcessing = !!processingAction[w.id]
 
                                             return (
                                                 <div key={w.id} className={cn(
                                                     "bg-[#111827] dark:bg-[#0f0f0f] rounded-xl overflow-hidden border-l-4 shadow-xl",
-                                                    w.status === 'pending' ? 'border-l-yellow-500' :
-                                                        w.status === 'moolre_pending' ? 'border-l-blue-500' :
-                                                            'border-l-emerald-500'
+                                                    STATUS_ACCENT[w.status] ?? 'border-l-emerald-500'
                                                 )}>
                                                     <div className="p-4 space-y-4">
                                                         <div className="flex justify-between items-start">
                                                             <div className="space-y-1">
                                                                 <h3 className="font-bold text-white text-base leading-none">{w.shop.shop_name}</h3>
                                                                 <p className="text-xs text-gray-400 font-medium">{w.shop.owner_name}</p>
+                                                                {isSubRequest(w) && (
+                                                                    <span className="inline-block text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-orange-900/30 text-orange-300 uppercase tracking-wider">
+                                                                        Sub-agent
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                             <div className="flex flex-col items-end gap-1">
                                                                 <span className={cn(
                                                                     'text-[10px] font-bold px-2 py-0.5 rounded-full uppercase',
-                                                                    w.status === 'pending' ? 'bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 animate-pulse' :
-                                                                        w.status === 'moolre_pending' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                                                                            'bg-emerald-500/20 text-emerald-500 border border-emerald-500/30'
+                                                                    STATUS_BADGE_ON_DARK[w.status] ?? STATUS_BADGE_ON_DARK.completed
                                                                 )}>
-                                                                    {w.status === 'moolre_pending' ? 'Moolre Pending' : w.status}
+                                                                    {STATUS_LABEL[w.status] ?? w.status}
                                                                 </span>
                                                                 <span className={cn(
                                                                     'text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1',
@@ -639,6 +788,36 @@ export default function AdminWithdrawalsPage() {
                                                     </div>
 
                                                     {/* Action Buttons */}
+                                                    {/* Sub request the Lead never actioned — admin does it for them */}
+                                                    {w.status === 'shop_owner_pending' && (
+                                                        <div className="flex border-t border-white/5">
+                                                            <button
+                                                                className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white font-black text-sm transition-colors flex items-center justify-center gap-2"
+                                                                onClick={() => {
+                                                                    if (confirm(`Release GH₵${w.net_amount.toFixed(2)} for ${w.account_name} into the payout queue?`)) {
+                                                                        handleSubWithdrawal(w, 'release')
+                                                                    }
+                                                                }}
+                                                                disabled={isAnyProcessing}
+                                                            >
+                                                                {isProcessingRelease ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                                                RELEASE
+                                                            </button>
+                                                            <button
+                                                                className="flex-1 py-3 bg-red-600/80 hover:bg-red-500 text-white font-black text-sm transition-colors flex items-center justify-center gap-2"
+                                                                onClick={() => {
+                                                                    if (confirm(`Decline this request and return GH₵${w.amount.toFixed(2)} to the sub-agent's wallet?`)) {
+                                                                        handleSubWithdrawal(w, 'refund')
+                                                                    }
+                                                                }}
+                                                                disabled={isAnyProcessing}
+                                                            >
+                                                                {isProcessingRefund ? <Loader2 className="w-4 h-4 animate-spin" /> : <Undo2 className="w-4 h-4" />}
+                                                                REFUND
+                                                            </button>
+                                                        </div>
+                                                    )}
+
                                                     {(w.status === 'pending' || w.status === 'moolre_pending') && (
                                                         <div className="flex border-t border-white/5">
                                                             {/* Moolre button — only for pending + momo type */}

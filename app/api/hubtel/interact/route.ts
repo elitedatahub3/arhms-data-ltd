@@ -1,6 +1,23 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
+import { isUssdEnabled, USSD_ENABLED_KEY, USSD_OFFLINE_MESSAGE } from '@/lib/ussd-availability';
+import {
+    checkMtnRegistrationStrict,
+    isMtnPackageNetwork,
+    USSD_NOT_REGISTERED_MESSAGE,
+    USSD_REGISTRATION_UNVERIFIABLE_MESSAGE,
+} from '@/lib/mtn-registration-gate';
+import { detectNetwork } from '@/lib/phone-validation';
+import {
+    chargeMobileMoney,
+    resolvePayerProvider,
+    submitOtp,
+    toAsciiSafe,
+} from '@/lib/paystack-momo-service';
+import { resolveProviderForScope, SCOPE_SETTING_KEY, type PaymentProvider } from '@/lib/payment-provider';
+import { buildUssdReference } from '@/lib/ussd-reference';
+import { logInitiate } from '@/lib/hubtel-payment-log';
 
 /**
  * Hubtel Programmable Services — Service Interaction URL
@@ -15,12 +32,22 @@ import { waitUntil } from '@vercel/functions';
  * short code (admin_settings.ussd_house_code) keeps ARHMS' own platform-direct
  * sales working exactly as before.
  *
- * IMPORTANT: We do NOT initiate payment ourselves. When the user confirms, we
- * return a `Type: "AddToCart"` response with an Item — Hubtel then charges the
- * customer and POSTs the result to our Service Fulfilment URL
- * (/api/hubtel/fulfill).
+ * PAYMENT: we collect it ourselves, via Paystack Mobile Money. On confirm we debit
+ * the caller's wallet with the Charge API and release the session; Paystack pushes
+ * the approval to the handset and the outcome arrives at /api/webhooks/paystack,
+ * which fulfils. Hubtel is a menu channel here and nothing more.
+ *
+ * This used to be Hubtel's job — confirm returned `Type: "AddToCart"` and Hubtel
+ * charged the customer inside the session, reporting to /api/hubtel/fulfill. That
+ * path is still wired and one click away (Admin -> Settings -> USSD Payments ->
+ * Hubtel) so a bad day does not need a deploy to undo.
+ *
+ * EDGE RUNTIME. Nothing imported here may pull in undici — that rules out
+ * lib/hubtel-payment-service.ts and everything re-exported from it. Paystack is
+ * called with plain fetch and does not want a static-IP proxy.
  *
  * Docs: https://developers.hubtel.com — Programmable Services API
+ *       https://paystack.com/docs/api/charge/
  */
 
 // Never cache/prerender.
@@ -55,12 +82,117 @@ export async function GET() {
 
 const WELCOME_MESSAGE = 'Enter short code to continue:';
 
+/**
+ * ussd_enabled, cached per instance for a minute.
+ *
+ * This is the one route in the codebase where a millisecond can cost a sale —
+ * Hubtel hangs up at 10s and an initiation deliberately answers before touching
+ * the database. Reading the switch on every keypress would put a round trip back
+ * into that path for a value that changes about once a year, so an instance holds
+ * it briefly instead. The keep-warm cron keeps instances alive, so in practice
+ * this is read once a minute, not once a session; the price of the cache is that
+ * a flip in /admin/settings takes up to a minute to reach every instance.
+ */
+const USSD_FLAG_TTL_MS = 60_000;
+
+/** admin_settings key naming which gateway collects for a USSD sale. */
+const USSD_PROVIDER_KEY = SCOPE_SETTING_KEY.ussd;
+
+/** Shared with every other surface — the same switch the admin fulfillment page writes. */
+const MTN_GATE_KEY = 'mtn_registration_gate_enabled';
+
+interface UssdFlags {
+    enabled: boolean;
+    /** 'paystack_momo' (we collect) | 'hubtel' (AddToCart, the pre-Paystack path). */
+    paymentProvider: PaymentProvider;
+    /** Refuse MTN data orders to numbers that are not registered yet. */
+    mtnGateEnabled: boolean;
+}
+
+let ussdFlagCache: { flags: UssdFlags; at: number } | null = null;
+
+/**
+ * Every USSD switch in one round trip.
+ *
+ * They are read together because this is the one route where a millisecond costs a
+ * sale, and sequential lookups would put extra round trips into Hubtel's window
+ * for values that change about once a year. The MTN gate rides along for the same
+ * reason — it is needed mid-session, on a keypress, where a second lookup would cost
+ * more than the check it guards.
+ */
+async function getUssdFlags(): Promise<UssdFlags> {
+    if (ussdFlagCache && Date.now() - ussdFlagCache.at < USSD_FLAG_TTL_MS) {
+        return ussdFlagCache.flags;
+    }
+    try {
+        const { data } = await withTimeout(
+            getSupabaseAdmin()
+                .from('admin_settings')
+                .select('key, value')
+                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MTN_GATE_KEY]),
+            3000,
+            'ussd flags fetch timeout'
+        );
+
+        const raw: Record<string, unknown> = {};
+        for (const row of (data || [])) {
+            raw[row.key] = row.value;
+        }
+
+        const flags: UssdFlags = {
+            // The RAW value goes to isUssdEnabled, deliberately. It answers true only
+            // for the exact string 'true', and normalising first would widen that: a
+            // JSONB boolean true arrives here as JS true, which String() would turn
+            // into 'true' and open a service the strict check keeps shut. This is the
+            // one switch in the codebase whose whole job is failing closed, and it is
+            // now the only gate in front of live money.
+            enabled: isUssdEnabled({ [USSD_ENABLED_KEY]: raw[USSD_ENABLED_KEY] as any }),
+            // Resolved through the shared registry rather than parsed here, so this
+            // route and /api/shop/ussd/activate can never disagree about which
+            // gateway is collecting. lib/payment-provider.ts is pure — no server
+            // imports, no env reads — so it is safe on the edge runtime this route
+            // runs on. The 'ussd' scope's fallback is paystack_momo, not the global
+            // Moolre default, which has no USSD branch at all.
+            paymentProvider: resolveProviderForScope(raw[USSD_PROVIDER_KEY], 'ussd'),
+            // Read exactly as loadGateSettings() reads it, so this route and the web
+            // routes can never disagree about whether the gate is on. Deliberately NOT
+            // isUssdEnabled(): that helper's extra strictness belongs to the switch that
+            // stops the service, and applying it here would be borrowing a rule from an
+            // unrelated decision.
+            mtnGateEnabled: String(raw[MTN_GATE_KEY]) === 'true',
+        };
+        ussdFlagCache = { flags, at: Date.now() };
+        return flags;
+    } catch (err) {
+        console.error('[Hubtel Interact] USSD flags read failed:', err);
+        // Prefer a stale answer over flapping; with no answer at all, stay shut.
+        // Every step past this point needs the same database, so a session we
+        // cannot verify is one we could not have fulfilled either.
+        //
+        // mtnGateEnabled defaults to false here, unlike `enabled` above. Deploying must
+        // not turn a check ON that the admin has not switched on, and this branch only
+        // runs when we could not read the setting at all — the same reasoning as
+        // loadGateSettings(), which also treats an unreadable setting as off.
+        return ussdFlagCache?.flags
+            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false };
+    }
+}
+
 export async function POST(req: Request) {
     const requestStartTime = Date.now();
     try {
         const body = await req.json();
         const { Mobile, SessionId, Type: RequestType, Message, Operator } = body;
         const requestType = String(RequestType || '').toLowerCase();
+
+        // Master switch, checked ahead of the fast path so a deactivated service
+        // never even draws a welcome screen. Fulfilment (/api/hubtel/fulfill) is
+        // deliberately left alone: no new charge can start once this returns, and
+        // anything Hubtel has already taken still has to be delivered.
+        const ussdFlags = await getUssdFlags();
+        if (!ussdFlags.enabled) {
+            return respond(SessionId, 'release', USSD_OFFLINE_MESSAGE);
+        }
 
         // ULTRA-FAST PATH: Initiation — return hardcoded response, defer everything
         if (requestType === 'initiation' && SessionId) {
@@ -403,6 +535,37 @@ export async function POST(req: Request) {
 
                 sessionData.recipientMobile = recipientMobile;
 
+                // ── MTN REGISTRATION GATE ────────────────────────────────────────
+                // Here, and not at 'confirm': this is the last step where no money is
+                // in motion and both the bundle and the recipient are known. 'confirm'
+                // already spends its budget on the Paystack charge.
+                //
+                // Unlike every web surface, this fails CLOSED — a USSD caller cannot be
+                // warned, cannot be shown a held order, and cannot be reached once the
+                // line drops. See checkMtnRegistrationStrict for the full reasoning.
+                //
+                // isMtnPackageNetwork, not === 'MTN', so 'Special MTN Mashup' and
+                // 'EXPRESS MTN' stay exempt: they are fulfilled by hand and the
+                // whitelist has no bearing on whether they can be delivered.
+                if (sessionData.orderType === 'data' && isMtnPackageNetwork(sessionData.network)) {
+                    const gate = await checkMtnRegistrationStrict(
+                        getSupabaseAdmin(),
+                        recipientMobile,
+                        sessionData.network,
+                        { enabled: ussdFlags.mtnGateEnabled }
+                    );
+                    if (gate.blocked) {
+                        endSession(SessionId);
+                        return respond(
+                            SessionId,
+                            'release',
+                            gate.reason === 'unregistered'
+                                ? USSD_NOT_REGISTERED_MESSAGE
+                                : USSD_REGISTRATION_UNVERIFIABLE_MESSAGE
+                        );
+                    }
+                }
+
                 saveAsync(SessionId, 'confirm', sessionData);
                 return respond(
                     SessionId,
@@ -420,42 +583,222 @@ export async function POST(req: Request) {
                 }
 
                 const price = parseFloat(String(sessionData.selectedPrice || '0'));
+                const orderType: 'data' | 'rc' = sessionData.orderType === 'data' ? 'data' : 'rc';
 
-                // Persist so the fulfilment callback can reconcile the amount.
-                // This one IS awaited: the fulfill route needs this state written before
-                // Hubtel calls /fulfill. In practice Hubtel waits for payment confirmation
-                // (seconds to minutes) before calling fulfill, so this is safe.
                 sessionData.chargedAmount = price;
-                // The candidate lists are only needed while browsing; dropping them keeps
-                // the persisted JSON small on the one write that blocks the response.
+                // The candidate lists are only needed while browsing; dropping them
+                // keeps the persisted JSON small on the write that blocks the response.
                 delete sessionData.allBundles;
                 delete sessionData.bundles;
                 delete sessionData.availableCheckers;
 
-                const confirmSaveStart = Date.now();
-                try {
-                    await withTimeout(save(SessionId, 'awaiting_payment', sessionData), 8000, 'Confirm save timeout');
-                } catch (confirmError: any) {
-                    console.error('[Hubtel Interact] Confirm save timeout/error:', confirmError?.message);
-                    return respond(SessionId, 'release', 'Payment confirmation failed. Please try again.');
+                // ROLLBACK PATH: hand the cart to Hubtel and let it collect, exactly
+                // as before Paystack. One admin setting, no deploy.
+                if (ussdFlags.paymentProvider === 'hubtel') {
+                    try {
+                        await withTimeout(save(SessionId, 'awaiting_payment', sessionData), 8000, 'Confirm save timeout');
+                    } catch (confirmError: any) {
+                        console.error('[Hubtel Interact] Confirm save timeout/error:', confirmError?.message);
+                        return respond(SessionId, 'release', 'Payment confirmation failed. Please try again.');
+                    }
+                    return respond(
+                        SessionId,
+                        'AddToCart',
+                        'The request has been submitted. Please wait for a payment prompt soon.',
+                        {
+                            label: 'The request has been submitted. Please wait for a payment prompt soon.',
+                            dataType: 'display',
+                            item: { ItemName: sessionData.itemName, Qty: 1, Price: price },
+                        }
+                    );
                 }
-                console.log('[Hubtel Interact] Confirm save took', Date.now() - confirmSaveStart, 'ms for SessionId:', SessionId);
 
-                // AddToCart hands the cart to Hubtel, which prompts the user to pay.
-                // On success Hubtel POSTs to our Service Fulfilment URL.
+                // The PAYER is whoever is holding this handset — not the recipient
+                // chosen in enter_phone, and not the network chosen in choose_network
+                // (that one describes the bundle being bought, which is routinely a
+                // different network from the one paying for it).
+                const payerMsisdn = normalizeGhanaPhone(Mobile) || Mobile;
+                const { provider, network: payerNetwork } = resolvePayerProvider(
+                    sessionData.operator,
+                    payerMsisdn,
+                    detectNetwork
+                );
+
+                if (!provider) {
+                    console.error('[Hubtel Interact] Could not resolve payer network for', payerMsisdn, 'operator:', sessionData.operator);
+                    endSession(SessionId);
+                    return respond(
+                        SessionId,
+                        'release',
+                        'We could not identify your mobile money network. Please buy at arhmsgh.com.'
+                    );
+                }
+
+                // A price that did not survive the session is not something to
+                // improvise around: charging 0 succeeds at the gateway and delivers
+                // nothing, and chargeMobileMoney would refuse with wording meant for
+                // a log, not a handset.
+                if (!Number.isFinite(price) || price <= 0) {
+                    console.error("[Hubtel Interact] Bad price on confirm:", sessionData.selectedPrice, "session:", SessionId);
+                    endSession(SessionId);
+                    return respond(SessionId, "release", "Sorry, that item is unavailable right now. Please dial again.");
+                }
+
+                const reference = buildUssdReference(orderType);
+                sessionData.paystackReference = reference;
+                sessionData.payerMsisdn = payerMsisdn;
+                sessionData.payerNetwork = payerNetwork;
+
+                // The order MUST be recorded before the charge. A customer who
+                // approves instantly can have their webhook arrive in seconds, and a
+                // webhook that cannot find its session has nothing to deliver.
+                //
+                // This was a Redis mirror until Upstash hit its request ceiling and
+                // every write began returning HTTP 400 — which, because we refuse to
+                // charge what we cannot record, stopped USSD selling altogether. The
+                // session row was always going to be needed for fulfilment, so it is
+                // now the only thing standing between the charge and the webhook, and
+                // there is no cache quota in front of a payment any more.
+                //
+                // 2.5s, not the 8s this step used to allow: the Paystack call still
+                // has to fit inside Hubtel's ~10s window after it.
+                try {
+                    await withTimeout(
+                        save(SessionId, 'awaiting_payment', sessionData),
+                        2500,
+                        'Order save timeout'
+                    );
+                } catch (saveError: any) {
+                    // Refusing here is the safe end of the trade: no charge has gone
+                    // out yet, so the customer keeps their money and can retry.
+                    console.error('[Hubtel Interact] Order save failed, refusing to charge:', saveError?.message);
+                    return respond(SessionId, 'release', 'System busy. Please dial again in a moment.');
+                }
+
+                const chargeStart = Date.now();
+                const charge = await chargeMobileMoney({
+                    reference,
+                    amountGhs: price,
+                    payerMsisdn,
+                    provider,
+                    metadata: {
+                        channel: 'ussd',
+                        session_id: SessionId,
+                        order_type: orderType,
+                        payer_msisdn: payerMsisdn,
+                        // ASCII only: the item name is echoed back to Hubtel on some
+                        // paths, and a multi-byte character there makes the call throw.
+                        item_name: toAsciiSafe(sessionData.itemName, 'ARHMS order'),
+                        shop_id: sessionData.shopId ?? null,
+                    },
+                });
+                console.log('[Hubtel Interact] Paystack charge took', Date.now() - chargeStart, 'ms,', 'outcome:', charge.outcome, 'ref:', reference);
+
+                // Fail-open audit row. The webhook and the cron both upsert onto this
+                // same client_reference, so this is the first write of three.
+                waitUntil(
+                    logInitiate({
+                        clientReference: reference,
+                        status: charge.outcome === 'paid' ? 'success' : charge.outcome === 'failed' ? 'failed' : 'pending',
+                        amount: price,
+                        channel: provider,
+                        payerMsisdn,
+                        responseCode: charge.rawStatus,
+                        message: charge.message,
+                        raw: charge.raw,
+                    })
+                );
+
+                switch (charge.outcome) {
+                    case 'otp':
+                        sessionData.awaitingOtpFor = reference;
+                        saveAsync(SessionId, 'awaiting_otp', sessionData);
+                        return respond(
+                            SessionId,
+                            'response',
+                            screenText(charge.displayText, 'Enter the OTP sent to your phone:'),
+                            { label: 'Enter OTP', fieldType: 'number' }
+                        );
+
+                    case 'paid':
+                        // Rare but real on a re-charge. The webhook still does the
+                        // delivering — never fulfil from this route.
+                        return respond(SessionId, 'release', 'Payment received. Your order is on the way.');
+
+                    case 'failed':
+                        endSession(SessionId);
+                        return respond(
+                            SessionId,
+                            'release',
+                            // Only Paystack's own wording reaches the customer. A null
+                            // raw means the message came from US - a missing env var, a
+                            // rejected amount - and putting our internals on a stranger's
+                            // handset helps nobody and leaks configuration.
+                            charge.raw
+                                ? screenText(charge.message, 'Payment could not be started. Please try again.')
+                                : 'Payment could not be started. Please try again.'
+                        );
+
+                    default:
+                        // 'pending' covers both a genuine pay_offline AND a timeout we
+                        // could not read the outcome of. Both get the same words on
+                        // purpose: a charge whose fate we do not know may still take
+                        // the customer's money, and telling them it failed is how we
+                        // end up owing a delivery nobody is expecting.
+                        return respond(SessionId, 'release', approvalInstruction(payerNetwork));
+                }
+            }
+
+            // ── OTP (Telecel / AirtelTigo) ───────────────────────────────────────
+            case 'awaiting_otp': {
+                const reference = String(sessionData.awaitingOtpFor || sessionData.paystackReference || '');
+                if (!reference) {
+                    endSession(SessionId);
+                    return respond(SessionId, 'release', 'Session expired. Please dial again.');
+                }
+
+                const otp = String(userInput || '').replace(/\D/g, '');
+                // No "0. Back" here on purpose — a charge is live and there is nothing
+                // to go back to. A short entry is a typo, so redraw rather than burn
+                // the OTP on a request Paystack will reject.
+                if (otp.length < 4) {
+                    saveAsync(SessionId, 'awaiting_otp', sessionData);
+                    return respond(SessionId, 'response', 'Invalid code.\nEnter the OTP sent to your phone:', {
+                        label: 'Enter OTP',
+                        fieldType: 'number',
+                    });
+                }
+
+                const otpResult = await submitOtp({ reference, otp });
+                console.log('[Hubtel Interact] OTP submit outcome:', otpResult.outcome, 'ref:', reference);
+
+                waitUntil(
+                    logInitiate({
+                        clientReference: reference,
+                        status: otpResult.outcome === 'paid' ? 'success' : otpResult.outcome === 'failed' ? 'failed' : 'pending',
+                        responseCode: otpResult.rawStatus,
+                        message: otpResult.message,
+                        raw: otpResult.raw,
+                    })
+                );
+
+                if (otpResult.outcome === 'failed') {
+                    endSession(SessionId);
+                    return respond(
+                        SessionId,
+                        'release',
+                        otpResult.raw
+                            ? screenText(otpResult.message, 'That code was not accepted. Please try again.')
+                            : 'That code was not accepted. Please try again.'
+                    );
+                }
+
+                // Everything else — approved, still processing, or unreadable — ends
+                // the same way. Delivery is the webhook's job either way.
                 return respond(
                     SessionId,
-                    'AddToCart',
-                    'The request has been submitted. Please wait for a payment prompt soon.',
-                    {
-                        label: 'The request has been submitted. Please wait for a payment prompt soon.',
-                        dataType: 'display',
-                        item: {
-                            ItemName: sessionData.itemName,
-                            Qty: 1,
-                            Price: price,
-                        },
-                    }
+                    'release',
+                    'Thank you. You will get an SMS once your order is delivered.'
                 );
             }
 
@@ -670,6 +1013,45 @@ function normalizeGhanaPhone(input: string): string | null {
     return /^0[235]\d{8}$/.test(digits) ? digits : null;
 }
 
+/**
+ * What we tell a caller once the charge is away.
+ *
+ * "Wait for the prompt" was not enough. Of the first eleven live charges, three
+ * were accepted by Paystack and then expired unapproved, and the caller's report
+ * was simply that no prompt arrived. On MTN Ghana a merchant-initiated debit
+ * often does not surface a prompt on its own; it waits in the approvals menu
+ * until the customer goes and gets it. A caller who does not know that has no way
+ * to complete a payment we have already asked for.
+ *
+ * Deliberately no menu numbers. They differ across handsets and MTN has moved
+ * them before, and a confidently wrong instruction is worse than a vague one.
+ *
+ * ASCII only and inside one ~160-character screen: a non-ASCII character makes
+ * the Hubtel call throw, and an over-long message is truncated mid-word.
+ */
+function approvalInstruction(network: string | null): string {
+    if (network === 'MTN') {
+        return 'Approve the prompt to pay. No prompt? Dial *170#, choose My Approvals. You get an SMS when done.';
+    }
+    return 'Approve the payment prompt on your phone. You will get an SMS once it is done.';
+}
+
+/**
+ * Makes gateway text safe to put on a USSD screen: ASCII only, one screen long.
+ *
+ * Paystack writes for a web page and will happily hand back a sentence longer than
+ * a handset can show. A truncated apology reads as a broken service, so cut it
+ * ourselves at a word boundary rather than letting the network do it mid-word.
+ */
+const USSD_SCREEN_CHARS = 155;
+function screenText(value: string | null | undefined, fallback: string): string {
+    const ascii = toAsciiSafe(value, fallback);
+    if (ascii.length <= USSD_SCREEN_CHARS) return ascii;
+    const cut = ascii.slice(0, USSD_SCREEN_CHARS);
+    const lastSpace = cut.lastIndexOf(" ");
+    return (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trimEnd() + "...";
+}
+
 /** Formats a GHS amount without trailing zeros: 18 -> "18", 0.01 -> "0.01", 18.5 -> "18.5" */
 function formatGhs(price: any): string {
     const n = parseFloat(String(price ?? 0));
@@ -689,8 +1071,12 @@ async function save(sessionId: string, nextStep: string, data: any) {
 /**
  * Fire-and-forget session save — responds to Hubtel immediately without blocking
  * on the DB write. Errors are logged but never surfaced to the user.
- * Use this for every step except the final `awaiting_payment` transition, where
- * the fulfill route needs the state persisted before it is called by Hubtel.
+ *
+ * Used for every browsing step. NOT for the `awaiting_payment` transition, which
+ * the confirm step awaits: that row is the only record tying the charge about to
+ * go out to the order it pays for, and a charge we cannot match to a session is a
+ * customer debited for nothing. Fire-and-forget is fine for a menu redraw and
+ * quite wrong for that.
  */
 function saveAsync(sessionId: string, nextStep: string, data: any): void {
     waitUntil((async () => {

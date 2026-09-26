@@ -72,6 +72,26 @@ export async function POST(req: Request) {
         const adminSettings: Record<string, string> = {}
         for (const row of (adminSettingsData as any) || []) adminSettings[row.key] = String(row.value)
 
+        // A sub-agent's data prices are bounded by their upline's, not by the
+        // role-based cap below. This route would let them out of that bound
+        // entirely — /dashboard/shop/pricing is reachable from the sub portal —
+        // so send them to the screen that enforces it. Airtime fees fall
+        // through: those are mirrored from the parent, not bounded by them.
+        if (items && Array.isArray(items) && items.length > 0) {
+            const { data: subMembership } = await adminDb
+                .from('sub_agents')
+                .select('id')
+                .eq('user_id', authUser.id)
+                .maybeSingle()
+
+            if (subMembership) {
+                return NextResponse.json(
+                    { error: 'Set your data prices from your own Pricing page, where your upline’s price is the floor.' },
+                    { status: 403 }
+                )
+            }
+        }
+
         // Strict Backend Validation for Data Packages
         if (items && Array.isArray(items)) {
             for (const item of items) {
@@ -92,24 +112,87 @@ export async function POST(req: Request) {
                 item.shop_id = shopId
             }
 
+            // Carry each package's wholesale price across the rewrite.
+            //
+            // shop_pricing.sub_price is what this shop charges its sub-agents,
+            // set on a different screen (/api/shop/sub-pricing). Clearing the
+            // rows would drop it on every retail save, silently wiping the
+            // whole downline's cost basis.
+            //
+            // It has to survive a delete-and-reinsert rather than becoming an
+            // upsert: protect_shop_pricing_updates() raises 'profit_margin
+            // cannot be changed after creation' on any UPDATE that moves
+            // profit_margin, and re-pricing always moves it. Replacing the row
+            // is what has always sidestepped that.
+            // Service role, deliberately. shop_pricing's only write policy is
+            // shop_pricing_admin_write, USING (is_admin()) — owners get
+            // shop_pricing_owner_read and nothing more. Under the request-scoped
+            // client a shop owner's DELETE silently matched zero rows (RLS hides
+            // them rather than erroring) and the INSERT was refused outright, which
+            // is the "Failed to insert pricing data" every non-admin owner hit.
+            //
+            // Authorisation is not weakened by this: ownership is proved above
+            // against shop_profiles.owner_id and a mismatch already 403s, which is
+            // the same check the missing policy would have made.
+            const { data: existingPricing } = await adminDb
+                .from('shop_pricing')
+                .select('*')
+                .eq('shop_id', shopId)
+
+            const previousRows = (existingPricing as any[]) || []
+
+            const wholesaleByPackage = new Map<string, number>(
+                previousRows
+                    .filter((row: any) => row.sub_price != null)
+                    .map((row: any) => [row.package_id, Number(row.sub_price)])
+            )
+
+            for (const item of items) {
+                const kept = wholesaleByPackage.get(item.package_id)
+                if (kept != null) item.sub_price = kept
+            }
+
             // Clear existing pricing to prevent duplicates
-            const { error: deleteError } = await supabase
+            const { error: deleteError } = await adminDb
                 .from('shop_pricing')
                 .delete()
                 .eq('shop_id', shopId)
 
             if (deleteError) {
+                console.error('[ShopPricing] delete failed:', shopId, deleteError.message)
                 return NextResponse.json({ error: 'Failed to clear previous pricing data' }, { status: 500 })
             }
 
             // Insert new pricing capturing profit_margin explicitly if elements exist
             if (items.length > 0) {
-                const { error: insertError } = await supabase
+                const { error: insertError } = await (adminDb as any)
                     .from('shop_pricing')
                     .insert(items)
 
                 if (insertError) {
-                    return NextResponse.json({ error: 'Failed to insert pricing data' }, { status: 500 })
+                    // The delete has already committed — these are two statements, not
+                    // a transaction — so failing here without putting the old rows
+                    // back would leave the shop with no pricing at all and its
+                    // storefront unable to sell. Restore what was there.
+                    console.error('[ShopPricing] insert failed:', shopId, insertError.message)
+                    let restored = false
+                    if (previousRows.length > 0) {
+                        const { error: restoreError } = await (adminDb as any)
+                            .from('shop_pricing')
+                            .insert(previousRows)
+                        restored = !restoreError
+                        if (restoreError) {
+                            console.error('[ShopPricing] RESTORE FAILED, shop left with no pricing:', shopId, restoreError.message)
+                        }
+                    }
+                    return NextResponse.json(
+                        {
+                            error: restored || previousRows.length === 0
+                                ? `Could not save pricing: ${insertError.message}`
+                                : `Could not save pricing and the previous prices could not be restored: ${insertError.message}. Contact support before selling.`,
+                        },
+                        { status: 500 }
+                    )
                 }
             }
         }

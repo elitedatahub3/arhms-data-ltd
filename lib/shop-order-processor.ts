@@ -1,10 +1,10 @@
 import { createServerClient } from './supabase'
+import { updateOrderWithColumnFallback } from './order-update-fallback'
 import { creditShopProfit } from './shop-service'
 import { resolveSubAgentContext } from './sub-agents'
-import { resolveOwnerCost } from './pricing/cost-basis'
-
-/** Money rounded to pesewas — every profit leg written to the ledger uses this. */
-const toPesewaPrecision = (value: number) => Math.round(value * 100) / 100
+import { resolveChainCosts, splitChainProfit } from './pricing/chain-cost'
+import { shopFeeSettingKeys, resolveShopFeePercent } from './gateway-fees'
+import type { PaymentProvider } from './payment-provider'
 
 // In-memory lock to prevent race conditions between frontend verification and Paystack webhooks
 const processingLocks = new Set<string>();
@@ -41,6 +41,14 @@ export async function processShopOrder(
          * their existing behaviour.
          */
         awaiting_registration?: boolean;
+        /**
+         * Which rail collected this order, set by /api/shop/initialize. Read only to
+         * pick the fee keys, since 'paystack' and 'paystack_momo' can be priced
+         * differently. Absent on every reference initialized before paystack_momo
+         * existed, which is why the resolution below treats absent as 'paystack'
+         * rather than requiring it.
+         */
+        provider?: string;
     },
     paidAmountPesewas: number,
     slug?: string
@@ -95,11 +103,16 @@ export async function processShopOrder(
         // what keeps this change inert for the vast majority of orders.
         let parentShopId: string | null = null
         let parentProfit: number | null = null
+        // The root Lead, when the seller is a level-2 sub. Null at one or two
+        // levels, where the direct upline IS the root.
+        let grandparentShopId: string | null = null
+        let grandparentProfit: number | null = null
         /**
-         * Total margin on a sub order (selling − the LEAD's cost). The profit
-         * floor tests this instead of the sub's own leg: a zero sub leg is a
-         * legitimate outcome when the Lead raises their price after the sub set
-         * theirs, and rejecting there would fail an order already paid for.
+         * Total margin on a sub order (selling − the ROOT Lead's cost). The
+         * profit floor tests this instead of the sub's own leg: a zero leg at
+         * any level is a legitimate outcome when an upline raises their price
+         * after a downline set theirs, and rejecting there would fail an order
+         * the customer has already paid for.
          */
         let subTotalMargin: number | null = null
 
@@ -147,35 +160,33 @@ export async function processShopOrder(
             adminCostAtTime = actualAirtimeAmount
         } else {
             // --- Role-Aware Paystack Fee Resolution ---
-            // Priority: per-shop override → role-specific global → legacy global → hardcoded default
-            // A per-shop override of exactly 0 means "deliberately free for this shop".
-            // Only null means "inherit from global".
-            let paystackFeePercent = 1.95 // hardcoded last-resort default
+            // Resolved through lib/gateway-fees.ts, which the checkout routes also
+            // use. The amount check below rejects anything more than five pesewas off
+            // the figure derived here, so if the two sides resolve differently the
+            // order fails AFTER the customer has paid. One ladder, both ends.
+            //
+            // The rail is read off the metadata rather than the settings, because the
+            // admin setting may have been switched between this order being charged
+            // and it being settled. The row has to be priced by whatever collected it.
+            // Absent on every reference initialized before paystack_momo existed, so
+            // it defaults to the hosted-checkout keys those orders were priced with.
+            const settledProvider: PaymentProvider =
+                metadata.provider === 'paystack_momo' ? 'paystack_momo' : 'paystack'
 
-            // Fetch all relevant fee keys in one query for efficiency
             const { data: paystackSettingsRows } = await db
                 .from('shop_global_settings')
                 .select('key, value')
-                .in('key', [
-                    `shop_paystack_fee_percent_${ownerRole}`,
-                    'shop_paystack_fee_percent',
-                ])
+                .in('key', shopFeeSettingKeys(ownerRole, settledProvider))
             const paystackSettingsMap: Record<string, string> = {}
             for (const row of (paystackSettingsRows || [])) {
                 paystackSettingsMap[row.key] = row.value
             }
 
-            if (shopProfile?.paystack_fee_percent !== null && shopProfile?.paystack_fee_percent !== undefined) {
-                // Explicit per-shop override set by admin (0 = deliberately free)
-                paystackFeePercent = parseFloat(shopProfile.paystack_fee_percent)
-            } else if (paystackSettingsMap[`shop_paystack_fee_percent_${ownerRole}`] != null) {
-                // Role-specific global setting (customer or agent)
-                paystackFeePercent = parseFloat(paystackSettingsMap[`shop_paystack_fee_percent_${ownerRole}`])
-            } else if (paystackSettingsMap['shop_paystack_fee_percent'] != null) {
-                // Legacy fallback global key (backward compatibility)
-                paystackFeePercent = parseFloat(paystackSettingsMap['shop_paystack_fee_percent'])
-            }
-            // else: keep hardcoded default 1.95
+            const paystackFeePercent = resolveShopFeePercent(paystackSettingsMap, {
+                shopOverride: shopProfile?.paystack_fee_percent,
+                ownerRole,
+                provider: settledProvider,
+            })
 
             const { data: pkg } = await db.from('data_packages').select('price, agent_price, dealer_price, cost_price').eq('id', metadata.package_id).single()
             const { data: shopPrice } = await db.from('shop_pricing').select('selling_price').eq('shop_id', metadata.shop_id).eq('package_id', metadata.package_id).single()
@@ -183,9 +194,11 @@ export async function processShopOrder(
             if (!shopPrice || !pkg) return { success: false, error: 'Price configuration missing' }
 
             const dbSellingPrice = parseFloat(shopPrice.selling_price)
-            // USSD carries no gateway fee: Hubtel charges the shelf price and takes
-            // its commission on its own side, so adding one here would make every
-            // USSD order fail the amount check below.
+            // USSD carries no gateway fee: the caller is charged exactly the shelf
+            // price and the gateway absorbs its cut at settlement, so adding one here
+            // would make every USSD order fail the amount check below. True of both
+            // collection paths - Hubtel took its commission on its own side, Paystack
+            // deducts its percentage from the payout.
             const paystackFee = metadata.channel === 'ussd'
                 ? 0
                 : Math.round(dbSellingPrice * (paystackFeePercent / 100) * 100) / 100
@@ -208,62 +221,52 @@ export async function processShopOrder(
             adminCostAtTime = parseFloat(pkg?.cost_price) || 0
 
             // ── SUB-AGENT SPLIT ──────────────────────────────────────────────
-            // A sub prices their storefront strictly above their Lead's retail
-            // price (enforced in /api/dashboard/sub/pricing), so the Lead's
-            // price — not the base package price — is the sub's cost basis.
-            // Without this the sub banks the entire margin and the Lead earns
-            // nothing on their own network's sales.
+            // A sub prices their storefront strictly above their upline's retail
+            // price (enforced in /api/dashboard/sub/pricing), so the UPLINE's
+            // price — not the base package price — is the seller's cost basis.
+            // Without this the seller banks the entire margin and the levels
+            // above earn nothing on their own network's sales.
+            //
+            // The network runs three levels, so this walks every ancestor: a
+            // level-2 sale owes its direct upline AND the root Lead. Pricing the
+            // direct upline at their platform role price — as the two-level code
+            // did — hands a level-1 sub the whole chain margin and pays the root
+            // nothing, silently.
             const subContext = await resolveSubAgentContext(db, shopProfile.owner_id)
 
-            if (subContext.isSub && subContext.uplineShopId) {
-                const { data: uplinePricing } = await db
-                    .from('shop_pricing')
-                    .select('selling_price, sub_price')
-                    .eq('shop_id', subContext.uplineShopId)
-                    .eq('package_id', metadata.package_id)
-                    .maybeSingle()
+            if (subContext.isSub && subContext.chain.length > 0) {
+                const levels = await resolveChainCosts(
+                    db,
+                    subContext.chain,
+                    metadata.package_id,
+                    {
+                        price: parseFloat(pkg?.price) || 0,
+                        agentPrice: pkg?.agent_price != null ? parseFloat(pkg.agent_price) : null,
+                        dealerPrice: pkg?.dealer_price != null ? parseFloat(pkg.dealer_price) : null,
+                    }
+                )
 
-                // sub_price is the Lead's explicit wholesale price when they set
-                // one; until then their retail price is the wholesale price.
-                const uplineCostRaw = uplinePricing?.sub_price ?? uplinePricing?.selling_price
-                const uplineCost = uplineCostRaw != null ? parseFloat(uplineCostRaw) : NaN
+                const split = splitChainProfit(dbSellingPrice, levels)
 
-                if (!Number.isFinite(uplineCost)) {
-                    // The Lead dropped this package after the sub priced it. Never
-                    // fail an order the customer has already paid for — fall back
-                    // to owner-role pricing with no upline attribution.
+                if (!split) {
+                    // An upline dropped this package after the seller priced it.
+                    // Never fail an order the customer has already paid for —
+                    // fall back to owner-role pricing with no attribution.
                     console.warn(
                         `[Shop Order Processor] Sub order with no upline price. Ref: ${reference}, shop: ${metadata.shop_id}, package: ${metadata.package_id}`
                     )
                 } else {
-                    const { data: uplineOwner } = await db
-                        .from('users')
-                        .select('role, agent_expires_at, dealer_expires_at')
-                        .eq('id', subContext.uplineOwnerId)
-                        .maybeSingle()
+                    verifiedCostPrice = split.sellerCost
+                    verifiedProfit = split.sellerProfit
+                    subTotalMargin = split.totalMargin
 
-                    const uplineOwnerCost = resolveOwnerCost(
-                        {
-                            price: parseFloat(pkg?.price) || 0,
-                            agentPrice: pkg?.agent_price != null ? parseFloat(pkg.agent_price) : null,
-                            dealerPrice: pkg?.dealer_price != null ? parseFloat(pkg.dealer_price) : null,
-                        },
-                        {
-                            role: (uplineOwner as any)?.role || 'customer',
-                            agentExpiresAt: (uplineOwner as any)?.agent_expires_at ?? null,
-                            dealerExpiresAt: (uplineOwner as any)?.dealer_expires_at ?? null,
-                        }
-                    )
+                    parentShopId = levels[0].shopId
+                    parentProfit = split.ancestorProfits[0] ?? 0
 
-                    // Clamped so neither leg can go negative if the Lead's price
-                    // has moved past the sub's since the sub last priced.
-                    const splitPoint = Math.min(uplineCost, dbSellingPrice)
-
-                    parentShopId = subContext.uplineShopId
-                    verifiedCostPrice = uplineCost
-                    verifiedProfit = toPesewaPrecision(dbSellingPrice - splitPoint)
-                    parentProfit = toPesewaPrecision(Math.max(0, splitPoint - uplineOwnerCost))
-                    subTotalMargin = toPesewaPrecision(dbSellingPrice - uplineOwnerCost)
+                    if (levels[1]) {
+                        grandparentShopId = levels[1].shopId
+                        grandparentProfit = split.ancestorProfits[1] ?? 0
+                    }
                 }
             }
         }
@@ -341,13 +344,34 @@ export async function processShopOrder(
                 // Only sent for sub orders, so an ordinary shop's insert is
                 // byte-for-byte what it was before this feature.
                 ...(parentShopId ? { parent_shop_id: parentShopId, parent_profit: parentProfit } : {}),
+                // Level-2 sales only — the root Lead sitting above the seller's
+                // own upline. Shed on failure below.
+                ...(grandparentShopId
+                    ? { grandparent_shop_id: grandparentShopId, grandparent_profit: grandparentProfit }
+                    : {}),
             }
-            
-            const { data: newOrder, error: createError } = await db
-                .from('shop_orders')
-                .insert(payload)
-                .select('id')
-                .single()
+
+            const insertOrder = (row: Record<string, any>) =>
+                db.from('shop_orders').insert(row).select('id').single()
+
+            let { data: newOrder, error: createError } = await insertOrder(payload)
+
+            if (createError && grandparentShopId) {
+                // The customer has already paid. A DB that predates
+                // migrations/20260825_sub_agent_level_3.sql rejects the whole
+                // row for the sake of two columns — so drop the root Lead's
+                // attribution and keep the order. That costs one manual credit
+                // an admin can repair; failing here costs the bundle.
+                console.error(
+                    `[Shop Order Processor] Insert failed carrying grandparent attribution ` +
+                    `(${createError.message}). Retrying without it — apply ` +
+                    `migrations/20260825_sub_agent_level_3.sql. Ref: ${reference}`
+                )
+                const { grandparent_shop_id, grandparent_profit, ...withoutGrandparent } = payload as any
+                const retry = await insertOrder(withoutGrandparent)
+                newOrder = retry.data
+                createError = retry.error
+            }
 
             if (createError) {
                 console.error('[Shop Order Processor] Failed to create shop order:', createError)
@@ -601,7 +625,8 @@ async function triggerShopFulfillment(
             eazydata_networks: Record<string, boolean>
             agentportal_networks: Record<string, boolean>
             netpulse_networks: Record<string, boolean>
-        } = { networks: {}, codecraft_networks: {}, kingflexy_networks: {}, eazydata_networks: {}, agentportal_networks: {}, netpulse_networks: {} }
+            hendylinks_networks: Record<string, boolean>
+        } = { networks: {}, codecraft_networks: {}, kingflexy_networks: {}, eazydata_networks: {}, agentportal_networks: {}, netpulse_networks: {}, hendylinks_networks: {} }
 
         try {
             if (settingsMap.fulfillment_settings) {
@@ -614,6 +639,7 @@ async function triggerShopFulfillment(
                 fulfillmentSettings.eazydata_networks = parsed.eazydata_networks || {}
                 fulfillmentSettings.agentportal_networks = parsed.agentportal_networks || {}
                 fulfillmentSettings.netpulse_networks = parsed.netpulse_networks || {}
+                fulfillmentSettings.hendylinks_networks = parsed.hendylinks_networks || {}
             }
         } catch (e) { /* ignore parse failure — defaults to empty */ }
 
@@ -623,9 +649,10 @@ async function triggerShopFulfillment(
         const isEazyDataEnabled = fulfillmentSettings.eazydata_networks[network] === true
         const isAgentPortalEnabled = fulfillmentSettings.agentportal_networks[network] === true
         const isNetPulseEnabled = fulfillmentSettings.netpulse_networks[network] === true
+        const isHendyLinksEnabled = fulfillmentSettings.hendylinks_networks[network] === true
 
         // ── 3. FULFILLMENT_CONFLICT Guard (absolute last line of defense) ──
-        const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled, isAgentPortalEnabled, isNetPulseEnabled].filter(Boolean).length
+        const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled, isAgentPortalEnabled, isNetPulseEnabled, isHendyLinksEnabled].filter(Boolean).length
         if (activeCount > 1) {
             console.error(`[Fulfillment] CONFLICT DETECTED for ${network} on order ${orderId}`)
             await sendAdminNewOrderAlert({
@@ -637,19 +664,20 @@ async function triggerShopFulfillment(
         }
 
         // ── 4. No active supplier ──────────────────────────────────────────
-        if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled) {
+        if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && !isHendyLinksEnabled) {
             console.log(`[Shop Order Processor] No active supplier for network ${network}. Order ${orderId} kept pending.`)
             await sendAdminNewOrderAlert({ ...alertDetails, reason: `No active supplier configured for network: ${network}` })
             return
         }
 
         // ── 5. Determine supplier and stamp fulfilled_by ATOMICALLY first ──
-        const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : isAgentPortalEnabled ? 'agentportal' : isNetPulseEnabled ? 'netpulse' : 'datakazina'
+        const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : isAgentPortalEnabled ? 'agentportal' : isNetPulseEnabled ? 'netpulse' : isHendyLinksEnabled ? 'hendylinks' : 'datakazina'
         await db.from('shop_orders').update({ fulfilled_by: supplierLabel }).eq('id', orderId)
         console.log(`[Shop Order Processor] Routing to ${supplierLabel} for order ${orderId} | network: ${network}`)
 
         // ── 6. Execute fulfillment (dedicated try/catch — ensures alert fires on any exception) ──
-        let result: { success: boolean; reference?: string; transactionId?: string; error?: string; isRateLimited?: boolean }
+        // webhookRef is set by the Dakazina path only (see lib/fulfillment-service).
+        let result: { success: boolean; reference?: string; transactionId?: string; webhookRef?: string; error?: string; isRateLimited?: boolean }
 
         try {
             if (isCodeCraftEnabled) {
@@ -667,6 +695,9 @@ async function triggerShopFulfillment(
             } else if (isNetPulseEnabled) {
                 const { fulfillOrder: npFulfill } = await import('./netpulse-service')
                 result = await npFulfill(network, phone, extra.size || '', orderId)
+            } else if (isHendyLinksEnabled) {
+                const { fulfillOrder: hlFulfill } = await import('./hendylinks-service')
+                result = await hlFulfill(network, phone, extra.size || '', orderId)
             } else {
                 const { fulfillOrder: dkFulfill } = await import('./fulfillment-service')
                 result = await dkFulfill(network, phone, extra.size || '', orderId)
@@ -704,8 +735,21 @@ async function triggerShopFulfillment(
             if (isNetPulseEnabled && result.transactionId) {
                 updatePayload.netpulse_reference = result.transactionId
             }
+            if (isHendyLinksEnabled && result.transactionId) {
+                updatePayload.hendylinks_reference = result.transactionId
+            }
 
-            await db.from('shop_orders').update(updatePayload).eq('id', orderId)
+            // Both writes below were previously unchecked: a missing supplier reference
+            // column failed them silently and the order stayed 'pending' even though the
+            // bundle had been bought. Shed the reference rather than lose the transition.
+            await updateOrderWithColumnFallback(
+                db,
+                'shop_orders',
+                { column: 'id', value: orderId },
+                updatePayload,
+                Object.keys(updatePayload).filter(k => k.endsWith('_reference')),
+                '[Shop Order Processor]'
+            )
             const ordersUpdate: Record<string, string> = { status: 'processing' }
             if (isCodeCraftEnabled && result.transactionId) {
                 ordersUpdate.codecraft_reference = result.transactionId
@@ -727,18 +771,32 @@ async function triggerShopFulfillment(
                 ordersUpdate.netpulse_reference = result.transactionId
                 ordersUpdate.fulfillment_method = 'netpulse'
             }
-            await db.from('orders').update(ordersUpdate).eq('shop_order_id', orderId)
+            if (isHendyLinksEnabled && result.transactionId) {
+                ordersUpdate.hendylinks_reference = result.transactionId
+                ordersUpdate.fulfillment_method = 'hendylinks'
+            }
+            await updateOrderWithColumnFallback(
+                db,
+                'orders',
+                { column: 'shop_order_id', value: orderId },
+                ordersUpdate,
+                [...Object.keys(ordersUpdate).filter(k => k.endsWith('_reference')), 'fulfillment_method'],
+                '[Shop Order Processor]'
+            )
 
-            if (!isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && (result.transactionId || result.reference)) {
+            if (!isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && !isHendyLinksEnabled && (result.webhookRef || result.transactionId || result.reference)) {
+                // webhookRef FIRST — see the matching note in order-fulfillment-dispatcher.
+                const dakazinaRef = result.webhookRef || result.transactionId || result.reference
+
                 const { error: refError } = await db
                     .from('orders')
-                    .update({ dakazina_reference: result.transactionId || result.reference })
+                    .update({ dakazina_reference: dakazinaRef })
                     .eq('shop_order_id', orderId)
                 if (refError) console.error(`[ShopOrderProcessor] Failed to stamp dakazina_reference:`, refError.message)
 
                 await db
                     .from('shop_orders')
-                    .update({ dakazina_reference: result.transactionId || result.reference })
+                    .update({ dakazina_reference: dakazinaRef })
                     .eq('id', orderId)
             }
 
@@ -752,6 +810,15 @@ async function triggerShopFulfillment(
                     await sendAtInstantDeliverySMS(phone, { network, size: extra.size || '' })
                 } catch (smsErr: any) {
                     console.error(`[Shop Order Processor] AT instant SMS failed for ${orderId}:`, smsErr?.message)
+                }
+            } else if (/MTN/i.test(network) && extra.size) {
+                // MTN is with the supplier now. Confirm receipt once, without quoting a
+                // delivery time. Airtime has its own SMS, so skip it here.
+                try {
+                    const { sendMtnOrderReceivedSMS } = await import('@/lib/sms-service')
+                    await sendMtnOrderReceivedSMS(phone, { network, size: extra.size })
+                } catch (smsErr: any) {
+                    console.error(`[Shop Order Processor] MTN order-received SMS failed for ${orderId}:`, smsErr?.message)
                 }
             }
 

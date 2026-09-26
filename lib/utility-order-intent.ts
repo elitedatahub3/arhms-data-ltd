@@ -25,6 +25,42 @@ export function isUtilityVisibleTo(
     return ['admin', 'sub-admin'].includes(String(role || ''))
 }
 
+/** Where a bill can be bought. Each surface has its own switch. */
+export type UtilitySurface = 'dashboard' | 'storefront'
+
+export const UTILITY_SURFACE_KEYS: Record<UtilitySurface, string> = {
+    dashboard:  'utility_dashboard_enabled',
+    storefront: 'utility_storefront_enabled',
+}
+
+/**
+ * Whether bills can be bought on this particular surface.
+ *
+ * Two gates, deliberately not one. isUtilityVisibleTo answers "is this product open
+ * to anyone but an admin"; this answers "is this WAY of buying it open". They
+ * compose, and the master still wins — so an admin can leave the dashboard running
+ * while shutting storefronts, which is the riskier surface: the buyer is a guest,
+ * the shop owner is the account of record, and a reseller chain is being paid.
+ *
+ * An absent key counts as OPEN, unlike the master gate where absent means closed.
+ * The difference is deliberate: the master protects a product that has never been
+ * proven, while these two only narrow something already open, and a missing row
+ * should not silently take a working surface offline.
+ */
+export function isUtilitySurfaceOpen(
+    surface: UtilitySurface,
+    role: string | null | undefined,
+    settings: Record<string, string>
+): boolean {
+    if (!isUtilityVisibleTo(role, settings)) return false
+    return settings[UTILITY_SURFACE_KEYS[surface]] !== 'false'
+}
+
+/** Both surface keys, for a caller's `.in()` query. */
+export function utilitySurfaceSettingKeys(): string[] {
+    return Object.values(UTILITY_SURFACE_KEYS)
+}
+
 /**
  * Validates and prices one utility bill purchase.
  *
@@ -48,12 +84,14 @@ export function isUtilityVisibleTo(
  * part: it is the only thing standing between a mistyped digit and a stranger's bill.
  */
 import {
-    queryUtilityAccount,
     resolveDestination,
     UTILITY_SERVICES,
     isUtilityService,
     type UtilityService,
 } from '@/lib/hubtel-utility-service'
+// The catalogue above stays; the account verification call comes from the provider
+// seam, so which upstream verifies is decided in one place.
+import { queryUtilityAccount } from '@/lib/utility-provider'
 
 export interface UtilityIntentInput {
     service: unknown
@@ -61,6 +99,19 @@ export interface UtilityIntentInput {
     amount: unknown
     phone?: unknown
     email?: unknown
+    /**
+     * ECG only. Pay a meter that is not (yet) registered to the phone.
+     *
+     * ECG links the meter to the paying number on first payment, so refusing an
+     * unlisted meter blocks a legitimate first-time customer. The rejection stays
+     * the default because the lookup is the only thing that can tell a mistyped
+     * meter from a real one, and a bill payment cannot be reversed — so the caller
+     * has to say, explicitly and per payment, that the customer was shown whose
+     * meter this is and accepted it.
+     *
+     * Never inferred. A missing flag means "check normally".
+     */
+    acknowledgeUnlinkedMeter?: unknown
 }
 
 export interface UtilityIntent {
@@ -89,13 +140,20 @@ function round2(n: number): number {
 }
 
 /**
+ * The fee bands a bill can be priced at. 'api' is the Commission Services API, whose
+ * rate ships at 0 — a partner there pays the bill and earns from the commission
+ * wallet instead of being charged a markup and handed part of it back.
+ */
+export type UtilityFeeBand = 'agent' | 'customer' | 'api'
+
+/**
  * @param settings  admin_settings rows already loaded by the caller, keyed by name.
- * @param userRole  'agent' or 'customer' — decides which fee rate applies.
+ * @param userRole  which fee band applies.
  */
 export async function buildUtilityIntent(
     input: UtilityIntentInput,
     settings: Record<string, string>,
-    userRole: 'agent' | 'customer'
+    userRole: UtilityFeeBand
 ): Promise<UtilityIntentResult> {
     // ── Service ──────────────────────────────────────────────────────────────
     if (!isUtilityService(input.service)) {
@@ -145,27 +203,59 @@ export async function buildUtilityIntent(
         phone: def.requiresPhone ? phoneRaw : undefined,
     })
 
-    if (!lookup.success) {
-        return { ok: false, status: 400, error: lookup.error || `That ${def.accountLabel} could not be verified.` }
-    }
+    // ECG links a meter to the paying number on first payment, so a meter the
+    // lookup does not know is not necessarily wrong — it may simply be new to this
+    // phone. The caller opts into that per payment, having shown the customer what
+    // they are about to pay; everything else still fails closed.
+    const allowUnlinked = def.kind === 'meter-by-phone' && input.acknowledgeUnlinkedMeter === true
 
-    // ECG answers with every meter on the phone number rather than confirming the
-    // one asked for, so the check is that the requested meter is actually in the list.
-    if (def.kind === 'meter-by-phone') {
+    // Starts as whatever the provider returned and is narrowed below, because for
+    // ECG the top-level name is the first meter's owner rather than the one asked
+    // about — only correct once the meter has actually been matched.
+    let verifiedName: string | null = lookup.accountName ?? null
+
+    if (!lookup.success) {
+        if (!allowUnlinked) {
+            return { ok: false, status: 400, error: lookup.error || `That ${def.accountLabel} could not be verified.` }
+        }
+        // A phone with no meters at all answers as a failed lookup, which is exactly
+        // the first-time customer this flag exists for. Proceed with no name: ECG
+        // validates the meter itself and rejects one that does not exist, and that
+        // rejection arrives before any money moves.
+        console.warn(`[UtilityIntent] ECG meter ${accountNumber} unverified (${lookup.error}) — proceeding on explicit acknowledgement.`)
+    } else if (def.kind === 'meter-by-phone') {
+        // ECG answers with every meter on the phone rather than confirming the one
+        // asked for, so the check is that the requested meter is in that list.
         const match = (lookup.meters || []).find(
             m => m.meterNumber.replace(/\s+/g, '').toLowerCase() === accountNumber.toLowerCase()
         )
-        if (!match) {
+        if (!match && !allowUnlinked) {
             return {
                 ok: false,
                 status: 400,
                 error: `Meter ${accountNumber} is not linked to ${phoneRaw}. Look up the number again and pick a meter from the list.`,
             }
         }
+        if (!match) {
+            console.warn(`[UtilityIntent] ECG meter ${accountNumber} not linked to ${phoneRaw} — proceeding on explicit acknowledgement.`)
+            // The name on the lookup belongs to a DIFFERENT meter on this phone, not
+            // the one being paid. Putting it on the order would print a stranger's
+            // name on the receipt and make an unverified payment look verified.
+            verifiedName = null
+        } else {
+            // The provider packs "NAME (METER)" into one label, and the top-level
+            // accountName is only the FIRST meter's owner — so take the name off the
+            // meter actually matched, not off the response.
+            verifiedName = (/^(.*?)\s*\(/.exec(match.label)?.[1] || match.label || '').trim() || null
+        }
     }
 
     // ── Fee ──────────────────────────────────────────────────────────────────
-    const feeRate = parseFloat(settings[`utility_fee_${service}_${userRole}`] || '2')
+    // The default differs by band on purpose. If the settings row is missing, a human
+    // buyer falls back to the 2% the migration ships, but an API partner falls back to
+    // 0 — silently charging a commission partner a markup they were never quoted is a
+    // worse failure than under-charging them.
+    const feeRate = parseFloat(settings[`utility_fee_${service}_${userRole}`] || (userRole === 'api' ? '0' : '2'))
     const feeAmount = round2(billAmount * (feeRate / 100))
     const totalPaid = round2(billAmount + feeAmount)
 
@@ -175,7 +265,7 @@ export async function buildUtilityIntent(
             service,
             label: def.label,
             accountNumber,
-            accountName: lookup.accountName ?? null,
+            accountName: verifiedName,
             destination: resolveDestination(service, accountNumber, phoneRaw || null),
             customerPhone: phoneRaw || null,
             customerEmail: def.requiresEmail ? email : (email || null),
@@ -195,6 +285,7 @@ export function utilitySettingKeys(service: string): string[] {
         `utility_enabled_${service}`,
         `utility_fee_${service}_customer`,
         `utility_fee_${service}_agent`,
+        `utility_fee_${service}_api`,
         `utility_min_amount_${service}`,
         `utility_max_amount_${service}`,
     ]

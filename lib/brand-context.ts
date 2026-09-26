@@ -105,9 +105,21 @@ export async function resolveBrandContext(
       return platformBrand
     }
 
-    // User is a sub-agent — use upline's branding
+    // User is a sub-agent — the portal wears their upline's brand.
     const uplineShop = (subAgent.shop_profiles as any)
     if (uplineShop) {
+      // A sub can own a shop of their own, and once the network runs three
+      // levels they can be an upline themselves. shopId/shopSlug used to be
+      // hardcoded null here — "a sub doesn't own their upline's shop", which is
+      // true but answered the wrong question — so their own storefront was
+      // invisible to anything reading BrandConfig, and every caller needing it
+      // went round through /api/dashboard/sub/data's ownShopSlug instead.
+      const { data: ownShop } = await supabase
+        .from('shop_profiles')
+        .select('id, shop_slug')
+        .eq('owner_id', userId)
+        .maybeSingle()
+
       return {
         appName: uplineShop.shop_name || 'ARHMS',
         logo: uplineShop.logo_url,
@@ -115,10 +127,10 @@ export async function resolveBrandContext(
         brandAccent: uplineShop.brand_accent || '#1e40af',
         isBranded: false,
         isPlatform: false,
-        shopId: null, // Sub doesn't own their upline's shop
+        shopId: (ownShop as any)?.id || null,
         shopName: uplineShop.shop_name,
         uplineShopId: uplineShop.id,
-        shopSlug: null,
+        shopSlug: (ownShop as any)?.shop_slug || null,
         uplineShopSlug: uplineShop.shop_slug || null,
       }
     }

@@ -6,7 +6,7 @@ import { Database } from '@/types/supabase'
 const getCookieDomain = () => {
     if (typeof window === 'undefined') return undefined
     const host = window.location.hostname
-    // Production: .arhmsgh.com (covers arhmsgh.com, www.arhmsgh.com, marketplace.arhmsgh.com)
+    // Production: .arhmsgh.com (covers arhmsgh.com, www.arhmsgh.com and any other subdomain)
     if (host.endsWith('arhmsgh.com')) {
         return '.arhmsgh.com'
     }
@@ -54,7 +54,7 @@ export const supabase = createSSRBrowserClient<Database>(
     }
 )
 
-// Factory used by marketplace client components (they call createBrowserClient()).
+// Factory for client components that call createBrowserClient().
 // Returns the shared singleton browser client above so we don't spin up multiple
 // GoTrueClient instances in the same tab.
 export const createBrowserClient = () => supabase

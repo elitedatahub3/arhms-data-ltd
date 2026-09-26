@@ -82,7 +82,7 @@ const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
     const lines = fs.readFileSync(cssPath, 'utf8').split('\n')
 
     // Only police blocks that set custom properties directly on the theme scope,
-    // not descendant helpers like `.theme-marketplace .mkt-hero`.
+    // not descendant helpers like `.theme-shop .some-helper`.
     let depth = 0
     let inThemeBlock = false
     let blockSelector = ''

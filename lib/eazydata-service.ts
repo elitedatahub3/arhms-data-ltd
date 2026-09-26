@@ -334,6 +334,140 @@ function mapEazyDataStatus(status: string): 'pending' | 'processing' | 'complete
     return 'pending'
 }
 
+// ─── UP2U Delivery Lookup ──────────────────────────────────────────────────────
+export interface Up2uRecord {
+    msisdn: string
+    beneficiaryName: string | null
+    voiceMinutes: number
+    dataMb: number
+    smsUnits: number
+    status: string
+    statusTone: 'success' | 'failed' | 'pending'
+    date: string | null
+}
+
+export interface Up2uLookupResult {
+    success: boolean
+    phone: string
+    records: Up2uRecord[]
+    error?: string
+    apiResponse?: unknown
+}
+
+// PLACEHOLDER — the UP2U endpoint is not in Eazy Data's public docs. Their agent portal
+// (eazyghdata.com/agent/up2u-checker) shows the lookup, but the API path and parameter
+// name below are assumed. Confirm them from the portal's network tab or the API docs,
+// then change these two constants (and mapUp2uRow if the field names differ).
+const UP2U_PATH = '/up2u'
+const UP2U_PHONE_PARAM = 'phone'
+
+function pick(raw: Record<string, any>, keys: string[]): any {
+    for (const key of keys) {
+        if (raw[key] !== undefined && raw[key] !== null && raw[key] !== '') return raw[key]
+    }
+    return undefined
+}
+
+function toNumber(value: unknown): number {
+    const n = parseFloat(String(value ?? '').replace(/[^\d.-]/g, ''))
+    return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * Map one delivery row. Accepts snake_case API fields as well as the portal's column
+ * labels ("Beneficiary Msisdn", "Data (Mega byte)", ...) until the real shape is known.
+ */
+function mapUp2uRow(raw: Record<string, any>, fallbackPhone: string): Up2uRecord {
+    const status = String(pick(raw, ['status', 'Status', 'delivery_status']) ?? 'Unknown')
+    const mapped = mapEazyDataStatus(status)
+    const name = pick(raw, ['beneficiary_name', 'beneficiaryName', 'name', 'Beneficiary Name'])
+    const date = pick(raw, ['date', 'Date', 'created_at', 'createdAt', 'delivered_at', 'timestamp'])
+    return {
+        msisdn: String(pick(raw, ['beneficiary_msisdn', 'beneficiaryMsisdn', 'msisdn', 'phone', 'phone_number', 'Beneficiary Msisdn']) ?? fallbackPhone),
+        beneficiaryName: name === undefined ? null : String(name),
+        voiceMinutes: toNumber(pick(raw, ['voice', 'voice_minutes', 'voiceMinutes', 'Voice(Minutes)'])),
+        dataMb: toNumber(pick(raw, ['data', 'data_mb', 'dataMb', 'data_megabyte', 'Data(Mega byte)'])),
+        smsUnits: toNumber(pick(raw, ['sms', 'sms_units', 'smsUnits', 'Sms(Unit)'])),
+        status,
+        statusTone: mapped === 'completed' ? 'success' : mapped === 'failed' ? 'failed' : 'pending',
+        date: date === undefined ? null : String(date),
+    }
+}
+
+/** Pull the row array out of whichever envelope the endpoint uses. */
+function extractUp2uRows(data: any): Record<string, any>[] | null {
+    if (Array.isArray(data)) return data
+    for (const key of ['records', 'data', 'results', 'deliveries', 'transactions', 'orders']) {
+        if (Array.isArray(data?.[key])) return data[key]
+        if (Array.isArray(data?.data?.[key])) return data.data[key]
+    }
+    return null
+}
+
+/**
+ * Look up UP2U deliveries made to an MSISDN (read-only, admin support tool).
+ *
+ * Deliberately never records circuit-breaker failures: the breaker is shared with
+ * order fulfillment, and a failing lookup must not stop real orders from being placed.
+ */
+export async function checkUp2uDelivery(phoneNumber: string): Promise<Up2uLookupResult> {
+    let phone = phoneNumber.replace(/[\s-]+/g, '')
+    if (phone.startsWith('233')) phone = '0' + phone.slice(3)
+    else if (!phone.startsWith('0')) phone = '0' + phone
+
+    if (!EAZYDATA_API_KEY) return { success: false, phone, records: [], error: 'EazyData API key not configured' }
+    if (!checkCircuit()) return { success: false, phone, records: [], error: 'Eazy Data is temporarily unavailable' }
+
+    try {
+        const url = `${EAZYDATA_API_URL}${UP2U_PATH}?${UP2U_PHONE_PARAM}=${encodeURIComponent(phone)}`
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+                'X-API-Key': EAZYDATA_API_KEY,
+            },
+            signal: AbortSignal.timeout(10_000),
+        })
+
+        const rawText = await response.text()
+        let data: any
+        try {
+            data = JSON.parse(rawText)
+        } catch {
+            console.error(`[EazyData UP2U] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 300))
+            // An unknown route comes back as the site's HTML 404 page, not JSON
+            if (response.status === 404) {
+                return { success: false, phone, records: [], error: 'UP2U endpoint not found (HTTP 404) - confirm the Eazy Data API path' }
+            }
+            return { success: false, phone, records: [], error: `Unexpected response format (HTTP ${response.status})` }
+        }
+
+        if (response.status === 404 && !extractUp2uRows(data)) {
+            return { success: false, phone, records: [], error: 'UP2U endpoint not found (HTTP 404) - confirm the Eazy Data API path', apiResponse: sanitizeForLog(data) }
+        }
+        if (response.status === 429) {
+            return { success: false, phone, records: [], error: 'Eazy Data rate limit hit - try again shortly' }
+        }
+
+        const rows = extractUp2uRows(data)
+        if (response.ok && data?.success !== false && rows) {
+            return { success: true, phone, records: rows.map(row => mapUp2uRow(row, phone)), apiResponse: sanitizeForLog(data) }
+        }
+
+        return {
+            success: false,
+            phone,
+            records: [],
+            error: data?.error || data?.message || `Lookup failed (HTTP ${response.status})`,
+            apiResponse: sanitizeForLog(data),
+        }
+    } catch (error: any) {
+        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+        console.error('[EazyData UP2U] Lookup error:', error?.message)
+        return { success: false, phone, records: [], error: timedOut ? 'Eazy Data took too long to respond' : 'Could not reach Eazy Data' }
+    }
+}
+
 // ─── Balance Fetch ─────────────────────────────────────────────────────────────
 /**
  * Fetch live Eazy Data wallet balance.

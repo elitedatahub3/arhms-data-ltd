@@ -1,8 +1,9 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useMemo, Suspense } from 'react'
-import { Phone, CheckCircle, Copy, Wallet, AlertTriangle, Loader2, ChevronRight, Info, History, X, ArrowRight, RefreshCw, Search, Calendar, Filter, TrendingUp, Coins, Clock, CalendarRange } from 'lucide-react'
+import { Phone, CheckCircle, Copy, Wallet, AlertTriangle, Loader2, ChevronRight, Info, History, X, ArrowRight, RefreshCw, Search, Calendar, Filter, TrendingUp, Coins, Clock, CalendarRange, CreditCard } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
+import { refreshDashboardSummary } from '@/hooks/use-dashboard-summary'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
@@ -25,7 +26,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog'
-import { cn } from '@/lib/utils'
+import { cn, calculatePaystackFee } from '@/lib/utils'
+import { resolveProvider, isMomoPromptProvider, type PaymentProvider } from '@/lib/payment-provider'
 import { toast } from 'sonner'
 import { format, startOfDay, endOfDay, subDays, startOfWeek, startOfMonth, isWithinInterval, parseISO, isSameDay } from 'date-fns'
 
@@ -128,36 +130,36 @@ function SuccessModal({ order, onClose, onBuyMore }: { order: AirtimeOrder | nul
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-300">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto overscroll-contain bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-sm my-auto max-h-[85dvh] overflow-y-auto animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-emerald-400 to-green-500" />
                 <div className="p-6 text-center">
-                    <div className="w-16 h-16 rounded-full bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center mx-auto mb-4 animate-in zoom-in duration-500">
+                    <div className="w-16 h-16 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border-2 border-emerald-200 dark:border-emerald-800 flex items-center justify-center mx-auto mb-4 animate-in zoom-in duration-500">
                         <CheckCircle className="w-8 h-8 text-emerald-500" />
                     </div>
-                    <h2 className="text-xl font-bold text-slate-900 mb-0.5">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-0.5">
                         {order.type === 'mashup' ? 'Mashup Order Placed! 🎯' : 'Order Placed!'}
                     </h2>
-                    <p className="text-slate-500 text-[13px] mb-4">
+                    <p className="text-slate-500 dark:text-slate-400 text-[13px] mb-4">
                         {order.type === 'mashup'
                             ? 'Your MTN Bundle request is pending — admin will fulfil via My MTN App'
                             : 'Your airtime is being processed'}
                     </p>
 
-                    <div className="bg-slate-50 rounded-2xl p-4 mb-4 text-left space-y-2.5">
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Network</span><span className="font-semibold text-slate-900">{order.network}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Recipient</span><span className="font-semibold text-slate-900">{order.beneficiary_phone}</span></div>
+                    <div className="bg-slate-50 dark:bg-slate-800 rounded-2xl p-4 mb-4 text-left space-y-2.5">
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Network</span><span className="font-semibold text-slate-900 dark:text-white">{order.network}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Recipient</span><span className="font-semibold text-slate-900 dark:text-white">{order.beneficiary_phone}</span></div>
                         {order.type === 'mashup' && order.bundle_preference && (
-                            <div className="flex justify-between text-sm"><span className="text-slate-500">Preference</span><span className="font-semibold text-amber-600 capitalize">{order.bundle_preference === 'data' ? 'Data Focus 📊' : order.bundle_preference === 'voice' ? 'Voice Focus 🎙️' : 'Balanced ⚖️'}</span></div>
+                            <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Preference</span><span className="font-semibold text-amber-600 dark:text-amber-400 capitalize">{order.bundle_preference === 'data' ? 'Data Focus 📊' : order.bundle_preference === 'voice' ? 'Voice Focus 🎙️' : 'Balanced ⚖️'}</span></div>
                         )}
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">{order.type === 'mashup' ? 'Bundle Value' : 'Airtime'}</span><span className="font-semibold text-emerald-600">GHS {order.airtime_amount.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm border-t border-slate-200 pt-2.5 mt-1"><span className="text-slate-500 font-medium">You Paid</span><span className="font-bold text-slate-900">GHS {order.total_paid.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{order.type === 'mashup' ? 'Bundle Value' : 'Airtime'}</span><span className="font-semibold text-emerald-600 dark:text-emerald-400">GHS {order.airtime_amount.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm border-t border-slate-200 dark:border-slate-700 pt-2.5 mt-1"><span className="text-slate-500 dark:text-slate-400 font-medium">You Paid</span><span className="font-bold text-slate-900 dark:text-white">GHS {order.total_paid.toFixed(2)}</span></div>
                     </div>
 
-                    <button onClick={copy} className="w-full flex items-center justify-between bg-slate-100 hover:bg-slate-200 rounded-xl px-4 py-3 mb-4 transition-colors group">
+                    <button onClick={copy} className="w-full flex items-center justify-between bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl px-4 py-3 mb-4 transition-colors group">
                         <div className="text-left">
                             <p className="text-xs text-slate-400 mb-0.5">Reference Code</p>
-                            <p className="font-mono font-bold text-slate-800 text-sm">{order.reference_code}</p>
+                            <p className="font-mono font-bold text-slate-800 dark:text-slate-200 text-sm">{order.reference_code}</p>
                         </div>
                         <Copy className={cn('w-4 h-4 transition-colors', copied ? 'text-emerald-500' : 'text-slate-400 group-hover:text-slate-600')} />
                     </button>
@@ -183,28 +185,38 @@ function SuccessModal({ order, onClose, onBuyMore }: { order: AirtimeOrder | nul
 // ─── Confirm Sheet ─────────────────────────────────────────────────────────────
 function ConfirmSheet({ open, onCancel, onConfirm, isLoading, details }: {
     open: boolean; onCancel: () => void; onConfirm: () => void; isLoading: boolean
-    details: { network: string; phone: string; airtime: number; fee: number; total: number; mode: boolean; orderType?: 'airtime' | 'mashup'; preference?: string }
+    details: {
+        network: string; phone: string; airtime: number; fee: number; total: number; mode: boolean
+        orderType?: 'airtime' | 'mashup'; preference?: string
+        paymentMethod: 'wallet' | 'direct'; gatewayFee: number
+    }
 }) {
     if (!open) return null
     return (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto overscroll-contain bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-sm my-auto max-h-[85dvh] overflow-y-auto animate-in zoom-in-95 duration-300">
                 <div className="h-1.5 bg-gradient-to-r from-slate-700 to-slate-900 rounded-t-3xl" />
                 <div className="p-6">
-                    <h3 className="text-lg font-bold text-slate-900 mb-1">Confirm Payment</h3>
-                    <p className="text-sm text-slate-500 mb-5">Please review before proceeding</p>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Confirm Payment</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Please review before proceeding</p>
                     <div className="space-y-2.5 mb-6">
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Network</span><span className="font-semibold">{details.network}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Recipient</span><span className="font-semibold">{details.phone}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Network</span><span className="font-semibold dark:text-white">{details.network}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Recipient</span><span className="font-semibold dark:text-white">{details.phone}</span></div>
                         {details.orderType === 'mashup' && details.preference && (
-                            <div className="flex justify-between text-sm"><span className="text-slate-500">Bundle Pref</span><span className="font-semibold text-amber-600 capitalize">{details.preference === 'data' ? 'Data Focus' : details.preference === 'voice' ? 'Voice Focus' : 'Balanced'}</span></div>
+                            <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Bundle Pref</span><span className="font-semibold text-amber-600 dark:text-amber-400 capitalize">{details.preference === 'data' ? 'Data Focus' : details.preference === 'voice' ? 'Voice Focus' : 'Balanced'}</span></div>
                         )}
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">{details.orderType === 'mashup' ? 'Bundle Value' : 'Airtime to send'}</span><span className="font-semibold text-emerald-600">GHS {details.airtime.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm"><span className="text-slate-500">Service fee</span><span className="font-semibold">GHS {details.fee.toFixed(2)}</span></div>
-                        <div className="flex justify-between text-sm border-t border-slate-100 pt-2.5 mt-1">
-                            <span className="font-bold text-slate-800">Total to Pay</span>
-                            <span className="font-bold text-lg text-slate-900">GHS {details.total.toFixed(2)}</span>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{details.orderType === 'mashup' ? 'Bundle Value' : 'Airtime to send'}</span><span className="font-semibold text-emerald-600 dark:text-emerald-400">GHS {details.airtime.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Service fee</span><span className="font-semibold dark:text-white">GHS {details.fee.toFixed(2)}</span></div>
+                        {details.paymentMethod === 'direct' && details.gatewayFee > 0 && (
+                            <div className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">Payment fee</span><span className="font-semibold dark:text-white">GHS {details.gatewayFee.toFixed(2)}</span></div>
+                        )}
+                        <div className="flex justify-between text-sm border-t border-slate-100 dark:border-slate-700 pt-2.5 mt-1">
+                            <span className="font-bold text-slate-800 dark:text-slate-200">Total to Pay</span>
+                            <span className="font-bold text-lg text-slate-900 dark:text-white">GHS {(details.total + details.gatewayFee).toFixed(2)}</span>
                         </div>
+                        {details.paymentMethod === 'direct' && (
+                            <p className="text-[11px] text-slate-400 pt-1">A small payment fee may differ slightly on your phone — confirm the exact total there.</p>
+                        )}
                     </div>
                     <div className="flex gap-3">
                         <Button variant="outline" className="flex-1 rounded-xl h-11" onClick={onCancel} disabled={isLoading}>Cancel</Button>
@@ -265,10 +277,36 @@ function AirtimePageInner() {
     const [mode, setMode] = useState<'airtime' | 'mashup'>('airtime')
     const [bundlePreference, setBundlePreference] = useState<'balanced' | 'data' | 'voice'>('balanced')
 
+    // Payment method — wallet debit, or a direct MoMo/card charge for this order.
+    // 'direct' never touches the wallet: /api/airtime/gateway-init records a payment
+    // intent and lib/airtime-order-payments.ts creates the order once the gateway confirms.
+    const [paymentMethod, setPaymentMethod] = useState<'wallet' | 'direct'>('wallet')
+    const [webPaymentProvider, setWebPaymentProvider] = useState<PaymentProvider>('moolre')
+    const [paystackFeePercent, setPaystackFeePercent] = useState(1.95)
+    const [momoPhone, setMomoPhone] = useState('')
+    const [momoNetwork, setMomoNetwork] = useState('')
+    const [momoNetworkManual, setMomoNetworkManual] = useState(false)
+
     // UI state
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [showConfirm, setShowConfirm] = useState(false)
     const [successOrder, setSuccessOrder] = useState<AirtimeOrder | null>(null)
+
+    // Direct-pay round trip
+    const [directPaymentRef, setDirectPaymentRef] = useState<string | null>(null)
+    const [pollingRef, setPollingRef] = useState<string | null>(null)
+    const [otpRequired, setOtpRequired] = useState(false)
+    const [otpCode, setOtpCode] = useState('')
+    const [otpMessage, setOtpMessage] = useState('')
+    const [isVerifyingOtp, setIsVerifyingOtp] = useState(false)
+
+    // Freeze the page behind an open overlay so the sheet can't scroll away on mobile
+    useEffect(() => {
+        if (!showConfirm && !successOrder && !otpRequired) return
+        const previous = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        return () => { document.body.style.overflow = previous }
+    }, [showConfirm, successOrder, otpRequired])
 
     // Handle query params
     useEffect(() => {
@@ -277,6 +315,15 @@ function AirtimePageInner() {
             setMode('mashup')
             setSelectedNetwork('MTN')
             setIsManualSelection(true)
+        }
+    }, [searchParams])
+
+    // Paystack return leg — resume polling for the reference in the URL
+    useEffect(() => {
+        const ref = searchParams.get('reference')
+        if (ref && ref.startsWith('AIRPAY-')) {
+            setPollingRef(ref)
+            window.history.replaceState(null, '', '/dashboard/airtime')
         }
     }, [searchParams])
 
@@ -323,6 +370,17 @@ function AirtimePageInner() {
                     setWalletBalance((walletData as any).balance || 0)
                     setUserRole(dbUser.role === 'agent' ? 'agent' : 'customer')
                 }
+
+                // Which gateway Direct Pay will use, and what it costs. The server
+                // recomputes both authoritatively — this is for the fee preview.
+                const payRes = await fetch('/api/admin-settings?keys=active_payment_provider_web,paystack_fee_percent,agent_paystack_fee_percent')
+                if (payRes.ok) {
+                    const paySettings = await payRes.json()
+                    setWebPaymentProvider(resolveProvider(paySettings.active_payment_provider_web))
+                    const feeKey = dbUser.role === 'agent' ? 'agent_paystack_fee_percent' : 'paystack_fee_percent'
+                    const feeVal = parseFloat(paySettings[feeKey] || paySettings.paystack_fee_percent || '1.95')
+                    if (!isNaN(feeVal)) setPaystackFeePercent(feeVal)
+                }
             } catch (e) {
                 console.error('[Airtime] Error loading initial data:', e)
             } finally {
@@ -330,6 +388,11 @@ function AirtimePageInner() {
             }
         }
         loadData()
+    }, [dbUser])
+
+    // Prefill the MoMo number from the account profile
+    useEffect(() => {
+        if (dbUser?.phone_number && !momoPhone) setMomoPhone(dbUser.phone_number)
     }, [dbUser])
 
     // History loader
@@ -375,11 +438,48 @@ function AirtimePageInner() {
         }
     }
 
+    // Gateway fee for Direct Pay — the server recomputes this authoritatively,
+    // this is for display only. Mirrors the fee block in /api/airtime/gateway-init.
+    const HUBTEL_FEE_PERCENT = 1.8
+    const computeGatewayFee = (subtotal: number) => {
+        if (webPaymentProvider === 'hubtel') {
+            return parseFloat((subtotal * (HUBTEL_FEE_PERCENT / 100)).toFixed(2))
+        }
+        // PaySwitch bills us, not the payer, so it carries the same percentage Paystack does.
+        if (webPaymentProvider === 'paystack' || webPaymentProvider === 'paystack_momo' || webPaymentProvider === 'payswitch') {
+            return calculatePaystackFee(subtotal, paystackFeePercent)
+        }
+        // Moolre charges the payer directly — nothing added on our side.
+        return 0
+    }
+
+    const gatewayFee = paymentMethod === 'direct' && totalPaid > 0 ? computeGatewayFee(totalPaid) : 0
+    const payableTotal = parseFloat((totalPaid + gatewayFee).toFixed(2))
+
+    // Only the hosted Paystack page collects the payer's details itself; every other
+    // rail pushes a prompt to a handset, so it needs a number and network up front.
+    const needsMomoDetails = isMomoPromptProvider(webPaymentProvider)
+    const effectiveMomoPhone = momoPhone.replace(/\s+/g, '')
+
+    // Follow the paying number until the buyer picks a network themselves.
+    useEffect(() => {
+        if (momoNetworkManual) return
+        const detected = detectNetwork(effectiveMomoPhone)
+        setMomoNetwork(detected ? (detected.id as string) : '')
+    }, [effectiveMomoPhone, momoNetworkManual])
+
     const phoneWarning = phone.length >= 3 ? getNetworkWarning(phone, selectedNetwork) : null
     const isPhoneValid = /^0\d{9}$/.test(phone)
     const isAmountValid = parsedAmount >= (settings?.min_amount || 1) && parsedAmount <= (settings?.max_amount || 500)
     const hasEnoughBalance = walletBalance !== null && totalPaid > 0 && walletBalance >= totalPaid
-    const canProceed = selectedNetwork && isPhoneValid && isAmountValid && hasEnoughBalance && !isSubmitting
+    const hasMomoDetails = !needsMomoDetails || (!!effectiveMomoPhone && !!momoNetwork)
+    // Direct Pay collects the money at checkout, so the wallet balance is irrelevant to it.
+    const paymentReady = paymentMethod === 'wallet' ? hasEnoughBalance : hasMomoDetails
+    // "Pay processing fee separately" must be turned on before checkout — the deduct-from-amount
+    // mode silently shorts the beneficiary, which is exactly what the amber warning below the
+    // toggle is nagging about. Requiring it removes the trap instead of just flagging it.
+    const canProceed = !!selectedNetwork && isPhoneValid && isAmountValid && paymentReady && useExact
+        && !isSubmitting && !pollingRef
 
     const handlePhoneChange = (val: string) => {
         const clean = val.replace(/\D/g, '')
@@ -422,13 +522,184 @@ function AirtimePageInner() {
             if (data.walletBalance !== undefined) setWalletBalance(data.walletBalance)
             else if (data.order?.new_balance !== undefined) setWalletBalance(data.order.new_balance)
             setSuccessOrder(data.order)
-            setPhone(''); setAmount(''); setSelectedNetwork(null); setUseExact(false); setIsManualSelection(false)
+            resetForm()
         } catch {
             toast.error('An unexpected error occurred. Please try again.')
         } finally {
             setIsSubmitting(false)
         }
     }
+
+    const resetForm = () => {
+        setPhone(''); setAmount(''); setSelectedNetwork(null)
+        setUseExact(false); setIsManualSelection(false)
+    }
+
+    // Direct Pay: no wallet debit. The gateway takes the money, then the webhook
+    // (or the poller/cron below) settles it into a real order.
+    const handleDirectPurchase = async () => {
+        if (needsMomoDetails && !momoNetwork) {
+            toast.error('Please select the Mobile Money network to pay from')
+            return
+        }
+        if (needsMomoDetails && !effectiveMomoPhone) {
+            toast.error('Please enter the Mobile Money number to charge')
+            return
+        }
+
+        setIsSubmitting(true)
+        setShowConfirm(false)
+
+        try {
+            const res = await fetch('/api/airtime/gateway-init', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    beneficiaryPhone: phone,
+                    network: selectedNetwork,
+                    amount: parsedAmount,
+                    useExactAmount: useExact,
+                    type: mode,
+                    bundlePreference: mode === 'mashup' ? bundlePreference : undefined,
+                    momoPhone: effectiveMomoPhone,
+                    momoNetwork,
+                }),
+            })
+
+            const data = await res.json()
+
+            // A charge is already live for this number. Rather than a dead-end error,
+            // hand the customer back to it: starting a new payment would cancel the
+            // code they were already sent.
+            if (!res.ok && data.resumable && data.reference) {
+                setDirectPaymentRef(data.reference)
+                if (data.otpRequired) {
+                    setOtpMessage(data.error || '')
+                    setOtpRequired(true)
+                } else {
+                    toast.info(data.error || 'A payment prompt is already waiting on your phone.')
+                    setPollingRef(data.reference)
+                }
+                setIsSubmitting(false)
+                return
+            }
+
+            if (!res.ok) throw new Error(data.error || 'Payment could not be started')
+
+            if (data.gateway === 'paystack') {
+                window.location.href = data.authorization_url
+                return
+            }
+
+            if (data.otpRequired) {
+                setOtpMessage(data.message || '')
+                setDirectPaymentRef(data.reference)
+                setOtpRequired(true)
+                setIsSubmitting(false)
+                return
+            }
+
+            toast.success(data.message || 'Payment prompt sent! Approve it on your phone.')
+            setPollingRef(data.reference)
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to start payment')
+            setIsSubmitting(false)
+        }
+    }
+
+    // Moolre asks for an OTP before it will send the debit prompt
+    const handleVerifyOtp = async () => {
+        if (!otpCode.trim()) {
+            toast.error('Please enter the OTP sent to your phone')
+            return
+        }
+
+        setIsVerifyingOtp(true)
+        try {
+            const res = await fetch('/api/airtime/gateway-init', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    beneficiaryPhone: phone,
+                    network: selectedNetwork,
+                    amount: parsedAmount,
+                    useExactAmount: useExact,
+                    type: mode,
+                    bundlePreference: mode === 'mashup' ? bundlePreference : undefined,
+                    momoPhone: effectiveMomoPhone,
+                    momoNetwork,
+                    otpCode: otpCode.trim(),
+                    reference: directPaymentRef,
+                }),
+            })
+
+            const data = await res.json()
+            if (!res.ok) throw new Error(data.error || 'Invalid OTP. Please try again.')
+
+            setOtpRequired(false)
+            setOtpCode('')
+            toast.success(data.message || 'OTP verified! Approve the prompt on your phone.')
+            setIsSubmitting(true)
+            setPollingRef(data.reference || directPaymentRef)
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to verify OTP')
+        } finally {
+            setIsVerifyingOtp(false)
+        }
+    }
+
+    // Poll the gateway until the direct payment settles
+    useEffect(() => {
+        if (!pollingRef) return
+
+        let elapsed = 0
+        const POLL_MS = 5000
+        const TIMEOUT_MS = 180000 // 3 minutes
+
+        const interval = setInterval(async () => {
+            elapsed += POLL_MS
+
+            if (elapsed >= TIMEOUT_MS) {
+                clearInterval(interval)
+                setPollingRef(null)
+                setIsSubmitting(false)
+                toast.error('Still waiting on payment confirmation. Check History in a moment.')
+                return
+            }
+
+            try {
+                const res = await fetch(`/api/payments/verify?reference=${pollingRef}`, {
+                    headers: { 'Accept': 'application/json' },
+                })
+                const data = await res.json()
+
+                if (data.status === 'completed') {
+                    // The settling caller writes the order a moment after claiming the
+                    // payment — keep polling until it shows up.
+                    if (!data.order) return
+
+                    clearInterval(interval)
+                    setPollingRef(null)
+                    setIsSubmitting(false)
+                    setSuccessOrder(data.order)
+                    resetForm()
+                    refreshDashboardSummary()
+                    toast.success('Payment received — your airtime is being processed!')
+                } else if (data.status === 'failed') {
+                    clearInterval(interval)
+                    setPollingRef(null)
+                    setIsSubmitting(false)
+                    toast.error(data.message || data.error || 'Payment failed or was cancelled.')
+                }
+            } catch (e) {
+                console.error('[Airtime] Polling error', e)
+            }
+        }, POLL_MS)
+
+        return () => clearInterval(interval)
+    }, [pollingRef])
 
     const handleBuyMore = () => { setSuccessOrder(null); setActiveTab('buy') }
     const handleSuccessClose = () => { setSuccessOrder(null); setActiveTab('history') }
@@ -682,12 +953,84 @@ function AirtimePageInner() {
                         )
                     })()}
 
-                    <div 
+                    {/* How to pay */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <button
+                            type="button"
+                            onClick={() => setPaymentMethod('wallet')}
+                            className={cn(
+                                'p-3 rounded-2xl border flex items-center gap-2 transition-colors text-left',
+                                paymentMethod === 'wallet' ? 'border-slate-900 dark:border-white bg-slate-50 dark:bg-slate-800 shadow-sm' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                            )}
+                        >
+                            <Wallet className="w-5 h-5 text-emerald-600 shrink-0" />
+                            <div className="min-w-0">
+                                <div className="font-bold text-sm dark:text-white">Wallet</div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400 truncate">GHS {walletBalance !== null ? walletBalance.toFixed(2) : '—'} available</div>
+                            </div>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setPaymentMethod('direct')}
+                            className={cn(
+                                'p-3 rounded-2xl border flex items-center gap-2 transition-colors text-left',
+                                paymentMethod === 'direct' ? 'border-slate-900 dark:border-white bg-slate-50 dark:bg-slate-800 shadow-sm' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                            )}
+                        >
+                            <CreditCard className="w-5 h-5 text-blue-500 shrink-0" />
+                            <div className="min-w-0">
+                                <div className="font-bold text-sm dark:text-white">Direct Pay</div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400 truncate">MoMo or Card</div>
+                            </div>
+                        </button>
+                    </div>
+
+                    {/* MoMo details — direct payment only, and only on a rail that prompts a handset */}
+                    {paymentMethod === 'direct' && needsMomoDetails && (
+                        <div className="grid sm:grid-cols-2 gap-3">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="momo-phone" className="text-sm font-black text-slate-900 dark:text-slate-100">
+                                    Mobile Money number <span className="font-semibold text-slate-400">(to pay)</span>
+                                </Label>
+                                <input
+                                    id="momo-phone"
+                                    type="tel"
+                                    inputMode="numeric"
+                                    placeholder="0241234567"
+                                    value={momoPhone}
+                                    onChange={(e) => setMomoPhone(e.target.value)}
+                                    className="w-full px-4 py-3.5 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-base font-semibold focus:outline-none focus:ring-2 ring-emerald-500 transition-all"
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label className="text-sm font-black text-slate-900 dark:text-slate-100">Network</Label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {NETWORKS.map(net => (
+                                        <button
+                                            key={net.id}
+                                            type="button"
+                                            onClick={() => { setMomoNetwork(net.id as string); setMomoNetworkManual(true) }}
+                                            className={cn(
+                                                'flex items-center justify-center py-3 rounded-2xl border text-xs font-bold transition-all',
+                                                momoNetwork === net.id
+                                                    ? 'border-slate-900 dark:border-white bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm'
+                                                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300'
+                                            )}
+                                        >
+                                            {net.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div
                         onClick={() => setUseExact(!useExact)}
                         className={cn(
                             "group flex items-start gap-3.5 rounded-2xl p-5 border transition-all cursor-pointer select-none",
-                            useExact 
-                                ? "bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-500/50 shadow-sm ring-1 ring-emerald-500/20" 
+                            useExact
+                                ? "bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-500/50 shadow-sm ring-1 ring-emerald-500/20"
                                 : "bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
                         )}
                     >
@@ -740,7 +1083,7 @@ function AirtimePageInner() {
                                             </span>
                                             <span className="font-black text-amber-700 dark:text-amber-400">GHS {airtimeAmount.toFixed(2)}</span>
                                         </div>
-                                        <p className="text-[11px] text-amber-600 dark:text-amber-500 font-black uppercase tracking-tight px-1">Fee deducted — enable "Pay separately" to avoid this</p>
+                                        <p className="text-[11px] text-amber-600 dark:text-amber-500 font-black uppercase tracking-tight px-1">Fee deducted — turn on "Pay separately" above to continue</p>
                                         <div className="flex justify-between border-t border-slate-200 dark:border-slate-600 pt-2.5 mt-1">
                                             <span className="font-black text-slate-800 dark:text-white uppercase tracking-tight">You pay</span>
                                             <span className="font-black text-lg text-slate-900 dark:text-white">GHS {totalPaid.toFixed(2)} ✓</span>
@@ -751,22 +1094,50 @@ function AirtimePageInner() {
                         </div>
                     )}
 
-                    {parsedAmount > 0 && !hasEnoughBalance && walletBalance !== null ? (
+                    {paymentMethod === 'direct' && gatewayFee > 0 && payableTotal > 0 && (
+                        <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/40 p-3 space-y-1 text-sm border border-slate-100 dark:border-slate-800">
+                            <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">You pay</span><span className="dark:text-white">GHS {totalPaid.toFixed(2)}</span></div>
+                            <div className="flex justify-between"><span className="text-slate-500 dark:text-slate-400">Payment fee</span><span className="dark:text-white">GHS {gatewayFee.toFixed(2)}</span></div>
+                            <div className="flex justify-between border-t border-slate-200 dark:border-slate-700 pt-1 font-bold">
+                                <span className="dark:text-white">Total charged</span>
+                                <span className="text-emerald-600 dark:text-emerald-400">GHS {payableTotal.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {paymentMethod === 'wallet' && parsedAmount > 0 && !hasEnoughBalance && walletBalance !== null ? (
                         <div className="rounded-2xl bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 p-4 flex items-center gap-3">
                             <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
                             <div>
                                 <p className="text-sm font-bold text-red-700 dark:text-red-400">Insufficient Balance</p>
-                                <p className="text-xs text-red-500 font-semibold">You need GHS {totalPaid.toFixed(2)} but have GHS {walletBalance.toFixed(2)}. Please top up.</p>
+                                <p className="text-xs text-red-500 font-semibold">
+                                    You need GHS {totalPaid.toFixed(2)} but have GHS {walletBalance.toFixed(2)}.{' '}
+                                    <button type="button" className="underline font-bold" onClick={() => setPaymentMethod('direct')}>
+                                        Pay directly instead
+                                    </button>{' '}
+                                    or top up your wallet.
+                                </p>
                             </div>
                         </div>
                     ) : (
-                        <Button
-                            className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-lg font-black shadow-lg transition-all"
-                            disabled={!canProceed}
-                            onClick={() => setShowConfirm(true)}
-                        >
-                            Proceed to Payment <ArrowRight className="w-5 h-5 ml-2" />
-                        </Button>
+                        <>
+                            <Button
+                                className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-lg font-black shadow-lg transition-all"
+                                disabled={!canProceed}
+                                onClick={() => setShowConfirm(true)}
+                            >
+                                {isSubmitting || pollingRef ? (
+                                    <><Loader2 className="w-5 h-5 mr-2 animate-spin" />{pollingRef ? 'Waiting for approval...' : 'Processing...'}</>
+                                ) : (
+                                    <>Proceed to Payment <ArrowRight className="w-5 h-5 ml-2" /></>
+                                )}
+                            </Button>
+                            {!useExact && selectedNetwork && isPhoneValid && isAmountValid && (
+                                <p className="text-center text-[11px] text-amber-600 dark:text-amber-500 font-bold -mt-3">
+                                    Turn on "Pay processing fee separately" above to continue
+                                </p>
+                            )}
+                        </>
                     )}
                 </div>
             )}
@@ -929,10 +1300,43 @@ function AirtimePageInner() {
             <ConfirmSheet
                 open={showConfirm}
                 onCancel={() => setShowConfirm(false)}
-                onConfirm={handleSubmit}
+                onConfirm={paymentMethod === 'direct' ? handleDirectPurchase : handleSubmit}
                 isLoading={isSubmitting}
-                details={{ network: selectedNetwork || '', phone, airtime: airtimeAmount, fee: feeAmount, total: totalPaid, mode: useExact, orderType: mode, preference: mode === 'mashup' ? bundlePreference : undefined }}
+                details={{
+                    network: selectedNetwork || '', phone, airtime: airtimeAmount, fee: feeAmount, total: totalPaid, mode: useExact,
+                    orderType: mode, preference: mode === 'mashup' ? bundlePreference : undefined,
+                    paymentMethod, gatewayFee,
+                }}
             />
+
+            {/* MoMo OTP Dialog — Moolre asks for a code before it will send the debit prompt */}
+            <Dialog open={otpRequired} onOpenChange={(open) => { if (!open) { setOtpRequired(false); setOtpCode('') } }}>
+                <DialogContent className="w-[95%] max-w-sm rounded-2xl z-[90]">
+                    <DialogHeader>
+                        <DialogTitle>Enter OTP</DialogTitle>
+                        <DialogDescription>
+                            {(otpMessage || `Your network sent a one-time code to ${effectiveMomoPhone || 'your phone'}`)
+                                .trim().replace(/([^.!?])$/, '$1.')}
+                            {' '}Enter it below to authorise this payment. If nothing arrives within a minute, close this and try again.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <Input
+                        autoFocus
+                        inputMode="numeric"
+                        placeholder="Enter OTP"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value)}
+                        className="text-center text-lg tracking-widest"
+                    />
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => { setOtpRequired(false); setOtpCode('') }}>Cancel</Button>
+                        <Button onClick={handleVerifyOtp} disabled={isVerifyingOtp || !otpCode.trim()}>
+                            {isVerifyingOtp ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Verifying...</> : 'Verify'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
             <SuccessModal order={successOrder} onClose={handleSuccessClose} onBuyMore={handleBuyMore} />
 
             {/* Custom Date Dialog */}

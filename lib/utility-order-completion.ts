@@ -17,6 +17,9 @@
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToUser } from '@/lib/web-push'
 import { UTILITY_SERVICES, isUtilityService } from '@/lib/hubtel-utility-service'
+import { creditCommissionForOrder } from '@/lib/commission-earning'
+import { creditResellersForOrder } from '@/lib/utility-shop-earning'
+import { queueApiWebhook } from '@/lib/api-webhook'
 
 export type UtilityFinalStatus = 'processing' | 'completed' | 'failed' | 'refunded'
 
@@ -163,6 +166,40 @@ export async function finalizeUtilityOrder(
     if (updateError) {
         console.error('[UtilityCompletion] Update error:', updateError)
         return { success: false, error: updateError.message }
+    }
+
+    // ── Commission ───────────────────────────────────────────────────────────
+    // Placed here rather than in the API route because all three callers of this
+    // function — dispatcher, Hubtel callback, admin button — must earn identically.
+    // A no-op unless the order was placed with a Commission Services key. Guarded on
+    // finalStatus, not `status`: an order that was refunded out from under a
+    // 'completed' call paid no bill and earns nothing.
+    if (finalStatus === 'completed') {
+        await creditCommissionForOrder({ orderId })
+        // Storefront sales only — pays the selling shop and its upline the margin
+        // they were snapshotted for at checkout. A no-op on a dashboard order.
+        await creditResellersForOrder({ orderId })
+    }
+
+    // Tell the partner, if this order came from an API key with a webhook configured.
+    // Terminal states only — 'processing' is not news.
+    if (finalStatus !== 'processing' && existing.api_key_id) {
+        await queueApiWebhook({
+            apiKeyId: existing.api_key_id,
+            payload: {
+                event:          `utility.${finalStatus}`,
+                reference:      existing.reference_code,
+                order_id:       existing.id,
+                status:         finalStatus,
+                service:        existing.service,
+                account_number: existing.account_number,
+                account_name:   existing.account_name,
+                bill_amount:    Number(existing.bill_amount ?? 0),
+                total_paid:     Number(existing.total_paid ?? 0),
+                refunded,
+                note:           note ?? null,
+            },
+        })
     }
 
     // 'processing' is an interim state — the payment is in flight at the provider and

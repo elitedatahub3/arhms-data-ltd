@@ -21,6 +21,14 @@ export interface PricingData {
         'permanent': number
     }
     showStrikethrough: boolean
+    // Which agent plans an admin has switched on. A plan is on unless its
+    // agent_plan_enabled_<plan> setting is exactly 'false'.
+    enabledPlans: {
+        '3d': boolean
+        '14d': boolean
+        '30d': boolean
+        'permanent': boolean
+    }
     guestStorefrontUrl: string
     whatsappGroupLink: string
     whatsappChannelLink: string
@@ -59,6 +67,8 @@ export async function getCachedPricing(): Promise<PricingData> {
                     prices: data.prices,
                     oldPrices: data.oldPrices,
                     showStrikethrough: data.showStrikethrough,
+                    // Caches written before plan toggles existed have no enabledPlans
+                    enabledPlans: data.enabledPlans ?? { '3d': true, '14d': true, '30d': true, 'permanent': true },
                     guestStorefrontUrl: data.guestStorefrontUrl,
                     whatsappGroupLink: data.whatsappGroupLink,
                     whatsappChannelLink: data.whatsappChannelLink,

@@ -19,12 +19,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
-    Smartphone, ArrowLeft, Check, Wallet, Loader2, Copy, ShieldCheck, Signal, Store,
+    Smartphone, ArrowLeft, Check, Wallet, Loader2, Copy, ShieldCheck, Signal, Store, PowerOff,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 interface ActivationInfo {
+    /** Master switch. False means the whole feature is off, for everyone. */
+    ussdEnabled: boolean
     hasShop: boolean
     eligible: boolean
     /** Why activation is blocked, straight from the API. Null when it isn't. */
@@ -67,6 +69,11 @@ export function UssdActivationPanel({
     const [phone, setPhone] = useState('')
     const [network, setNetwork] = useState('MTN')
     const [reference, setReference] = useState<string | null>(null)
+    // Set when Paystack answers 'send_otp' — Telecel and AirtelTigo ask the payer to
+    // type a code instead of approving a prompt, so the charge stops half-finished
+    // until we send one back.
+    const [otpPrompt, setOtpPrompt] = useState<string | null>(null)
+    const [otp, setOtp] = useState('')
     const [submitting, setSubmitting] = useState(false)
     const [polling, setPolling] = useState(false)
     const [copied, setCopied] = useState(false)
@@ -145,11 +152,62 @@ export function UssdActivationPanel({
                 return
             }
 
-            // Hubtel confirms on a webhook, so the prompt landing on the handset
+            // The charge exists but the network wants a one-time code before it will
+            // move any money. Nothing to poll for yet.
+            if (data.otpRequired) {
+                setReference(data.reference)
+                setOtpPrompt(data.message || 'Enter the one-time code sent to your phone.')
+                return
+            }
+
+            // The gateway confirms on a webhook, so the prompt landing on the handset
             // is only the start — poll until the short code actually exists.
             setReference(data.reference)
             setPolling(true)
             toast.success(data.message || 'Approve the prompt on your phone')
+        } catch {
+            toast.error('Something went wrong. Please try again.')
+        } finally {
+            setSubmitting(false)
+        }
+    }
+
+    const submitOtpCode = async () => {
+        if (!otp.trim() || !reference) return
+
+        setSubmitting(true)
+        try {
+            const res = await fetch('/api/shop/ussd/activate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ otp: otp.trim(), reference }),
+            })
+            const data = await res.json()
+
+            if (!res.ok || !data?.success) {
+                toast.error(data?.error || 'That code was not accepted')
+                return
+            }
+
+            // Still asking: a wrong digit gets another go rather than dropping the
+            // buyer back to a form that would start a second charge.
+            if (data.otpRequired) {
+                setOtp('')
+                setOtpPrompt(data.message || 'Enter the one-time code sent to your phone.')
+                return
+            }
+
+            setOtpPrompt(null)
+            setOtp('')
+
+            if (data.activated) {
+                toast.success(data.message || 'Short code activated!')
+                await loadInfo()
+                return
+            }
+
+            setPolling(true)
+            toast.success(data.message || 'Code accepted — confirming payment')
         } catch {
             toast.error('Something went wrong. Please try again.')
         } finally {
@@ -170,6 +228,27 @@ export function UssdActivationPanel({
             <div className="space-y-6 pb-20 md:pb-6">
                 <Skeleton className="h-10 w-40" />
                 <Skeleton className="h-64 w-full rounded-3xl" />
+            </div>
+        )
+    }
+
+    // ── SWITCHED OFF ─────────────────────────────────────────────────────────
+    // Ahead of every other state: while USSD is off there is nothing to buy and
+    // an owner's existing code does not answer, so showing either would mislead.
+    if (info && !info.ussdEnabled) {
+        return (
+            <div className="space-y-6 pb-20 md:pb-6">
+                <Link href={backHref}><Button variant="ghost" className="gap-2"><ArrowLeft className="w-4 h-4" /> {backLabel}</Button></Link>
+                <Card>
+                    <CardContent className="py-12 text-center space-y-3">
+                        <PowerOff className="w-10 h-10 mx-auto text-muted-foreground" />
+                        <p className="font-bold">USSD is currently unavailable</p>
+                        <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                            Short codes are switched off for now. Your storefront is unaffected — customers can still
+                            buy from you online.
+                        </p>
+                    </CardContent>
+                </Card>
             </div>
         )
     }
@@ -337,17 +416,47 @@ export function UssdActivationPanel({
                             </div>
                         )}
 
-                        <Button
-                            onClick={activate}
-                            disabled={submitting || polling}
-                            className="w-full h-12 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-black text-base"
-                        >
-                            {submitting || polling ? (
-                                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {polling ? 'Waiting for payment…' : 'Processing…'}</>
-                            ) : (
-                                <>Activate for GHS {Number(info.price).toFixed(2)}</>
-                            )}
-                        </Button>
+                        {otpPrompt ? (
+                            // The charge is already open with the network, so this
+                            // replaces the pay button rather than sitting beside it —
+                            // pressing "Activate" again here would start a second one.
+                            <div className="space-y-3 rounded-2xl border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 p-4">
+                                <div className="space-y-2">
+                                    <Label>One-time code</Label>
+                                    <Input
+                                        value={otp}
+                                        onChange={(e) => setOtp(e.target.value)}
+                                        placeholder="Enter the code"
+                                        inputMode="numeric"
+                                        autoFocus
+                                    />
+                                </div>
+                                <p className="text-xs text-muted-foreground">{otpPrompt}</p>
+                                <Button
+                                    onClick={submitOtpCode}
+                                    disabled={submitting || !otp.trim()}
+                                    className="w-full h-12 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-black text-base"
+                                >
+                                    {submitting ? (
+                                        <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Confirming…</>
+                                    ) : (
+                                        <>Confirm payment</>
+                                    )}
+                                </Button>
+                            </div>
+                        ) : (
+                            <Button
+                                onClick={activate}
+                                disabled={submitting || polling}
+                                className="w-full h-12 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-black text-base"
+                            >
+                                {submitting || polling ? (
+                                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {polling ? 'Waiting for payment…' : 'Processing…'}</>
+                                ) : (
+                                    <>Activate for GHS {Number(info.price).toFixed(2)}</>
+                                )}
+                            </Button>
+                        )}
 
                         <p className="text-xs text-center text-muted-foreground">
                             One-time payment. Your short code is generated the moment payment clears.

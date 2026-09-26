@@ -4,11 +4,12 @@
  * Sub-Agent "My Shop" — self-service storefront creation & management.
  * If the sub has no shop, shows a create form (name, storefront link, phone)
  * that POSTs to /api/shop/profile (auto-approved). Once created, shows the
- * live storefront link and shortcuts to set prices / edit the shop.
+ * same shop Overview an owner gets (app/dashboard/shop/page.tsx).
  */
 
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/auth-context'
+import ShopOverviewPage from '@/app/dashboard/shop/page'
 
 interface Shop {
   shop_name: string
@@ -196,60 +197,10 @@ export default function SubShopPage() {
   }
 
   // ── Manage existing shop ──────────────────────────────────────────────
+  // Same overview a shop owner gets; its pricing / USSD / withdraw / recruit
+  // links switch to the sub-agent versions for a sub-agent.
   if (shop) {
-    const url = `${origin}/shop/${shop.shop_slug}`
-    const live = shop.approval_status === 'approved' && shop.is_active
-    return (
-      <div className="max-w-2xl mx-auto p-4 space-y-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">My Shop</h1>
-
-        <div className="bg-white dark:bg-gray-900 rounded-lg shadow p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">{shop.shop_name}</p>
-              <span
-                className={`inline-block mt-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                  live ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                }`}
-              >
-                {live ? 'Live' : shop.approval_status}
-              </span>
-            </div>
-            <span className="text-3xl">🏪</span>
-          </div>
-
-          <div>
-            <p className={labelCls}>Your storefront link</p>
-            <div className="flex gap-2">
-              <input readOnly value={url} className={`${inputCls} bg-gray-50 dark:bg-gray-800`} />
-              <button
-                onClick={() => navigator.clipboard?.writeText(url)}
-                className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-sm font-semibold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
-              >
-                Copy
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-3 pt-2">
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-5 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700"
-            >
-              Visit storefront
-            </a>
-            <a href="/dashboard/sub/pricing" className={btnOutline}>
-              Set your prices
-            </a>
-            <a href="/dashboard/shop/setup" className={btnOutline}>
-              Shop details & branding
-            </a>
-          </div>
-        </div>
-      </div>
-    )
+    return <ShopOverviewPage />
   }
 
   // ── Create shop ───────────────────────────────────────────────────────

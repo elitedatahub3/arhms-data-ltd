@@ -102,7 +102,9 @@ export function useAdminCounts() {
         const { count } = await (supabase
             .from('shop_wallet_transactions')
             .select('*', { count: 'exact', head: true })
-            .eq('status', 'pending') as any)
+            // Sub requests parked at 'shop_owner_pending' need an admin too: money
+            // already debited from a sub whose Lead never actioned the request.
+            .in('status', ['pending', 'shop_owner_pending']) as any)
         setCounts(prev => ({ ...prev, pendingWithdrawals: count || 0 }))
     }, [])
 

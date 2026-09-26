@@ -290,8 +290,14 @@ async function handleShopProfileWrite(request: NextRequest, mode: 'create' | 'up
 
 // ─── Sub-agent storefront seeding ─────────────────────────────────────────────
 // If the shop's owner is a sub-agent, make their brand-new storefront mirror the
-// upline (parent) shop: copy the parent's data-package catalog + airtime fees and
-// mark pricing approved so it goes live at once. No-op for regular shop owners.
+// upline (parent) shop: copy the parent's data-package catalog, Results Checker
+// and AFA prices + airtime fees, and mark pricing approved so it goes live at
+// once. No-op for regular shop owners.
+//
+// RC and AFA matter as much as data here. Both storefront tiles render only when
+// the shop has its own priced rows — /api/shop/rc/types returns {types: []} and
+// /api/shop/afa/config returns {enabled: false} otherwise — so before this,
+// every sub storefront silently sold data and airtime only, at any level.
 async function seedSubShopFromParent(supabaseAdmin: any, userId: string, newShopId: string) {
     try {
         const { data: sub } = await supabaseAdmin
@@ -322,6 +328,42 @@ async function seedSubShopFromParent(supabaseAdmin: any, userId: string, newShop
                 profit_margin: SUB_START_MARGIN,
             }))
             await supabaseAdmin.from('shop_pricing').insert(rows)
+        }
+
+        // Copy the parent's Results Checker catalogue.
+        const { data: parentRc } = await supabaseAdmin
+            .from('shop_rc_pricing')
+            .select('rc_type_id, selling_price')
+            .eq('shop_id', uplineShopId)
+
+        if (parentRc?.length) {
+            await supabaseAdmin.from('shop_rc_pricing').insert(
+                parentRc.map((r: any) => ({
+                    shop_id: newShopId,
+                    rc_type_id: r.rc_type_id,
+                    selling_price:
+                        Math.round((Number(r.selling_price) + SUB_START_MARGIN) * 100) / 100,
+                }))
+            )
+        }
+
+        // Copy the parent's AFA registration price. shop_afa_pricing is one row
+        // per shop (shop_id is UNIQUE), unlike the two catalogues above.
+        const { data: parentAfa } = await supabaseAdmin
+            .from('shop_afa_pricing')
+            .select('selling_price')
+            .eq('shop_id', uplineShopId)
+            .maybeSingle()
+
+        if (parentAfa?.selling_price != null) {
+            await supabaseAdmin.from('shop_afa_pricing').upsert(
+                {
+                    shop_id: newShopId,
+                    selling_price:
+                        Math.round((Number(parentAfa.selling_price) + SUB_START_MARGIN) * 100) / 100,
+                },
+                { onConflict: 'shop_id' }
+            )
         }
 
         // Mirror the parent's airtime fees and approve pricing so the storefront

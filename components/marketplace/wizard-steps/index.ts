@@ -1,7 +1,0 @@
-export { StepCategory } from './step-category'
-export { StepPhotos } from './step-photos'
-export { StepDetails } from './step-details'
-export { StepVariants } from './step-variants'
-export { StepPrice } from './step-price'
-export { StepLocation } from './step-location'
-export { StepReview } from './step-review'

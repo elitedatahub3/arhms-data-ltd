@@ -27,6 +27,9 @@ export default function SignupPage() {
         referralCode: '',
     })
     const [referrerName, setReferrerName] = useState<string | null>(null)
+    // True when the visitor arrived through a /r/<code> link: the code is already
+    // applied, so the manual Referral Code field is hidden.
+    const [codeFromLink, setCodeFromLink] = useState(false)
     const [showPassword, setShowPassword] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState('')
@@ -57,11 +60,19 @@ export default function SignupPage() {
         if (!code) return
 
         setFormData(prev => (prev.referralCode ? prev : { ...prev, referralCode: code }))
+        setCodeFromLink(true)
 
         fetch(`/api/referrals/resolve?code=${encodeURIComponent(code)}`)
             .then(r => (r.ok ? r.json() : null))
             .then(data => {
                 if (data?.valid && data.referrerName) setReferrerName(data.referrerName)
+                // A dead link: drop its code and give the manual field back. Only
+                // on an explicit valid:false — a failed or rate-limited lookup
+                // keeps the link's code, since the claim re-validates server-side.
+                if (data?.valid === false) {
+                    setCodeFromLink(false)
+                    setFormData(prev => (prev.referralCode === code ? { ...prev, referralCode: '' } : prev))
+                }
             })
             .catch(() => { /* a broken lookup must never block signup */ })
     }, [])
@@ -356,23 +367,25 @@ export default function SignupPage() {
                                 </div>
                             </div>
 
-                            <div className="space-y-2">
-                                <Label htmlFor="referralCode" className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">
-                                    Referral Code <span className="opacity-50">(Optional)</span>
-                                </Label>
-                                <div className="relative">
-                                    <Gift className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                    <Input
-                                        id="referralCode"
-                                        name="referralCode"
-                                        placeholder="KWAME7F2Q"
-                                        value={formData.referralCode}
-                                        onChange={handleChange}
-                                        autoCapitalize="characters"
-                                        className="h-12 pl-12 bg-background/50 border-border/50 focus:border-primary/50 rounded-2xl text-sm font-medium uppercase tracking-wider"
-                                    />
+                            {!codeFromLink && (
+                                <div className="space-y-2">
+                                    <Label htmlFor="referralCode" className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">
+                                        Referral Code <span className="opacity-50">(Optional)</span>
+                                    </Label>
+                                    <div className="relative">
+                                        <Gift className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                                        <Input
+                                            id="referralCode"
+                                            name="referralCode"
+                                            placeholder="KWAME7F2Q"
+                                            value={formData.referralCode}
+                                            onChange={handleChange}
+                                            autoCapitalize="characters"
+                                            className="h-12 pl-12 bg-background/50 border-border/50 focus:border-primary/50 rounded-2xl text-sm font-medium uppercase tracking-wider"
+                                        />
+                                    </div>
                                 </div>
-                            </div>
+                            )}
 
                             <Button
                                 type="submit"

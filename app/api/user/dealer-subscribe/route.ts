@@ -15,7 +15,14 @@ import {
     PAYSWITCH_CHANNEL_MAP,
 } from '@/lib/payswitch-payment-service'
 import { assignPayswitchTransactionId } from '@/lib/payswitch-reference'
-import { resolveProvider, isPaymentProvider, type PaymentProvider } from '@/lib/payment-provider'
+import { resolveProviderForScope, isPaymentProvider, type PaymentProvider } from '@/lib/payment-provider'
+import { paystackMomoProviderFor, verifyTransaction } from '@/lib/paystack-momo-service'
+import {
+    startPaystackMomoCharge,
+    submitPaystackMomoOtp,
+    assertOwnPendingPayment,
+    type MomoChargeResult,
+} from '@/lib/paystack-momo-checkout'
 import { claimHubtelStatusCheck, PAYSWITCH_CLIENT_THROTTLE_KEYS } from '@/lib/hubtel-status-throttle'
 import { processCompletedDealerSubscription } from '@/lib/payments'
 
@@ -59,10 +66,23 @@ export async function POST(request: NextRequest) {
         const settingsMap: Record<string, string> = {}
         for (const row of (settings || [])) settingsMap[row.key] = row.value
 
-        // Provider resolution: body takes priority (frontend toggle), fall back to admin setting
-        const provider: PaymentProvider = isPaymentProvider(bodyProvider)
-            ? bodyProvider
-            : resolveProvider(settingsMap.active_payment_provider_web)
+        // The admin setting is the only source of truth. The body used to win, which
+        // let a client pick the gateway that collects its own payment — and once a
+        // gateway exists that the UI has not been taught to drive, that is a request
+        // shaped for one rail being charged on another. Logged rather than rejected
+        // so an older client keeps working instead of failing at checkout.
+        if (bodyProvider && isPaymentProvider(bodyProvider)) {
+            const resolved = resolveProviderForScope(settingsMap.active_payment_provider_web, 'web')
+            if (bodyProvider !== resolved) {
+                console.warn(
+                    `[DealerSubscribe] Ignoring client-supplied provider '${bodyProvider}'; using '${resolved}' from active_payment_provider_web.`
+                )
+            }
+        }
+        const provider: PaymentProvider = resolveProviderForScope(
+            settingsMap.active_payment_provider_web,
+            'web'
+        )
 
         const priceKey = planType === 'dealer_3m' ? 'dealer_subscription_price_3m' : 'dealer_subscription_price_6m'
         const subscriptionPrice = parseFloat(settingsMap[priceKey] || '0')
@@ -169,6 +189,49 @@ export async function POST(request: NextRequest) {
                 authorization_url: paystackData.data.authorization_url,
                 reference,
             })
+        }
+
+        // ── PAYSTACK MOBILE MONEY BRANCH ────────────────────────────────────────
+        if (provider === 'paystack_momo') {
+            if (!phone || !network || !paystackMomoProviderFor(network)) {
+                return NextResponse.json({ error: 'Valid phone number and network are required' }, { status: 400 })
+            }
+
+            const finish = async (result: MomoChargeResult) => {
+                if (!result.ok) {
+                    if (result.safeToMarkFailed && !existingRef) {
+                        await (supabaseAdmin.from('wallet_payments') as any)
+                            .update({ status: 'failed' })
+                            .eq('reference', reference)
+                            .eq('status', 'pending')
+                    }
+                    return NextResponse.json(result.body, { status: result.httpStatus })
+                }
+                if (result.outcome === 'paid') {
+                    await processCompletedDealerSubscription(reference, {
+                        reference,
+                        amount: Math.round(subscriptionPrice * 100),
+                        metadata: { upgrade_type: 'dealer_subscription' },
+                    })
+                }
+                return NextResponse.json(result.body)
+            }
+
+            if (otpCode && existingRef) {
+                if (!await assertOwnPendingPayment(supabaseAdmin, existingRef, authUser.id)) {
+                    return NextResponse.json({ error: 'That payment is no longer waiting for a code' }, { status: 404 })
+                }
+                return finish(await submitPaystackMomoOtp({ reference: existingRef, otp: String(otpCode), payerPhone: phone }))
+            }
+
+            return finish(await startPaystackMomoCharge({
+                reference,
+                amountGhs: subscriptionPrice,
+                payerPhone: phone,
+                network,
+                metadata: { user_id: authUser.id, upgrade_type: 'dealer_subscription', kind: 'dealer_subscription' },
+                userId: authUser.id,
+            }))
         }
 
         // ── HUBTEL BRANCH ───────────────────────────────────────────────────────
@@ -371,19 +434,18 @@ export async function GET(request: NextRequest) {
             if (payswitchStatus.outcome === 'failed') {
                 return NextResponse.json({ success: false, status: 'failed' })
             }
-        } else if (paymentProvider === 'paystack') {
-            const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-                headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
-            })
-            const verifyData = await verifyRes.json().catch(() => null)
+        } else if (paymentProvider === 'paystack' || paymentProvider === 'paystack_momo') {
+            // Both Paystack rails verify the same way — one merchant account, one
+            // reference namespace. Routed through verifyTransaction() rather than the
+            // inline fetch this used to hold, so there is a single place that decides
+            // what each Paystack status means. Note it treats an unbooked charge as
+            // pending rather than failed, which the raw fetch did not.
+            const verified = await verifyTransaction(reference)
 
-            if (!verifyData?.status) {
-                return NextResponse.json({ success: true, status: 'pending' })
-            }
-            if (verifyData.data?.status === 'failed' || verifyData.data?.status === 'abandoned') {
+            if (verified.outcome === 'failed') {
                 return NextResponse.json({ success: false, status: 'failed' })
             }
-            if (verifyData.data?.status !== 'success') {
+            if (verified.outcome !== 'paid') {
                 return NextResponse.json({ success: true, status: 'pending' })
             }
         } else {

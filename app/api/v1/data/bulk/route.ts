@@ -4,8 +4,6 @@ import {
     logApiRequest, getClientIp,
 } from '@/lib/api-auth'
 import { generateReferenceCode } from '@/lib/utils'
-import { checkMtnRegistrationBatch, MTN_NOT_REGISTERED, REGISTRATION_WAIT_TEXT } from '@/lib/mtn-registration-gate'
-import { validateGhanaianPhone } from '@/lib/phone-validation'
 
 const ENDPOINT = '/api/v1/data/bulk'
 const MAX_ORDERS = 100
@@ -89,35 +87,9 @@ export async function POST(request: NextRequest) {
         totalCost += price
     }
 
-    // ── MTN REGISTRATION GATE ────────────────────────────────────────────────
-    // One upstream round-trip for the whole batch, before the wallet is touched.
-    const registrationGate = await checkMtnRegistrationBatch(
-        supabase,
-        resolved.map(r => ({ phoneNumber: r.phone, packageNetwork: r.pkg.network }))
-    )
-
-    if (registrationGate.unregistered.length > 0 && body.acknowledge_registration !== true) {
-        logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'POST', statusCode: 409, responseTimeMs: Date.now() - startTime, ip, errorMessage: 'MTN numbers not registered' })
-        return NextResponse.json({
-            success: false,
-            error: {
-                code: 409,
-                message: `${registrationGate.unregistered.length} of ${resolved.length} recipients are MTN numbers that are not registered yet. Registration takes ${REGISTRATION_WAIT_TEXT}. Retry with acknowledge_registration: true to place the batch anyway — those orders will be held and delivered automatically once the numbers are enabled.`,
-                type: MTN_NOT_REGISTERED,
-            },
-            registration: {
-                unregistered: registrationGate.unregistered,
-                total: resolved.length,
-                estimated_wait: REGISTRATION_WAIT_TEXT,
-            },
-        }, { status: 409 })
-    }
-
-    const unregisteredSet = new Set(registrationGate.unregistered)
-    const isHeldForRegistration = (phone: string) => {
-        const validation = validateGhanaianPhone(phone)
-        return validation.isValid && unregisteredSet.has(validation.normalizedNumber)
-    }
+    // NOTE: the MTN registration gate deliberately does NOT run here. This endpoint no
+    // longer returns 409 MTN_NOT_REGISTERED, and acknowledge_registration is accepted
+    // but ignored — see app/api/orders/purchase/route.ts for the reasoning.
 
     // Single atomic wallet deduction for total
     const { data: deductResult, error: deductError } = await (supabase as any).rpc('deduct_wallet_balance', {
@@ -155,13 +127,11 @@ export async function POST(request: NextRequest) {
         fulfillment_method: 'auto',
         source:             'api',
         api_key_id:         apiKeyId,
-        awaiting_registration: isHeldForRegistration(phone),
-        registration_submitted_at: isHeldForRegistration(phone) ? new Date().toISOString() : null,
     }))
 
     const { data: createdOrders, error: insertError } = await (supabase.from('orders') as any)
         .insert(orderInserts)
-        .select('id, reference_code, network, size, phone_number, awaiting_registration')
+        .select('id, reference_code, network, size, phone_number')
 
     if (insertError) {
         // Refund full amount
@@ -183,15 +153,6 @@ export async function POST(request: NextRequest) {
     }))
     ;(supabase.from('wallet_transactions') as any).insert(txInserts).then(() => {}).catch(() => {})
 
-    // Tell the recipients of held orders once, here. The retry cron must never send it.
-    const heldOrders = (createdOrders as any[]).filter((o: any) => o.awaiting_registration === true)
-    if (heldOrders.length > 0) {
-        const { sendMtnVerificationPendingSMS } = await import('@/lib/sms-service')
-        await Promise.allSettled(heldOrders.map((o: any) =>
-            sendMtnVerificationPendingSMS(o.phone_number, { network: o.network, size: o.size })
-        ))
-    }
-
     logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'POST', statusCode: 201, responseTimeMs: Date.now() - startTime, ip })
 
     return apiSuccess({
@@ -202,7 +163,6 @@ export async function POST(request: NextRequest) {
             network:   o.network,
             size:      o.size,
             recipient: o.phone_number,
-            awaiting_registration: o.awaiting_registration === true,
         })),
         total_charged:  totalCost,
         wallet_balance: newBalance,

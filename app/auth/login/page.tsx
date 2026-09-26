@@ -191,16 +191,6 @@ export default function LoginPage() {
 
                             <Button
                                 asChild
-                                className="h-14 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase tracking-widest text-xs transition-all group"
-                            >
-                                <Link href="/classifieds/become-seller">
-                                    <ShoppingBag className="w-4 h-4 mr-2" />
-                                    Become a Seller
-                                </Link>
-                            </Button>
-
-                            <Button
-                                asChild
                                 variant="outline"
                                 className="h-14 rounded-2xl border-primary/20 bg-primary/5 hover:bg-primary/10 text-primary font-black uppercase tracking-widest text-xs transition-all group"
                             >

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { resolveBrandContext } from '@/lib/brand-context'
+import { resolveSubAgentContext, canRecruit } from '@/lib/sub-agents'
 
 /**
  * GET /api/dashboard/sub/data
@@ -72,8 +73,15 @@ export async function GET(request: NextRequest) {
     // Get brand context
     const brandConfig = await resolveBrandContext(user.id, supabase)
 
+    // May this sub recruit sub-agents of their own? True at level 1, false at
+    // level 2 — the portal shell uses it to decide whether to show the
+    // recruiting nav entry, and /api/shop/invites enforces the same rule.
+    const subContext = await resolveSubAgentContext(supabase, user.id)
+
     return NextResponse.json({
       status: subAgent.status,
+      depth: subContext.depth,
+      canRecruit: canRecruit(subContext),
       walletBalance: wallet?.balance || 0,
       totalEarned: wallet?.total_earned || 0,
       totalWithdrawn: wallet?.total_withdrawn || 0,

@@ -62,6 +62,13 @@ export default function UpgradePage() {
         'permanent': 0
     })
 
+    const [enabledPlans, setEnabledPlans] = useState({
+        '3d': true,
+        '14d': true,
+        '30d': true,
+        'permanent': true
+    })
+
     const [dealerPrice6m, setDealerPrice6m] = useState(0)
     const [dealerPrice3m, setDealerPrice3m] = useState(0)
     const [showStrikethrough, setShowStrikethrough] = useState(false)
@@ -98,6 +105,7 @@ export default function UpgradePage() {
                 setPrices(data.prices)
                 setOldPrices(data.oldPrices || { '3d': 0, '14d': 0, '30d': 0, 'permanent': 0 })
                 setShowStrikethrough(data.showStrikethrough || false)
+                if (data.enabledPlans) setEnabledPlans(data.enabledPlans)
                 setDealerPrice6m(data.dealerPrice6m ?? 0)
                 setDealerPrice3m(data.dealerPrice3m ?? 0)
                 setIsLoading(false)
@@ -426,7 +434,9 @@ export default function UpgradePage() {
             priceColor: 'text-slate-900',
             bgClass: 'bg-gradient-to-b from-slate-50 to-slate-100'
         }
-    ]
+    ].filter(tier => enabledPlans[tier.id as keyof typeof enabledPlans])
+
+    const hasAgentPlans = tiers.length > 0
 
     const commonFeatures = [
         'Exclusive Wholesale Pricing',
@@ -478,6 +488,7 @@ export default function UpgradePage() {
 
                     <div className="w-full flex flex-col gap-5">
                         {/* Become an Agent */}
+                        {hasAgentPlans && (
                         <div className="w-full rounded-2xl bg-white/90 backdrop-blur border-2 border-amber-300 shadow-xl p-6">
                             <div className="flex items-center gap-4 mb-4">
                                 <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
@@ -504,6 +515,7 @@ export default function UpgradePage() {
                                 See Agent Plans
                             </Button>
                         </div>
+                        )}
 
                         {/* Become a Dealer */}
                         <div className="w-full rounded-2xl bg-white/90 backdrop-blur border-2 border-violet-300 shadow-xl p-6">
@@ -843,15 +855,17 @@ export default function UpgradePage() {
                                     ← Back to all options
                                 </button>
                             )}
-                            <p className="text-xs text-white/70 text-center">
-                                Want agent-level access instead?{' '}
-                                <button
-                                    onClick={() => router.push('/dashboard/upgrade?view=agent')}
-                                    className="underline text-white font-bold hover:text-yellow-200"
-                                >
-                                    See agent plans
-                                </button>
-                            </p>
+                            {hasAgentPlans && (
+                                <p className="text-xs text-white/70 text-center">
+                                    Want agent-level access instead?{' '}
+                                    <button
+                                        onClick={() => router.push('/dashboard/upgrade?view=agent')}
+                                        className="underline text-white font-bold hover:text-yellow-200"
+                                    >
+                                        See agent plans
+                                    </button>
+                                </p>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -923,8 +937,22 @@ export default function UpgradePage() {
 
                     {!isPermanentAgent && (
                         <>
+                            {!hasAgentPlans && (
+                                <div className="w-full max-w-xl mb-12 rounded-2xl bg-white/90 border-2 border-amber-300 shadow-xl p-6 text-center">
+                                    <p className="font-black text-gray-900">Agent plans are currently unavailable</p>
+                                    <p className="text-sm text-gray-500 font-bold mt-1">Please check back later.</p>
+                                </div>
+                            )}
+
                             {/* Plans Grid */}
-                            <div id="pricing-plans" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 mb-12 w-full max-w-7xl items-stretch px-2 sm:px-0">
+                            <div id="pricing-plans" className={cn(
+                                "grid grid-cols-1 gap-4 lg:gap-5 mb-12 w-full items-stretch px-2 sm:px-0 mx-auto",
+                                !hasAgentPlans && "hidden",
+                                tiers.length === 1 && "max-w-sm",
+                                tiers.length === 2 && "sm:grid-cols-2 max-w-3xl",
+                                tiers.length === 3 && "sm:grid-cols-2 lg:grid-cols-3 max-w-5xl",
+                                tiers.length >= 4 && "sm:grid-cols-2 lg:grid-cols-4 max-w-7xl"
+                            )}>
                                 {tiers.map((tier) => (
                                     <div
                                         key={tier.id}

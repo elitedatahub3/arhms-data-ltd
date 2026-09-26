@@ -3,6 +3,7 @@ import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { processCompletedUpgradePayment } from '@/lib/payments'
 import { checkPaymentStatus } from '@/lib/moolre-payment-service'
+import { verifyTransaction } from '@/lib/paystack-momo-service'
 import { createServerClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
@@ -29,33 +30,50 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'Not an upgrade reference' }, { status: 400 })
         }
 
-        // 4. Verify with Moolre directly
-        const moolreResponse = await checkPaymentStatus(reference)
-
-        if (!moolreResponse.success || moolreResponse.txstatus === null) {
-            console.error('[UpgradeVerify] Moolre verification failed:', moolreResponse.error)
-            return NextResponse.json({ success: true, status: 'pending', error: 'Payment check failed temporarily' })
-        }
-
-        if (moolreResponse.txstatus === 0 || moolreResponse.txstatus === 3) {
-            return NextResponse.json({ success: true, status: 'pending' })
-        }
-
-        if (moolreResponse.txstatus === 2) {
-            return NextResponse.json({ success: false, status: 'failed' })
-        }
-
-        // Moolre doesn't return metadata, we fetch it from the database
+        // 4. Verify with whichever gateway actually collected.
+        //
+        // This used to query Moolre unconditionally, for every provider. That was
+        // already wrong for Hubtel and PaySwitch upgrades — Moolre cannot verify a
+        // reference it never issued, so those polled as "pending" until the webhook
+        // landed — and it would be worse for Paystack MoMo, which emits no callback
+        // at all on a declined prompt. So read the row first and ask its own gateway.
         const supabaseServer = createServerClient()
         const { data: payment } = await supabaseServer
             .from('wallet_payments')
-            .select('total_amount, metadata')
+            .select('total_amount, metadata, provider')
             .eq('reference', reference)
             .single()
 
         if (!payment) {
             console.error('[UpgradeVerify] Payment not found in database:', reference)
             return NextResponse.json({ success: false, status: 'failed', error: 'Payment record not found' }, { status: 400 })
+        }
+
+        const provider = String((payment as any).provider || '')
+
+        if (provider === 'paystack' || provider === 'paystack_momo') {
+            const verified = await verifyTransaction(reference)
+            if (verified.outcome === 'failed') {
+                return NextResponse.json({ success: false, status: 'failed' })
+            }
+            if (verified.outcome !== 'paid') {
+                return NextResponse.json({ success: true, status: 'pending' })
+            }
+        } else {
+            const moolreResponse = await checkPaymentStatus(reference)
+
+            if (!moolreResponse.success || moolreResponse.txstatus === null) {
+                console.error('[UpgradeVerify] Moolre verification failed:', moolreResponse.error)
+                return NextResponse.json({ success: true, status: 'pending', error: 'Payment check failed temporarily' })
+            }
+
+            if (moolreResponse.txstatus === 0 || moolreResponse.txstatus === 3) {
+                return NextResponse.json({ success: true, status: 'pending' })
+            }
+
+            if (moolreResponse.txstatus === 2) {
+                return NextResponse.json({ success: false, status: 'failed' })
+            }
         }
 
         const metadata = (payment as any).metadata || {}

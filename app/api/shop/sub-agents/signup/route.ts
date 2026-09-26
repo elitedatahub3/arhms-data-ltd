@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
+import { resolveSubAgentContext, canRecruit, DEPTH_LIMIT_ERROR } from '@/lib/sub-agents'
 
 let signupRateLimit: Ratelimit | null = null
 try {
@@ -178,6 +179,23 @@ export async function POST(request: NextRequest) {
     if (!uplineShop) {
       return NextResponse.json(
         { error: 'This invite is no longer valid. Ask your Lead for a new link.' },
+        { status: 400 }
+      )
+    }
+
+    // 1a-ii. The network is three levels deep, so the inviter may themselves be
+    //     a sub. They may only recruit while active and above the depth cap —
+    //     a level-2 sub is the bottom. /api/shop/invites refuses to mint the
+    //     link in the first place; this catches a link minted before the
+    //     inviter was suspended or moved, and the DB trigger backs both up.
+    const inviterContext = await resolveSubAgentContext(supabase, uplineShop.owner_id)
+    if (!canRecruit(inviterContext)) {
+      return NextResponse.json(
+        {
+          error: inviterContext.status !== 'active'
+            ? 'This shop is not currently accepting new sub-agents.'
+            : DEPTH_LIMIT_ERROR,
+        },
         { status: 400 }
       )
     }

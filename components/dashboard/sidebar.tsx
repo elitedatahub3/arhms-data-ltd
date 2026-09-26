@@ -25,6 +25,7 @@ import {
     LogOut,
     Settings,
     Shield,
+    ShieldCheck,
     Crown,
     Star,
     BadgeCheck,
@@ -38,6 +39,7 @@ import {
     Zap,
     Download,
     Code2,
+    Percent,
     CreditCard,
     Loader2,
     Receipt,
@@ -47,8 +49,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useAdminCounts } from '@/hooks/use-admin-counts'
-import { roleConfig } from '@/lib/roles'
-import { shopNavItems } from '@/lib/dashboard-nav'
+import { roleConfig, subAgentRoleConfig } from '@/lib/roles'
+import { shopNavItems, subShopNavItems } from '@/lib/dashboard-nav'
 import { BrandLogo } from '@/components/BrandLogo'
 
 const userNavItems = [
@@ -62,7 +64,6 @@ const userNavItems = [
     { href: '/dashboard/data-packages?network=Special%20MTN%20Mashup', label: 'Special MTN Mashup', icon: Zap },
     { href: '/dashboard/data-packages?network=EXPRESS%20MTN', label: 'EXPRESS MTN', icon: Zap },
     { href: '/dashboard/my-orders', label: 'Orders', icon: ShoppingCart },
-    { href: process.env.NEXT_PUBLIC_MARKETPLACE_URL || 'https://marketplace.arhmsgh.com', label: 'Marketplace', icon: Store, external: true },
     { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
     { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
     { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
@@ -70,13 +71,31 @@ const userNavItems = [
     { href: '/dashboard/profile', label: 'Profile', icon: User },
     { href: '/dashboard/install', label: 'Download App', icon: Download },
     { href: '/dashboard/developer-api', label: 'Developer API', icon: Code2 },
+    { href: '/dashboard/commission-wallet', label: 'Commission Wallet', icon: Percent },
 ]
+
+/**
+ * A sub-agent's own dashboard/orders/AFA/Results-Checker/Bill-Payments pages
+ * live under /dashboard/sub/* — separate implementations (own wallet debit,
+ * upline-resolved pricing floor, owner-approved withdrawals) from the shared
+ * customer pages `userNavItems` otherwise points at. Everything not listed
+ * here (Data Packages, Buy Airtime, Wallet, Refer & Earn,
+ * Transactions, Complaints, Profile, Download App, Developer API, Commission
+ * Wallet) is genuinely shared and needs no remap.
+ */
+const SUB_AGENT_HREF_OVERRIDES: Record<string, string> = {
+    '/dashboard/results-checker': '/dashboard/sub/rc',
+    '/dashboard/afa-orders': '/dashboard/sub/afa',
+    '/dashboard/utilities': '/dashboard/sub/utilities',
+    '/dashboard/my-orders': '/dashboard/sub/orders',
+}
 
 const adminNavItems = [
     { href: '/admin', label: 'Dashboard', icon: Shield },
     { href: '/admin/top-up', label: 'Top-Up', icon: Wallet },
     { href: '/admin/orders', label: 'Orders', icon: ShoppingCart },
     { href: '/admin/fulfillment', label: 'Fulfillment', icon: Activity },
+    { href: '/admin/up2u-checker', label: 'UP2U Checker', icon: ShieldCheck },
     { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
     { href: '/admin/airtime', label: 'Airtime', icon: Phone },
     { href: '/admin/utilities', label: 'Utility Bills', icon: Receipt },
@@ -85,11 +104,11 @@ const adminNavItems = [
     { href: '/admin/express-orders', label: 'EXPRESS MTN', icon: Zap },
     { href: '/admin/shops', label: 'Shops', icon: Store },
     { href: '/admin/shops/withdrawals', label: 'Shop Withdrawals', icon: Banknote },
+    { href: '/admin/commission-withdrawals', label: 'Commission Payouts', icon: Percent },
     { href: '/admin/afa-management', label: 'AFA Management', icon: BadgeCheck },
     { href: '/admin/memberships', label: 'Agent Members', icon: Crown },
     { href: '/admin/users', label: 'Users', icon: Users },
     { href: '/admin/packages', label: 'Packages', icon: Package },
-    { href: '/classifieds/admin/dashboard', label: 'Classifieds', icon: Store },
     { href: '/admin/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/admin/announcements', label: 'Announce', icon: Bell },
     { href: '/admin/sms-broadcast', label: 'SMS', icon: MessageSquare },
@@ -104,7 +123,7 @@ const adminNavItems = [
 
 export function DashboardSidebar() {
     const pathname = usePathname()
-    const { dbUser, isAdmin, isSubAdmin, signOut } = useAuth()
+    const { dbUser, isAdmin, isSubAdmin, isSubAgent, subAgentRecruitBlocked, signOut } = useAuth()
     const { isInternalSidebarOpen, closeSidebar, isCollapsed, toggleCollapse } = useUI()
     const { isPageAccessible, loading: pageAccessLoading } = usePageAccess()
     const [walletBalance, setWalletBalance] = useState(0)
@@ -171,8 +190,11 @@ export function DashboardSidebar() {
         setProviderSaving(null)
     }
 
-    // My Shop accordion — auto-expands on any /dashboard/shop route
-    const isOnShopRoute = pathname?.startsWith('/dashboard/shop') ?? false
+    // My Shop accordion — auto-expands on any shop route (a sub-agent's shop
+    // lives under /dashboard/sub/*, not /dashboard/shop/*)
+    const isOnShopRoute = isSubAgent
+        ? subShopNavItems.some(item => item.href === '/dashboard/sub' ? pathname === item.href : pathname?.startsWith(item.href))
+        : (pathname?.startsWith('/dashboard/shop') ?? false)
     const [shopGroupOpen, setShopGroupOpen] = useState(isOnShopRoute)
     useEffect(() => {
         if (isOnShopRoute) setShopGroupOpen(true)
@@ -260,15 +282,31 @@ export function DashboardSidebar() {
     }, [])
 
     const isLinkActive = (href: string) => {
-        if (href === '/dashboard' || href === '/admin' || href === '/dashboard/shop') {
+        if (href === '/dashboard' || href === '/admin' || href === '/dashboard/shop' || href === '/dashboard/sub' || href === '/dashboard/sub/shop') {
             return pathname === href
         }
         return pathname?.startsWith(href)
     }
 
+    // Sub-agents run their Home/Results Checker/AFA/Pay Bills/Orders through
+    // their own /dashboard/sub/* implementations (see SUB_AGENT_HREF_OVERRIDES);
+    // Role Upgrade doesn't apply to them at all. Everything else in
+    // `userNavItems` is genuinely shared and passes through unchanged.
+    const resolvedUserNavItems = userNavItems
+        .filter(item => !isSubAgent || item.label !== 'Role Upgrade')
+        .map(item => (isSubAgent && SUB_AGENT_HREF_OVERRIDES[item.href])
+            ? { ...item, href: SUB_AGENT_HREF_OVERRIDES[item.href] }
+            : item)
+
+    const resolvedShopNavItems = isSubAgent
+        ? subShopNavItems.filter(item => !subAgentRecruitBlocked || item.label !== 'My Sub-Agents')
+        : shopNavItems
+
     // Get role config
     const userRole = isAdmin ? 'admin' : isSubAdmin ? 'sub-admin' : (dbUser?.role || 'customer') as keyof typeof roleConfig
-    const currentRole = roleConfig[userRole] || roleConfig['customer']
+    const currentRole = isSubAgent && !isAdmin && !isSubAdmin
+        ? subAgentRoleConfig
+        : (roleConfig[userRole] || roleConfig['customer'])
     const RoleIcon = currentRole.icon
     // Roles whose sidebar chrome is a solid dark panel need light-on-dark
     // treatment for anything rendered inside it.
@@ -434,7 +472,7 @@ export function DashboardSidebar() {
                                                     : currentRole.badgeClass
                                             )}
                                         >
-                                            {currentRole.label}
+                                            {isSubAgent ? 'Sub-Agent' : currentRole.label}
                                         </span>
                                     </div>
                                 </div>
@@ -489,7 +527,7 @@ export function DashboardSidebar() {
                         </p>
                     )}
 
-                    {userNavItems
+                    {resolvedUserNavItems
                     .filter(item => !rcOnly || item.href === '/dashboard/results-checker')
                     .filter(item => (!hideMashup || item.label !== 'Special MTN Mashup') && (!hideExpressMtn || item.label !== 'EXPRESS MTN'))
                     .filter(item => isPageAccessible('/dashboard/data-packages') || !item.href.startsWith('/dashboard/data-packages'))
@@ -533,7 +571,7 @@ export function DashboardSidebar() {
                             )}
 
                             {isCollapsed ? (
-                                <Link href="/dashboard/shop" onClick={() => {
+                                <Link href={isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop'} onClick={() => {
                                     if (window.innerWidth < 1024) closeSidebar()
                                 }}>
                                     <div className={cn(
@@ -565,7 +603,7 @@ export function DashboardSidebar() {
                                             "ml-4 pl-4 border-l space-y-0.5 mt-0.5",
                                             dbUser?.role === 'dealer' ? "border-white/10" : "border-border/30"
                                         )}>
-                                            {shopNavItems.map((item) => {
+                                            {resolvedShopNavItems.filter((item) => isPageAccessible(item.href)).map((item) => {
                                                 const isActive = isLinkActive(item.href)
                                                 return (
                                                     <Link key={item.href} href={item.href} onClick={() => {

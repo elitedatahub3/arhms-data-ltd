@@ -14,6 +14,14 @@ import { logFulfillment } from '@/lib/hubtel-payment-log';
  * result-checker voucher + SMS) and then POST an acknowledgement back to
  * Hubtel's gs-callback within one hour.
  *
+ * NO LONGER THE PRIMARY PATH. USSD sales are collected by Paystack Mobile Money
+ * now and fulfilled from /api/webhooks/paystack; this endpoint only fires when
+ * the USSD payment scope is set to Hubtel (Admin -> Settings -> USSD Payments,
+ * backed by admin_settings.active_payment_provider_ussd), or for
+ * an AddToCart order that was already in flight when that switch was flipped.
+ * It stays fully wired and deliberately ungated: anything Hubtel has already
+ * charged still has to be delivered.
+ *
  * Fulfilment payload shape (see docs):
  *   { SessionId, OrderId, OrderInfo: { Status, Payment: { IsSuccessful, AmountPaid }, Items: [...] } }
  *

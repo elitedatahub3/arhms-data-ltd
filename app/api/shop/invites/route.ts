@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { nanoid } from 'nanoid'
+import {
+  resolveSubAgentContext,
+  canRecruit,
+  DEPTH_LIMIT_ERROR,
+  SUB_INACTIVE_ERROR,
+} from '@/lib/sub-agents'
 
 /**
  * GET /api/shop/invites
@@ -69,7 +75,11 @@ export async function GET(request: NextRequest) {
  * POST /api/shop/invites
  * Create a new invite code for sub-agent recruitment
  *
- * Authorization: User must own the shop
+ * Authorization: User must own the shop AND be allowed to recruit. A Lead
+ * always may; a sub may while they are active and above the depth cap. A
+ * level-2 sub is the bottom of the network and is refused here, so they never
+ * get a link to hand out — the DB trigger enforces the same rule at signup.
+ *
  * Body: { maxUses?: number, expiresInHours?: number }
  * Response: { code, expiresAt }
  */
@@ -97,6 +107,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Shop not found' },
         { status: 404 }
+      )
+    }
+
+    // Owning a shop is not on its own a licence to recruit: a sub owns one too,
+    // which is exactly how the network could previously grow a third level that
+    // nothing priced or paid.
+    const subContext = await resolveSubAgentContext(supabase, user.id)
+    if (!canRecruit(subContext)) {
+      return NextResponse.json(
+        {
+          error: subContext.status !== 'active'
+            ? SUB_INACTIVE_ERROR
+            : DEPTH_LIMIT_ERROR,
+        },
+        { status: 403 }
       )
     }
 

@@ -11,6 +11,13 @@ import {
 } from '@/lib/payswitch-payment-service'
 import { mapPayswitchTransaction } from '@/lib/payswitch-reference'
 import { resolveProviderForScope, type PaymentProvider } from '@/lib/payment-provider'
+import { paystackMomoProviderFor } from '@/lib/paystack-momo-service'
+import {
+    startPaystackMomoCharge,
+    submitPaystackMomoOtp,
+    markPaystackMomoPending,
+    clearPaystackMomoPending,
+} from '@/lib/paystack-momo-checkout'
 
 export async function POST(request: NextRequest) {
     try {
@@ -43,6 +50,7 @@ export async function POST(request: NextRequest) {
             momoPhone,
             momoNetwork,
             otpCode,
+            reference: existingRef,
         } = body
 
         // Resolve gateway from admin setting (runtime toggle, no redeployment needed)
@@ -70,40 +78,121 @@ export async function POST(request: NextRequest) {
             type,
             quantity,
             userRole,
-            includePaystackFee: gateway === 'paystack' || gateway === 'payswitch',
+            includePaystackFee: gateway === 'paystack' || gateway === 'paystack_momo' || gateway === 'payswitch',
         })
 
-        // Generate unique reference
-        const referenceCode = `RC-${Date.now()}`
+        // Reuse the order on a retry rather than minting a new one.
+        //
+        // This route had no reference-reuse path at all: every POST created a fresh
+        // order and a fresh reference, so an OTP retry left the first order orphaned
+        // at 'pending_payment' forever. Under Moolre that was an untidy row; on the
+        // Paystack rail it is fatal, because submit_otp identifies the charge by the
+        // ORIGINAL reference and a new one has no charge behind it.
+        let referenceCode: string
+        let order: any
 
-        // Insert pending order.
-        // Must use the service-role client: RLS only allows admins to INSERT into
-        // results_checker_orders, so the request-scoped client would be rejected.
-        const { data: order, error: orderError } = await (dbAdmin
-            .from('results_checker_orders') as any)
-            .insert({
-                user_id: userId,
-                user_role: userRole,
-                customer_name: customerName || 'Guest Customer',
-                customer_email: customerEmail,
-                customer_phone: customerPhone,
-                type_id: typeId,
-                type_name: type.name,
-                quantity,
-                unit_price: breakdown.unitPrice,
-                cost_price_at_time: type.cost_price,
-                fee_amount: breakdown.paystackFee,
-                total_paid: breakdown.total,
-                status: 'pending',
-                payment_status: 'pending_payment',
-                reference_code: referenceCode,
+        if (existingRef) {
+            if (!String(existingRef).startsWith('RC-')) {
+                return NextResponse.json({ error: 'Invalid payment reference' }, { status: 400 })
+            }
+            const { data: existingOrder } = await (dbAdmin
+                .from('results_checker_orders') as any)
+                .select('*')
+                .eq('reference_code', existingRef)
+                .maybeSingle()
+
+            if (!existingOrder || existingOrder.payment_status !== 'pending_payment') {
+                return NextResponse.json(
+                    { error: 'That payment is no longer waiting for a code' },
+                    { status: 404 }
+                )
+            }
+            // Signed-in buyers own their order; a guest proves it with the phone the
+            // charge was raised against, since the reference is guessable.
+            const ownsOrder = userId
+                ? existingOrder.user_id === userId
+                : String(existingOrder.customer_phone || '') === String(customerPhone || '')
+            if (!ownsOrder) {
+                return NextResponse.json({ error: 'That payment is no longer waiting for a code' }, { status: 404 })
+            }
+
+            referenceCode = existingRef
+            order = existingOrder
+        } else {
+            referenceCode = `RC-${Date.now()}`
+
+            // Insert pending order.
+            // Must use the service-role client: RLS only allows admins to INSERT into
+            // results_checker_orders, so the request-scoped client would be rejected.
+            const { data: newOrder, error: orderError } = await (dbAdmin
+                .from('results_checker_orders') as any)
+                .insert({
+                    user_id: userId,
+                    user_role: userRole,
+                    customer_name: customerName || 'Guest Customer',
+                    customer_email: customerEmail,
+                    customer_phone: customerPhone,
+                    type_id: typeId,
+                    type_name: type.name,
+                    quantity,
+                    unit_price: breakdown.unitPrice,
+                    cost_price_at_time: type.cost_price,
+                    fee_amount: breakdown.paystackFee,
+                    total_paid: breakdown.total,
+                    status: 'pending',
+                    payment_status: 'pending_payment',
+                    reference_code: referenceCode,
+                })
+                .select()
+                .single()
+
+            if (orderError || !newOrder) {
+                console.error('[GatewayInit] Order creation failed:', orderError)
+                return NextResponse.json({ error: 'Failed to initialize order' }, { status: 500 })
+            }
+            order = newOrder
+        }
+
+        // ── PAYSTACK MOBILE MONEY BRANCH ─────────────────────────────────────────
+        if (gateway === 'paystack_momo') {
+            if (!momoPhone || !momoNetwork || !paystackMomoProviderFor(momoNetwork)) {
+                return NextResponse.json({ error: 'Valid Mobile Money network is required' }, { status: 400 })
+            }
+
+            if (otpCode && existingRef) {
+                const otpResult = await submitPaystackMomoOtp({ reference: referenceCode, otp: String(otpCode), payerPhone: momoPhone })
+                return NextResponse.json(otpResult.body, otpResult.ok ? undefined : { status: otpResult.httpStatus })
+            }
+
+            if (!existingRef) {
+                // No wallet_payments row on this flow, so the marker is the only
+                // handle the reconciliation sweep has on it.
+                await markPaystackMomoPending(referenceCode, { kind: 'rc' })
+            }
+
+            const charge = await startPaystackMomoCharge({
+                reference: referenceCode,
+                amountGhs: breakdown.total,
+                payerPhone: momoPhone,
+                network: momoNetwork,
+                email: customerEmail,
+                metadata: { kind: 'rc', type_id: typeId, quantity },
+                userId,
             })
-            .select()
-            .single()
 
-        if (orderError || !order) {
-            console.error('[GatewayInit] Order creation failed:', orderError)
-            return NextResponse.json({ error: 'Failed to initialize order' }, { status: 500 })
+            if (!charge.ok) {
+                if (charge.safeToMarkFailed && !existingRef) {
+                    // Releases the vouchers this order reserved.
+                    await (dbAdmin.from('results_checker_orders') as any)
+                        .update({ payment_status: 'failed' })
+                        .eq('reference_code', referenceCode)
+                        .eq('payment_status', 'pending_payment')
+                    await clearPaystackMomoPending(referenceCode)
+                }
+                return NextResponse.json(charge.body, { status: charge.httpStatus })
+            }
+
+            return NextResponse.json(charge.body)
         }
 
         // ── PAYSTACK BRANCH ──────────────────────────────────────────────────────

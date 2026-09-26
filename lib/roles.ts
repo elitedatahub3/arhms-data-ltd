@@ -162,3 +162,32 @@ export const roleConfig: Record<UserRole, RoleConfigItem> = {
         greetingPill: "bg-brand-gold/15 text-brand-gold-ink dark:text-brand-gold border border-brand-gold/25"
     }
 }
+
+/**
+ * Sub-agent chrome. Sub-agents are not a `role` value (membership lives in the
+ * sub_agents table), so this sits beside roleConfig rather than in it. Same
+ * light sidebar as a customer, with a teal header and teal accents.
+ */
+export const subAgentRoleConfig: RoleConfigItem = {
+    icon: Store,
+    label: 'Sub-Agent',
+    rank: '#6',
+    color: '#0D9488',
+    bgColor: 'rgba(13, 148, 136, 0.1)',
+    textColor: '#0F766E',
+    accentText: 'text-teal-700 dark:text-teal-300',
+    gradient: 'from-teal-500 to-teal-700',
+    badgeClass: 'bg-teal-500/15 text-teal-700 dark:text-teal-300',
+    darkPanel: false,
+    sidebarBg: "bg-white dark:bg-slate-950 border-r border-r-slate-200 dark:border-r-slate-800 text-slate-800 dark:text-slate-100",
+    sidebarNavHover: "text-slate-600 dark:text-slate-300 hover:text-teal-700 dark:hover:text-teal-300 hover:bg-teal-500/[0.07]",
+    sidebarNavActive: "bg-teal-500/[0.12] text-teal-700 dark:text-teal-300 font-bold ring-1 ring-inset ring-teal-500/20",
+    headerBg: "bg-teal-600 dark:bg-teal-800 border-b border-teal-700 dark:border-teal-900 text-white",
+    headerText: "text-white",
+    headerSubText: "text-teal-100",
+    headerButton: "text-teal-50 hover:text-white hover:bg-white/10",
+    greetingCard: "rounded-2xl sm:rounded-3xl p-4 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-soft hover:shadow-soft-lg transition-shadow duration-300 relative overflow-hidden",
+    greetingRow: "bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/60 text-slate-800 dark:text-slate-100",
+    greetingText: "text-slate-500 dark:text-slate-400",
+    greetingPill: "bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/25",
+}

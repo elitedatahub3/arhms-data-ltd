@@ -38,8 +38,26 @@ type AfarOrder = {
     created_at: string
     // Storefront orders only — dashboard applications leave these null.
     shop_name?: string | null
-    source?: 'dashboard' | 'storefront' | null
+    source?: 'dashboard' | 'storefront' | 'sub' | null
     payment_status?: 'pending_payment' | 'completed' | 'failed' | null
+}
+
+/**
+ * Where an application came from, as a badge. Null for dashboard orders,
+ * which need no marking.
+ *
+ * A sub order carries the PARENT shop in shop_name — that is who was
+ * credited — so the badge says so explicitly rather than letting an admin
+ * read it as the Lead selling it themselves.
+ */
+function sourceBadge(app: Pick<AfarOrder, 'source' | 'shop_name'>) {
+    if (app.source === 'storefront') {
+        return { label: app.shop_name || 'Storefront', Icon: Store }
+    }
+    if (app.source === 'sub') {
+        return { label: `${app.shop_name || 'Lead'} · via sub`, Icon: Users }
+    }
+    return null
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -186,7 +204,9 @@ export default function AdminAfaManagementPage() {
                 '============================================',
                 app.source === 'storefront'
                     ? `Submitted via Storefront — ${app.shop_name || 'Unknown shop'}`
-                    : 'Submitted via ARHMS Dashboard',
+                    : app.source === 'sub'
+                        ? `Submitted by a sub-agent of ${app.shop_name || 'their Lead'}`
+                        : 'Submitted via ARHMS Dashboard',
                 '============================================',
             ]
 
@@ -391,12 +411,16 @@ export default function AdminAfaManagementPage() {
                                                     <TableCell>
                                                         <div className="font-medium">{app.full_name}</div>
                                                         <div className="text-xs text-muted-foreground">{app.phone}</div>
-                                                        {app.source === 'storefront' && (
-                                                            <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
-                                                                <Store className="w-3 h-3" />
-                                                                {app.shop_name || 'Storefront'}
-                                                            </div>
-                                                        )}
+                                                        {(() => {
+                                                            const b = sourceBadge(app)
+                                                            if (!b) return null
+                                                            return (
+                                                                <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
+                                                                    <b.Icon className="w-3 h-3" />
+                                                                    {b.label}
+                                                                </div>
+                                                            )
+                                                        })()}
                                                     </TableCell>
                                                     <TableCell className="text-sm">
                                                         {app.id_type || 'Ghana Card'}
@@ -450,12 +474,16 @@ export default function AdminAfaManagementPage() {
                                                         <StatusIcon className="w-2.5 h-2.5" />
                                                         {cfg.label}
                                                     </span>
-                                                    {app.source === 'storefront' && (
-                                                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
-                                                            <Store className="w-2.5 h-2.5" />
-                                                            {app.shop_name || 'Storefront'}
-                                                        </span>
-                                                    )}
+                                                    {(() => {
+                                                        const b = sourceBadge(app)
+                                                        if (!b) return null
+                                                        return (
+                                                            <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
+                                                                <b.Icon className="w-2.5 h-2.5" />
+                                                                {b.label}
+                                                            </span>
+                                                        )
+                                                    })()}
                                                 </div>
                                             </div>
                                             <Button size="sm" variant="outline" onClick={() => setSelectedApp(app)}>
@@ -500,12 +528,16 @@ export default function AdminAfaManagementPage() {
                                             <StatusIcon className="w-3.5 h-3.5" />
                                             {cfg.label}
                                         </span>
-                                        {selectedApp.source === 'storefront' && (
-                                            <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
-                                                <Store className="w-3.5 h-3.5" />
-                                                {selectedApp.shop_name || 'Storefront'}
-                                            </span>
-                                        )}
+                                        {(() => {
+                                            const b = sourceBadge(selectedApp)
+                                            if (!b) return null
+                                            return (
+                                                <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
+                                                    <b.Icon className="w-3.5 h-3.5" />
+                                                    {b.label}
+                                                </span>
+                                            )
+                                        })()}
                                     </div>
                                     {selectedApp.payment_amount != null && (
                                         <span className="text-sm font-semibold text-muted-foreground">

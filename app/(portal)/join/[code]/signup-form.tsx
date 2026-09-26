@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { supabase } from '@/lib/supabase'
+import { writePendingSignupEmail } from '@/lib/portal-signup'
 
 interface SignupFormProps {
   inviteId: string
@@ -55,6 +57,25 @@ export function SubAgentSignupForm({
         setLoading(false)
         return
       }
+
+      // The recruit almost always signs up on the recruiter's own phone, and
+      // signup never touched this browser's session — so whoever was already
+      // logged in still is. Sending them onward in that state is how a recruit
+      // ends up looking at their recruiter's storefront on "My Shop" and
+      // believing a shop was made for them.
+      //
+      // f29823b fixed that for a Lead by having /portal/login refuse to forward
+      // a session that is not a sub-agent. That test stopped working the moment
+      // subs could recruit: an L1 recruiter IS a sub, so the check passes and
+      // the recruit lands in the recruiter's portal. Identity is the thing that
+      // matters, not whether the session happens to be a sub.
+      //
+      // So end the session here. The correct state after creating an account is
+      // "signed in as nobody, log in as yourself". Remember the new email so the
+      // login page can prefill it and, if the sign-out fails, still notice the
+      // session belongs to someone else.
+      writePendingSignupEmail(email)
+      await supabase.auth.signOut().catch(() => {})
 
       setStep('success')
       setLoading(false)

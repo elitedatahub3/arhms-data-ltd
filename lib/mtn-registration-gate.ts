@@ -5,27 +5,52 @@
  * cannot receive data. Historically we only found that out at fulfillment time —
  * after the wallet was debited — and the order sat pending with no explanation.
  *
- * This module moves the check in front of payment. Every purchase entry point calls
- * it between validating the phone number and moving any money; if the number is not
- * registered the route returns 409 and the UI asks the buyer to accept the wait.
+ * This module moves the check in front of payment, on the surfaces that use it.
+ *
+ * WHERE IT RUNS, and why each one refuses:
+ *
+ *   • Shop storefront (/api/shop/initialize) — REFUSES. A guest has no account, so a
+ *     held order is one they can neither track nor chase.
+ *
+ *   • USSD (/api/hubtel/interact) — REFUSES, and fails closed. A caller cannot be
+ *     shown a dialog, cannot be told anything after the line drops, and cannot be
+ *     refunded in-session.
+ *
+ *   • Dashboard — REFUSES, across all three of its purchase routes:
+ *     /api/orders/purchase, /api/orders/bulk-purchase and /api/orders/gateway-init.
+ *     Added by explicit request: a pending order an agent cannot explain to their own
+ *     customer is worth less than a clear "not yet". All three must stay gated together
+ *     — leaving any one open is a way to buy the same number the others just refused,
+ *     and Direct Pay (gateway-init) takes the money before an order row exists at all.
+ *     A bulk batch refuses whole, so an agent never has to reconcile a part-charged paste.
+ *
+ * The public API v1 deliberately does NOT call this. An integrator's order is accepted,
+ * the supplier rejects it at fulfillment time and auto-submits the number to MTN, and it
+ * stays pending for the auto-refulfill cron to deliver once the number is enabled. That
+ * is the behaviour that predates this module, kept so a live integration never starts
+ * seeing an error code it was not written to handle.
+ *
+ * So do not "restore consistency" by wiring this into an API v1 route. That exemption
+ * is the requirement; scripts/test-mtn-gate-strict.ts asserts the whole import graph.
  *
  * Three things worth knowing before you change anything here:
  *
  *   1. Checking is NOT read-only. verifyMtnWhitelist() auto-submits any number that
  *      is not yet enabled, as a side effect of the same upstream call. There is no
- *      check-only endpoint. So merely reaching this code starts the registration.
+ *      check-only endpoint. So merely reaching this code starts the registration —
+ *      which is what makes "try again in two weeks" an honest thing to tell someone
+ *      we just refused.
  *
- *   2. It fails OPEN. A supplier outage must not stop MTN sales. Anything we cannot
- *      answer confidently resolves to "not gated" and the order proceeds as pending —
- *      the whitelistPending path in fulfillOrder() is still the backstop it always was.
+ *   2. It fails OPEN, with one named exception. A supplier outage must not stop MTN
+ *      sales, so anything we cannot answer confidently resolves to "not gated" and the
+ *      order proceeds as pending — the whitelistPending path in fulfillOrder() is still
+ *      the backstop it always was. The exception is checkMtnRegistrationStrict(), used
+ *      only by USSD, which fails CLOSED; see the note on that function for why.
  *
  *   3. It is off by default, and that toggle is the ONLY thing controlling it.
  *      admin_settings.mtn_registration_gate_enabled runs the check regardless of which
  *      supplier currently fulfils MTN — see loadGateSettings for why that is a
  *      deliberate choice with a real cost attached.
- *
- * USSD is deliberately NOT gated — it reaches processShopOrder by a different path
- * and keeps the old behaviour. Do not wire this into app/api/hubtel/*.
  */
 import { verifyMtnWhitelist } from '@/lib/agentportal-service'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
@@ -50,8 +75,32 @@ const SETTINGS_TTL_MS = 60 * 1000
 /** Upstream budget on the purchase path — this sits between Pay and the payment prompt. */
 const UPSTREAM_TIMEOUT_MS = 4000
 
+/**
+ * Upstream budget on the USSD path — a quarter of the web one, deliberately.
+ *
+ * This check sits inside a live keypress on a step that previously did no network I/O
+ * at all. Hubtel drops the session if we take too long, and a dropped session reads to
+ * the caller as a broken service. Better to answer "cannot verify" fast than to hang.
+ */
+const USSD_UPSTREAM_TIMEOUT_MS = 1500
+
 /** The single wait time quoted to buyers. Change it here and everywhere follows. */
 export const REGISTRATION_WAIT_TEXT = 'up to 2 weeks'
+
+/**
+ * What a USSD caller hears before the line drops, for each reason we refuse.
+ *
+ * ASCII only and well under a 160-character screen — a non-ASCII character makes the
+ * Hubtel call throw, and a long one gets truncated mid-sentence. They live here rather
+ * than in the route so the two-week promise is worded from the same place as everywhere
+ * else, but note they cannot interpolate REGISTRATION_WAIT_TEXT: these are read aloud
+ * off a feature-phone screen and the phrasing is tuned to the character budget.
+ */
+export const USSD_NOT_REGISTERED_MESSAGE =
+    'This MTN number is not registered for data yet. We have started registering it. This can take up to 2 weeks. Please try again after that.'
+
+export const USSD_REGISTRATION_UNVERIFIABLE_MESSAGE =
+    'We cannot verify this MTN number right now. Please try again in a few minutes or buy at arhmsgh.com.'
 
 /** Error code every gated route returns, and every client checks for. */
 export const MTN_NOT_REGISTERED = 'MTN_NOT_REGISTERED'
@@ -77,8 +126,13 @@ export function isMtnPackageNetwork(network: string | null | undefined): boolean
 }
 
 /**
- * The body every gated route returns on a 409. Kept here so the shape cannot drift
- * between the six routes that produce it and the three clients that consume it.
+ * The 409 body. Produced by /api/shop/initialize and consumed by ShopStorefront —
+ * the storefront is the only surface that returns this at all now (USSD refuses over
+ * the wire with a plain message, and nothing else is gated). Kept as a shared helper
+ * because the shape is a contract between a route and a client that live apart.
+ *
+ * `total` is unused at the single call site today; it stays for the batch framing the
+ * dialog still renders ("3 of 20"), which a bulk storefront checkout would need.
  */
 export function registrationRequiredBody(phoneNumbers: string[], total?: number) {
     const single = phoneNumbers.length === 1
@@ -225,20 +279,15 @@ export async function recordRegistrationResults(
 // ─── The gate ───────────────────────────────────────────────────────────────────
 
 /**
- * Batch form. One upstream round-trip for the whole set, however many numbers.
- * `entries` are raw phone strings paired with the package network they were ordered for.
+ * Reduce raw entries to the distinct, valid, MTN numbers worth asking about.
+ *
+ * Both conditions matter: the PACKAGE must be plain MTN, and the NUMBER must carry an
+ * MTN prefix. A Telecel number ordered onto an MTN bundle is a mis-typed order, not an
+ * unregistered one, and the whitelist has nothing to say about it.
  */
-export async function checkMtnRegistrationBatch(
-    supabase: any,
+function collectCandidates(
     entries: Array<{ phoneNumber: string; packageNetwork: string }>
-): Promise<BatchGateResult> {
-    const empty: BatchGateResult = { unregistered: [], statusByNumber: new Map() }
-
-    const settings = await loadGateSettings(supabase)
-    if (!settings.enabled) return empty
-
-    // Reduce to the distinct, valid, MTN numbers worth asking about. Both conditions
-    // matter: the PACKAGE must be plain MTN, and the NUMBER must be an MTN prefix.
+): Set<string> {
     const candidates = new Set<string>()
     for (const entry of entries) {
         if (!isMtnPackageNetwork(entry.packageNetwork)) continue
@@ -246,11 +295,30 @@ export async function checkMtnRegistrationBatch(
         if (!validation.isValid || validation.network !== 'MTN') continue
         candidates.add(validation.normalizedNumber)
     }
-    if (candidates.size === 0) return empty
+    return candidates
+}
 
+/**
+ * Cache-first status resolution for a set of already-validated numbers.
+ *
+ * Shared by both entry points so the caching rules, the staleness window and the
+ * auto-submit side effect cannot drift between the web path and the USSD path. The
+ * only thing callers vary is how long they will wait upstream.
+ *
+ * Numbers we could not resolve come back as 'unknown'. This function does not decide
+ * what that means — the caller does, and that is the whole difference between the
+ * fail-open and fail-closed entry points below.
+ */
+async function resolveRegistrationStatuses(
+    supabase: any,
+    candidates: string[],
+    timeoutMs: number
+): Promise<Map<string, RegistrationStatus>> {
     const statusByNumber = new Map<string, RegistrationStatus>()
+    if (candidates.length === 0) return statusByNumber
+
     const needsUpstream: string[] = []
-    const cached = await readCache(supabase, Array.from(candidates))
+    const cached = await readCache(supabase, candidates)
     const staleBefore = Date.now() - NEGATIVE_TTL_MS
 
     for (const number of candidates) {
@@ -266,14 +334,10 @@ export async function checkMtnRegistrationBatch(
     }
 
     if (needsUpstream.length > 0) {
-        const { success, allowed, error } = await verifyMtnWhitelist(needsUpstream, {
-            timeoutMs: UPSTREAM_TIMEOUT_MS,
-        })
+        const { success, allowed, error } = await verifyMtnWhitelist(needsUpstream, { timeoutMs })
 
         if (!success) {
-            // Fail open: we could not tell, so we do not block. The whitelist gate at
-            // fulfillment still catches these.
-            console.error('[MtnGate] Verify failed, failing open for', needsUpstream.length, 'number(s):', error)
+            console.error('[MtnGate] Verify failed for', needsUpstream.length, 'number(s):', error)
             for (const number of needsUpstream) statusByNumber.set(number, 'unknown')
         } else {
             const results = needsUpstream.map(number => ({
@@ -286,6 +350,34 @@ export async function checkMtnRegistrationBatch(
             await recordRegistrationResults(supabase, results)
         }
     }
+
+    return statusByNumber
+}
+
+/**
+ * Batch form. One upstream round-trip for the whole set, however many numbers.
+ * `entries` are raw phone strings paired with the package network they were ordered for.
+ *
+ * Fails OPEN: an 'unknown' never lands in `unregistered`, so a supplier outage lets the
+ * order through as pending rather than stopping the sale.
+ */
+export async function checkMtnRegistrationBatch(
+    supabase: any,
+    entries: Array<{ phoneNumber: string; packageNetwork: string }>
+): Promise<BatchGateResult> {
+    const empty: BatchGateResult = { unregistered: [], statusByNumber: new Map() }
+
+    const settings = await loadGateSettings(supabase)
+    if (!settings.enabled) return empty
+
+    const candidates = collectCandidates(entries)
+    if (candidates.size === 0) return empty
+
+    const statusByNumber = await resolveRegistrationStatuses(
+        supabase,
+        Array.from(candidates),
+        UPSTREAM_TIMEOUT_MS
+    )
 
     const unregistered = Array.from(statusByNumber.entries())
         .filter(([, status]) => status === 'unregistered')
@@ -314,4 +406,58 @@ export async function checkMtnRegistration(
 
     if (unregistered.length === 0) return { gated: false }
     return { gated: true, normalizedNumber: unregistered[0] }
+}
+
+export type StrictGateResult =
+    | { blocked: false }
+    | { blocked: true; reason: 'unregistered' | 'unverifiable' }
+
+/**
+ * USSD form. The one place this gate fails CLOSED.
+ *
+ * Everywhere else an unanswerable check lets the sale through (invariant 2 in the
+ * header). USSD is the deliberate exception, and the reason is that USSD has none of
+ * the recovery paths the web has. There is no dialog to warn in, no email or order page
+ * to explain a held order through, and once the line drops we cannot reach the caller
+ * again. Money taken over USSD for data we cannot deliver is money we have to find and
+ * refund by hand. So an order we could not verify is one we do not take money for.
+ *
+ * The cost is real and worth stating: while Agent Portal is down, or if
+ * AGENTPORTAL_API_KEY is unset, every MTN USSD data sale stops. That is the accepted
+ * trade, not an oversight.
+ *
+ * `enabled` is passed in rather than read here on purpose. /api/hubtel/interact already
+ * batches every admin_settings key it needs into a single round trip, because on that
+ * route a millisecond costs a sale — adding a second lookup inside a keypress would
+ * undo the thing that route is built around.
+ */
+export async function checkMtnRegistrationStrict(
+    supabase: any,
+    rawPhone: string,
+    packageNetwork: string,
+    opts: { enabled: boolean; timeoutMs?: number }
+): Promise<StrictGateResult> {
+    if (!opts.enabled) return { blocked: false }
+
+    // Not a plain MTN bundle, or not an MTN number: the whitelist has no bearing on
+    // this sale, so refusing it would block on a check that does not apply.
+    const candidates = collectCandidates([{ phoneNumber: rawPhone, packageNetwork }])
+    if (candidates.size === 0) return { blocked: false }
+
+    const [number] = Array.from(candidates)
+    const statusByNumber = await resolveRegistrationStatuses(
+        supabase,
+        [number],
+        opts.timeoutMs ?? USSD_UPSTREAM_TIMEOUT_MS
+    )
+
+    const status = statusByNumber.get(number)
+    if (status === 'registered') return { blocked: false }
+
+    // 'unregistered', 'unknown', or missing entirely all refuse. The last case should
+    // be unreachable, but defaulting it to "allow" would be the one bug in here that
+    // silently reopens the door this function exists to shut.
+    const reason = status === 'unregistered' ? 'unregistered' : 'unverifiable'
+    console.log('[MtnGate] USSD refusing', redactIdentifier(number), '-', reason)
+    return { blocked: true, reason }
 }

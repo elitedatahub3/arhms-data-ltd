@@ -142,10 +142,6 @@ async function sendMoolreSMS(options: SMSOptions): Promise<SMSResult> {
 // SPECIFIC SMS TEMPLATES
 // ============================================================
 
-// sendOrderSuccessSMS (the "order received / within 2 hours" text) was retired:
-// the payment provider already sends its own receipt, and customers now only hear
-// from us when the data actually lands.
-
 export async function sendStatusUpdateSMS(
     phoneNumber: string,
     details: { referenceCode: string; status: string }
@@ -252,7 +248,7 @@ export async function sendOrderRefundSMS(
 // Sent ONCE at order time when an MTN number must be verified/enabled first
 // (Agent Portal whitelist gate). The order stays pending and auto-delivers after
 // verification (up to 2 weeks). Do NOT call this from the retry cron — it would spam the
-// customer every few minutes.
+// customer every few minutes. No delivery time is quoted — we cannot promise one.
 export async function sendMtnVerificationPendingSMS(
     recipientNumber: string,
     details: { network: string; size: string }
@@ -261,14 +257,15 @@ export async function sendMtnVerificationPendingSMS(
 
     return sendSMS({
         recipient: recipientNumber,
-        message: `Your ${details.network} number ${displayNumber} is being registered for the first time. This can take up to 2 weeks, after which your ${details.size} data will be delivered automatically. Once your number is registered, future orders are delivered within 24 hours. Thank you.\n\nARHMSGh`,
+        message: `Your ${details.network} number ${displayNumber} is being registered for the first time. This can take up to 2 weeks, after which your ${details.size} data will be delivered automatically. Thank you.\n\nARHMSGh`,
     })
 }
 
-// Sent ONCE at order time for MTN orders that were handed to a supplier. MTN
-// bundles are not instant, so the recipient is told the 24-hour delivery window
-// up front. Do NOT call this from the retry cron — it would spam the customer.
-export async function sendMtnDeliveryWindowSMS(
+// Sent ONCE at order time for MTN orders that were handed to a supplier. Tells the
+// recipient the order is on its way without quoting a delivery time — MTN bundles are
+// not instant and we cannot guarantee a window. Do NOT call this from the retry cron
+// — it would spam the customer.
+export async function sendMtnOrderReceivedSMS(
     recipientNumber: string,
     details: { network: string; size: string }
 ) {
@@ -276,7 +273,7 @@ export async function sendMtnDeliveryWindowSMS(
 
     return sendSMS({
         recipient: recipientNumber,
-        message: `Your ${details.network} ${details.size} data order for ${displayNumber} has been received and will be delivered within 24 hours. Thank you.\n\nARHMSGh`,
+        message: `Your ${details.network} ${details.size} data order for ${displayNumber} has been received and is being processed. Thank you.\n\nARHMSGh`,
     })
 }
 

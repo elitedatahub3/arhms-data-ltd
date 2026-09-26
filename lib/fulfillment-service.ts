@@ -17,6 +17,12 @@ interface FulfillmentResponse {
     success: boolean
     reference?: string
     transactionId?: string
+    // The identifier their WEBHOOK echoes. Their events carry only `order_code` and
+    // `reference` — never the `incoming_api_ref` we send — so unless one of those two
+    // is what we stamp on dakazina_reference, no event can ever be matched to an order.
+    // Deliberately has no fallback to our own orderId: a value they will never send
+    // back is worse than null, because it looks like a usable reference.
+    webhookRef?: string
     error?: string
     apiResponse?: any
     isRateLimited?: boolean
@@ -328,6 +334,7 @@ export async function fulfillOrder(
                 success: true,
                 reference: responseData?.reference || orderId,
                 transactionId: responseData?.transaction_code || responseData?.transaction_id,
+                webhookRef: responseData?.order_code || responseData?.reference,
                 apiResponse: sanitizeForLog(data),
             }
         }

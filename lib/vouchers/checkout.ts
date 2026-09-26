@@ -29,8 +29,34 @@ export async function purchaseWithWallet(params: {
     customerName?: string
     customerEmail?: string
     customerPhone?: string
+    /**
+     * Fixed unit price, bypassing role/bulk pricing.
+     *
+     * Used by the sub-agent portal, where the price is whatever the sub's Lead
+     * charges rather than anything derived from the sub's own role. Still
+     * floored at cost_price below — a Lead cannot sell the platform's stock at
+     * a loss.
+     */
+    unitPriceOverride?: number
+    /** Parent shop to attribute the sale to, and credit. Sub purchases only. */
+    shopId?: string
+    shopName?: string
+    shopOwnerId?: string
+    /**
+     * Caller-supplied reference, used instead of the generated one.
+     *
+     * The v2 API takes it as an idempotency key, so it has to reach the row —
+     * a generated reference could not be looked up again on a retry. Unique
+     * table-wide, so a collision surfaces as ORDER_CREATION_FAILED.
+     */
+    referenceCode?: string
+    /** API key that placed the order. Null for dashboard and sub-agent purchases. */
+    apiKeyId?: string
 }): Promise<WalletPurchaseResult> {
-    const { userId, userRole, typeId, quantity, customerName, customerEmail, customerPhone } = params
+    const {
+        userId, userRole, typeId, quantity, customerName, customerEmail, customerPhone,
+        unitPriceOverride, shopId, shopName, shopOwnerId, referenceCode: clientReference, apiKeyId,
+    } = params
     const supabase = createServerClient()
 
     // 1. Fetch and validate the voucher type
@@ -39,7 +65,30 @@ export async function purchaseWithWallet(params: {
         throw new Error('PRODUCT_NOT_AVAILABLE')
     }
 
-    const breakdown = await calculateRCPrice({ type, quantity, userRole })
+    // Role/bulk pricing, unless a fixed price was supplied. The cost floor is
+    // enforced either way: calculateRCPrice throws on it, and the override is
+    // checked here.
+    let breakdown: Awaited<ReturnType<typeof calculateRCPrice>>
+    let shopMarkup = 0
+
+    if (unitPriceOverride != null) {
+        if (!(unitPriceOverride > 0) || unitPriceOverride < type.cost_price) {
+            throw new Error('PRICING_ERROR_UNIT_BELOW_COST')
+        }
+        const subtotal = parseFloat((unitPriceOverride * quantity).toFixed(2))
+        breakdown = {
+            unitPrice: unitPriceOverride,
+            isBulk: false,
+            matchedTier: null,
+            shopMarkup: 0,
+            subtotal,
+            paystackFee: 0,
+            total: subtotal,
+        }
+        shopMarkup = parseFloat(((unitPriceOverride - type.cost_price) * quantity).toFixed(2))
+    } else {
+        breakdown = await calculateRCPrice({ type, quantity, userRole })
+    }
 
     // 2. Atomically deduct wallet balance via existing RPC
     const { data: walletData, error: deductError } = await (supabase as any).rpc(
@@ -61,7 +110,11 @@ export async function purchaseWithWallet(params: {
     }
 
     // 3. Create order record in pending state
-    const referenceCode = `RC-${Date.now()}`
+    // Random suffix, not just the clock. reference_code is UNIQUE, so two
+    // purchases landing in the same millisecond used to fail order creation
+    // outright; now it also keys the Lead's credit, where a collision would
+    // silently drop the second payment as "already credited".
+    const referenceCode = clientReference || `RC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const { data: order, error: orderError } = await (supabase
         .from('results_checker_orders') as any)
         .insert({
@@ -76,9 +129,15 @@ export async function purchaseWithWallet(params: {
             unit_price: breakdown.unitPrice,
             cost_price_at_time: type.cost_price,
             total_paid: breakdown.total,
+            // Null on an ordinary purchase; set when a sub buys through their Lead.
+            shop_id: shopId ?? null,
+            shop_name: shopName ?? null,
+            shop_markup: shopMarkup,
+            merchant_commission: shopMarkup,
             status: 'pending',
             payment_status: 'pending',
             reference_code: referenceCode,
+            api_key_id: apiKeyId ?? null,
         })
         .select()
         .single()
@@ -130,7 +189,23 @@ export async function purchaseWithWallet(params: {
             })
             .eq('id', order.id)
 
-        // 7. Deliver vouchers via email/SMS (await to prevent serverless function cutoff)
+        // 7. Credit the Lead on a sub purchase. Idempotent on the reference, and
+        //    deliberately after the order is completed — a wallet write must
+        //    never be what stops a paid-for voucher being handed over.
+        if (shopOwnerId && shopMarkup > 0) {
+            try {
+                await creditShopRcProfit({
+                    ownerId: shopOwnerId,
+                    amount: shopMarkup,
+                    description: `RC Voucher sale by sub-agent: ${type.name} x${quantity}`,
+                    reference: referenceCode,
+                })
+            } catch (err) {
+                console.error('[RC Wallet] Parent credit error:', err)
+            }
+        }
+
+        // 8. Deliver vouchers via email/SMS (await to prevent serverless function cutoff)
         try {
             const { deliverVouchers } = await import('@/lib/vouchers/notifications')
             await deliverVouchers(order, vouchers)

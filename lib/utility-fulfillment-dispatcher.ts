@@ -21,10 +21,10 @@ import { sendPushToAdmins } from '@/lib/web-push'
 import { logInitiate } from '@/lib/hubtel-payment-log'
 import { finalizeUtilityOrder } from '@/lib/utility-order-completion'
 import {
-    payUtilityBill,
     UTILITY_SERVICES,
     isUtilityService,
 } from '@/lib/hubtel-utility-service'
+import { payUtilityBill, UTILITY_PROVIDER } from '@/lib/utility-provider'
 
 /**
  * Hubtel allows 36 characters. reference_code is `UTIL-GHD-<ts>-<hex>`, so taking
@@ -131,7 +131,7 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
             .from('utility_orders')
             .update({
                 dispatch_claimed_at: new Date().toISOString(),
-                provider: 'hubtel',
+                provider: UTILITY_PROVIDER,
                 client_reference: clientReference,
                 updated_at: new Date().toISOString(),
             })
@@ -152,68 +152,80 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
         )
 
         // ── Pay ──────────────────────────────────────────────────────────────
+        // Our reference_code goes as THEIR idempotency key, so a retry returns the
+        // original order rather than paying the bill a second time.
         const result = await payUtilityBill({
             service: order.service,
-            destination: order.destination,
+            accountNumber: order.account_number,
             amount: Number(order.bill_amount),
-            clientReference,
-            meterNumber: def.kind === 'tv' ? null : order.account_number,
-            email: order.customer_email,
-            sessionId: order.session_id,
+            // Their /pay wants the customer's MSISDN for ECG and Ghana Water and
+            // nothing for the TV billers. `destination` was Hubtel's field and
+            // encoded that rule per service; here the phone is simply the phone.
+            phone: def.requiresPhone ? order.customer_phone : null,
+            reference: order.reference_code,
         })
 
         await supabase
             .from('utility_orders')
             .update({
-                transaction_id: result.transactionId ?? null,
-                commission: result.commission ?? null,
-                response_code: result.responseCode ?? null,
+                provider: UTILITY_PROVIDER,
+                // THEIR reference (UTIL-<BILLER>-<hex>), not ours — it is what the
+                // status endpoint and the webhook correlate on.
+                external_transaction_id: result.supplierReference ?? null,
+                transaction_id: result.orderId ?? null,
+                // Commission is not known yet: they report it once the order settles,
+                // and the cron or webhook writes it then.
                 provider_response: (result.raw ?? null) as any,
                 updated_at: new Date().toISOString(),
             })
             .eq('id', orderId)
 
-        // Utilities show up in /admin/hubtel-payments alongside collections and
-        // airtime, so an admin has one place to answer "what did Hubtel do here?".
+        // Bill payments sit in /admin/hubtel-payments alongside collections and
+        // airtime so an admin has one place to answer "what happened to this order?".
+        // The table predates KingFlexy and is keyed on our own client reference, so
+        // it keeps working across the provider change.
         await logInitiate({
             clientReference,
-            status: result.success ? (result.pending ? 'pending' : 'success') : 'failed',
+            status: result.success ? 'pending' : 'failed',
             amount: Number(order.bill_amount),
             payerMsisdn: order.customer_phone ?? null,
             customerName: order.account_name ?? null,
-            transactionId: result.transactionId ?? null,
-            responseCode: result.responseCode ?? null,
-            message: result.message ?? result.error ?? null,
+            transactionId: result.supplierReference ?? null,
+            responseCode: null,
+            message: result.error ?? null,
             userId: order.user_id ?? null,
             raw: result.raw,
         })
 
         if (!result.success) {
-            // A synchronous rejection means Hubtel never took the payment on, so the
-            // customer's money is still ours to give back. The one exception is a
-            // transport failure: the request may have landed even though we never saw
-            // the answer, so that stays unrefunded for a human to check in the portal.
-            const knownUnpaid = !!result.responseCode
+            // knownUnpaid is set by the client: true for a 4xx, which is a definite
+            // refusal with nothing charged, and false for a timeout or a 5xx, where
+            // the payment may have landed and refunding would give the money away
+            // twice. That judgement lives with the code that saw the HTTP status.
+            const knownUnpaid = result.knownUnpaid === true
             await haltForAdmin(
                 { ...order, status: 'pending' },
-                `Hubtel rejected the ${def.label} payment: ${result.error || 'unknown error'}.` +
-                (knownUnpaid ? '' : ' The request may or may not have reached the provider — confirm in the Hubtel portal BEFORE refunding or re-sending.'),
+                `KingFlexy rejected the ${def.label} payment: ${result.error || 'unknown error'}.` +
+                (knownUnpaid ? '' : ' The request may or may not have reached the provider — confirm in the KingFlexy dashboard BEFORE refunding or re-sending.'),
                 { refund: knownUnpaid }
             )
             return { dispatched: false, reason: result.error || 'provider rejected payment' }
         }
 
-        // '0000' means Hubtel settled synchronously and no callback is coming, so
-        // nothing else would ever close the order out.
+        // Their /pay always answers 'pending' and settles asynchronously, so this
+        // never completes an order outright — the webhook or the reconciliation cron
+        // closes it out. An idempotent replay lands here too, which is correct: the
+        // original order is already in flight and will report through the same path.
         await finalizeUtilityOrder({
             orderId,
-            status: result.pending ? 'processing' : 'completed',
+            status: 'processing',
             existingOrder: { ...order, status: 'pending' },
         })
 
         console.log(
-            `[UtilityDispatch] ${order.reference_code} dispatched — ` +
-            (result.pending ? 'awaiting Hubtel callback.' : 'settled immediately.')
+            `[UtilityDispatch] ${order.reference_code} dispatched to KingFlexy as ` +
+            `${result.supplierReference ?? '(no reference returned)'}` +
+            (result.alreadyProcessed ? ' — idempotent replay of an existing order.' : ' — awaiting settlement.')
         )
         return { dispatched: true }
     } catch (err: any) {

@@ -7,10 +7,26 @@ This document details the complete sub-agents (network/affiliate) system for ARH
 1. **Wallet Mode** — Deposits into personal wallet, buys data at Lead's wholesale sub_price
 2. **Storefront Mode** — Runs own-branded storefront, customers pay retail, sub earns markup above sub_price
 
-Profits split atomically:
-- **Sub** earns: `retail_price - sub_price` (storefront) or `0` (wallet mode)
-- **Lead** earns: `sub_price - owner_cost` (wholesale margin)
-- **Platform** earns: `owner_cost - admin_cost` (platform margin)
+The network runs **three levels**: Lead (L0) → sub (L1) → sub-of-sub (L2). An L2
+cannot recruit.
+
+Profits split atomically, each level keeping the spread it adds. The rule: *a
+level's cost is its upline's wholesale price if it has an upline, otherwise its
+platform role price.* With one level of downline this reduces exactly to the
+original two-level split, so existing chains were unaffected by the change.
+
+```
+customer pays      L2.selling_price
+  L2 earns         L2.selling_price - cost(L2)    cost(L2) = COALESCE(L1.sub_price, L1.selling_price)
+  L1 earns         cost(L2)         - cost(L1)    cost(L1) = COALESCE(L0.sub_price, L0.selling_price)
+  L0 earns         cost(L1)         - cost(L0)    cost(L0) = resolveOwnerCost(pkg, L0.role)
+  platform earns   cost(L0)         - pkg.cost_price
+```
+
+Implemented by `splitChainProfit()` in `lib/pricing/chain-cost.ts` (unit-tested by
+`scripts/test-chain-split.ts`) and paid out by `credit_shop_order_profits()`,
+which credits up to three wallets — `SUBPROFIT-` / `LEADPROFIT-` / `GRANDPROFIT-`,
+each leg claimed by its own reference.
 
 ---
 
@@ -34,7 +50,7 @@ Profits split atomically:
 
 | # | Decision | Rationale |
 |----|----------|-----------|
-| D1 | 2-level hierarchy (no sub-of-sub) | Simplifies governance, v1 scope |
+| D1 | ~~2-level hierarchy (no sub-of-sub)~~ — **superseded 2026-08-25: 3 levels** | Was v1 scope. The third level was never actually blocked: `POST /api/shop/invites` authorised on "do you own a shop?" alone, and a sub in storefront mode owns one — so the cap lived only in this table while the money code assumed it held. Now enforced by `sub_agents.depth` + a CHECK + a trigger, with matching guards in the invite and signup routes. |
 | D2 | Live eligibility checks (not cached) | Prevents fund locks if Lead degrades |
 | D3 | 48h escalation on withdrawn → admin | Prevents Lead from silencing subs |
 | D4 | de-branded portal + dashboard | Subs operate under own brand, not platform |
@@ -107,13 +123,17 @@ grep -r "sub_agents\|isSub" app/api/orders app/api/v1 lib/shop*
 
 ### Live Eligibility Check
 
+A Lead is eligible while their **shop** is approved and active. Role standing
+(`canOwnSubNetwork()` in `lib/pricing/cost-basis.ts`: lifetime agent or unexpired
+dealer) is accepted as an alternative, never as a requirement — a Lead is made by
+getting a shop approved, not by buying a subscription, and in production nearly
+every live Lead is role `customer`.
+
 ```typescript
-// In TypeScript (lib/pricing/cost-basis.ts):
-function canOwnSubNetwork(owner: OwnerState): boolean {
-  const now = new Date()
-  // (role='agent' AND agent_expires_at IS NULL) OR (role='dealer' AND dealer_expires_at > now())
-  return (owner.role === 'agent' && !owner.agentExpiresAt)
-      || (owner.role === 'dealer' && owner.dealerExpiresAt && new Date(owner.dealerExpiresAt) > now)
+// In TypeScript (lib/sub-agents.ts):
+async function isUplineEligible(db, uplineShopId, uplineOwnerId) {
+  // shop_profiles.approval_status = 'approved' AND shop_profiles.is_active
+  //   OR canOwnSubNetwork(upline user)
 }
 ```
 
@@ -312,12 +332,18 @@ Sub sees "Powered by {Lead shop name}" footer (honest limits: SMS sender ID + em
 - Neutral white-label domain (v1 uses store.arhmsgh.com)
 - Per-shop SMS sender ID / email domain
 - Google sign-up for subs
-- Subs on airtime/RC/mashup/AFA
 - Subs on USSD/v1 API/bulk (v1 scope, unblock in Phase 2)
-- MLM depth (3+ levels)
 - Leaderboard, auto-approve, downline statements
 - Sub PWA white-label
 - Owner-set join fee
+- Paying every level on **airtime, Results Checker and AFA**. Storefront parity
+  shipped — all four tiles now render on a sub storefront at any level, seeded by
+  `seedSubShopFromParent()` and priced via `/api/dashboard/sub/{rc,afa}-pricing` —
+  but the payout for those three still credits only the seller (airtime) or only
+  the direct upline (RC/AFA), exactly as at two levels.
+- Wallet-mode purchases still pay no upline: `credit_lead_margin()` exists and is
+  never called. The eligibility gate in `lib/data-order-pricing.ts` no longer
+  blocks them — it reads the Lead's shop standing rather than their role.
 
 ---
 

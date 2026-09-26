@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
             .in('key', [
                 'agent_upgrade_price_3d', 'agent_upgrade_price_14d', 'agent_upgrade_price_30d', 'agent_upgrade_price_permanent',
                 'agent_upgrade_price_3d_old', 'agent_upgrade_price_14d_old', 'agent_upgrade_price_30d_old', 'agent_upgrade_price_permanent_old',
+                'agent_plan_enabled_3d', 'agent_plan_enabled_14d', 'agent_plan_enabled_30d', 'agent_plan_enabled_permanent',
                 'show_price_strikethrough', 'guest_storefront_url',
                 'whatsapp_group_link', 'whatsapp_channel_link', 'whatsapp_admin_number', 'whatsapp_community_link',
                 'dealer_subscription_price_6m',
@@ -60,6 +61,14 @@ export async function GET(request: NextRequest) {
             'permanent': parseFloat(data?.find(s => s.key === 'agent_upgrade_price_permanent_old')?.value || '0')
         }
 
+        // A plan is on unless an admin has explicitly switched it off
+        const enabledPlans = {
+            '3d': data?.find(s => s.key === 'agent_plan_enabled_3d')?.value !== 'false',
+            '14d': data?.find(s => s.key === 'agent_plan_enabled_14d')?.value !== 'false',
+            '30d': data?.find(s => s.key === 'agent_plan_enabled_30d')?.value !== 'false',
+            'permanent': data?.find(s => s.key === 'agent_plan_enabled_permanent')?.value !== 'false'
+        }
+
         const showStrikethrough = data?.find(s => s.key === 'show_price_strikethrough')?.value === 'true'
         const guestStorefrontUrl = data?.find(s => s.key === 'guest_storefront_url')?.value || `${process.env.NEXT_PUBLIC_APP_URL || ''}/shop/demo`
         
@@ -75,6 +84,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             prices,
             oldPrices,
+            enabledPlans,
             showStrikethrough,
             guestStorefrontUrl,
             whatsappGroupLink,

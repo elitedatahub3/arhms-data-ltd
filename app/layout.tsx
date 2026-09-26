@@ -14,15 +14,16 @@ export const viewport: Viewport = {
 }
 import { Outfit, Inter } from 'next/font/google'
 import { Suspense } from 'react'
+import { unstable_noStore as noStore } from 'next/cache'
 import './globals.css'
 import { AuthProvider } from '@/contexts/auth-context'
 import { Toaster } from '@/components/ui/sonner'
 import { ThemeProvider } from '@/components/theme-provider'
-import { GlobalLoader } from '@/components/ui/global-loader'
+import { NavProgress } from '@/components/ui/nav-progress'
 import PwaInstallPrompt from '@/components/pwa-install-prompt'
 import { UIProvider } from '@/contexts/ui-context'
+import { SWRProvider } from '@/components/swr-provider'
 import { SystemAnnouncementModal } from '@/components/system-announcement-modal'
-import { getActiveAnnouncement } from '@/lib/get-active-announcement'
 import { OfflineModal } from '@/components/offline-modal'
 
 // Both families are variable fonts, so omitting `weight` ships one file carrying
@@ -42,6 +43,10 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
+    // Without this, Next resolves relative OG/Twitter image paths against whatever host
+    // it can infer — the production build happens to guess arhmsgh.com, a local build
+    // guesses localhost. Pinning it makes every share preview point at the real site.
+    metadataBase: new URL('https://arhmsgh.com'),
     title: 'ARHMS TECHNOLOGIES',
     description: "Ghana's trusted data bundle reselling platform. Buy and resell MTN, Telecel and AirtelTigo bundles instantly.",
     keywords: ['Ghana', 'mobile data', 'airtime', 'MTN', 'Telecel', 'AirtelTigo', 'data bundles', 'reseller'],
@@ -63,17 +68,25 @@ export const metadata: Metadata = {
         title: 'ARHMS TECHNOLOGIES',
         description: "Ghana's trusted data bundle reselling platform",
         type: 'website',
-        images: ['/opengraph-image.png'],
+        images: [{ url: '/arhms-logo.png', width: 512, height: 512, alt: 'ARHMS TECHNOLOGIES' }],
     },
 }
 
-export default async function RootLayout({
+export default function RootLayout({
     children,
 }: {
     children: React.ReactNode
 }) {
-    // Fetch the latest active announcement directly from DB (no cache, service role = no RLS)
-    const systemAnnouncement = await getActiveAnnouncement()
+    // Every route renders per request, as it always has. This used to be a side
+    // effect of reading the active announcement here (with noStore) on every
+    // request; that query is gone — SystemAnnouncementModal fetches
+    // /api/public/announcement itself on the routes where it shows — but the
+    // opt-out stays explicit. Removing it lets Next prerender ~370 pages at
+    // build time, many of which were never written to be static (some read
+    // useSearchParams outside a Suspense boundary) and would bake in
+    // build-time data. Pages that want caching cache their data instead
+    // (see app/page.tsx).
+    noStore()
 
     return (
         <html lang="en" suppressHydrationWarning className={`${outfit.variable} ${inter.variable}`}>
@@ -93,18 +106,20 @@ export default async function RootLayout({
                     disableTransitionOnChange
                 >
                     <AuthProvider>
+                        <SWRProvider>
                         <UIProvider>
                             <Suspense fallback={null}>
-                                <GlobalLoader />
+                                <NavProgress />
                             </Suspense>
                             {children}
-                            <SystemAnnouncementModal initialAnnouncement={systemAnnouncement as any} />
+                            <SystemAnnouncementModal />
                             <PwaInstallPrompt />
                             <OfflineModal />
                             {/* richColors dropped: components/ui/sonner.tsx now
                                 colours each kind of message itself. */}
                             <Toaster position="top-center" expand />
                         </UIProvider>
+                        </SWRProvider>
                     </AuthProvider>
                 </ThemeProvider>
             </body>

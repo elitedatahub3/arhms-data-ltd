@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/hubtel/interact",
-      "schedule": "*/1 * * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/cron/sync-netpulse-status",
@@ -11,6 +11,10 @@
     },
     {
       "path": "/api/cron/sync-eazydata-status",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-hendylinks-status",
       "schedule": "*/5 * * * *"
     },
     {
@@ -26,7 +30,19 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/sync-kingflexy-utility",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-kingflexy-airtime",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/verify-payswitch-payments",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/verify-paystack-momo-payments",
       "schedule": "*/5 * * * *"
     },
     {

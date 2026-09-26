@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, ShieldAlert } from 'lucide-react'
+import { ShieldAlert } from 'lucide-react'
 import {
     Dialog,
     DialogContent,
@@ -10,27 +10,38 @@ import {
 } from '@/components/ui/dialog'
 
 /**
- * Shown when a purchase is blocked because the recipient's MTN number has never been
- * registered for data on our supplier account.
+ * Shown when a sale is refused because the beneficiary's MTN number has never been
+ * registered for data on our supplier account. Used by the storefront and by the
+ * dashboard's purchase paths.
  *
- * Shared by the dashboard (single + bulk) and the shop storefront so the promise made
- * to the buyer is worded identically everywhere. Note the copy says registration has
- * ALREADY started — it has: the check that produced this dialog submits the number as
- * a side effect, so claiming otherwise would be untrue.
+ * There is nothing to agree to here. Every surface the gate applies to refuses
+ * outright — see lib/mtn-registration-gate.ts for where it runs and why API v1 is
+ * the one exemption.
+ *
+ * Two things the copy has to get right:
+ *
+ *   1. Registration has ALREADY started, and saying so is accurate — the check that
+ *      produced this dialog submits the number as a side effect.
+ *
+ *   2. It must NOT promise a delivery. No order exists; nothing was charged. The only
+ *      honest offer is "come back once registration finishes".
  */
 export interface MtnRegistrationDialogProps {
     open: boolean
-    /** The blocked number. For a batch, the first one — `numbers` carries the rest. */
+    /** The refused number. For a batch, the first one — `numbers` carries the rest. */
     phoneNumber?: string
-    /** All blocked numbers, when a batch triggered this. */
+    /** All refused numbers, when a batch triggered this. */
     numbers?: string[]
     /** Total lines in the batch, for the "3 of 20" framing. */
     total?: number
-    isSubmitting?: boolean
-    onConfirm: () => void
     onCancel: () => void
-    /** Bulk only: drop the unregistered lines and buy the rest. */
-    onRemove?: () => void
+    /**
+     * Forwarded to Radix. Callers that want to place the cursor somewhere specific on
+     * close must do it here and preventDefault() — Radix restores focus to whatever was
+     * focused when the dialog opened, and that restore would otherwise land after (and
+     * undo) any focus() called from onCancel.
+     */
+    onCloseAutoFocus?: (event: Event) => void
 }
 
 export function MtnRegistrationDialog({
@@ -38,28 +49,26 @@ export function MtnRegistrationDialog({
     phoneNumber,
     numbers,
     total,
-    isSubmitting = false,
-    onConfirm,
     onCancel,
-    onRemove,
+    onCloseAutoFocus,
 }: MtnRegistrationDialogProps) {
     const blocked = numbers && numbers.length > 0 ? numbers : phoneNumber ? [phoneNumber] : []
     const isBatch = blocked.length > 1
 
     return (
-        <Dialog open={open} onOpenChange={(o) => !o && !isSubmitting && onCancel()}>
+        <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
             {/* z-[110] beats the hand-rolled purchase sheets (z-[70]) and the storefront
                 sidebar (z-[100]). Those callers also hide themselves while this is open —
                 this is the backstop so the prompt is never buried by a new overlay. */}
-            <DialogContent className="w-[95%] max-w-sm rounded-2xl z-[110]">
+            <DialogContent className="w-[95%] max-w-sm rounded-2xl z-[110]" onCloseAutoFocus={onCloseAutoFocus}>
                 <DialogHeader>
                     <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
                         <ShieldAlert className="h-6 w-6 text-amber-600 dark:text-amber-400" />
                     </div>
                     <DialogTitle className="text-center">
                         {isBatch
-                            ? `${blocked.length}${total ? ` of ${total}` : ''} numbers are not registered`
-                            : 'This number is not registered yet'}
+                            ? `${blocked.length}${total ? ` of ${total}` : ''} numbers can’t receive data yet`
+                            : 'This number can’t receive data yet'}
                     </DialogTitle>
                     <DialogDescription className="text-center">
                         {isBatch
@@ -79,40 +88,26 @@ export function MtnRegistrationDialog({
                 )}
 
                 <p className="text-center text-xs text-muted-foreground">
-                    {isBatch ? 'Their data' : 'The data'} will be delivered automatically the moment
-                    registration completes — you don&apos;t need to do anything else. After that,
-                    future orders to {isBatch ? 'these numbers' : 'this number'} are instant.
+                    You can&apos;t buy data for {isBatch ? 'these numbers' : 'this number'} until
+                    registration finishes. Nothing has been charged. Once it&apos;s done, orders
+                    to {isBatch ? 'them' : 'it'} go through instantly.
                 </p>
 
                 <div className="mt-1 flex flex-col gap-2">
                     <button
                         type="button"
-                        onClick={onConfirm}
-                        disabled={isSubmitting}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:opacity-60"
+                        onClick={onCancel}
+                        className="w-full rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-700"
                     >
-                        {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                        {isBatch ? 'I agree, continue with all' : 'I agree to the terms'}
+                        Try another number
                     </button>
-
-                    {onRemove && (
-                        <button
-                            type="button"
-                            onClick={onRemove}
-                            disabled={isSubmitting}
-                            className="w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium transition hover:bg-muted disabled:opacity-60"
-                        >
-                            Remove them and buy the rest
-                        </button>
-                    )}
 
                     <button
                         type="button"
                         onClick={onCancel}
-                        disabled={isSubmitting}
-                        className="w-full rounded-xl px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted disabled:opacity-60"
+                        className="w-full rounded-xl px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted"
                     >
-                        Cancel
+                        Close
                     </button>
                 </div>
             </DialogContent>

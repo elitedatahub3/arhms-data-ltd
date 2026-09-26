@@ -14,6 +14,7 @@
  *     lib/hubtel-status-throttle.ts.
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
 import { checkPaymentStatus } from '@/lib/payswitch-payment-service'
 import { claimHubtelStatusCheck, PAYSWITCH_CRON_THROTTLE_KEYS } from '@/lib/hubtel-status-throttle'
@@ -118,15 +119,19 @@ export async function GET(request: NextRequest) {
                         } else {
                             console.error(`[CronPayswitch] Utility bill ${payment.reference} failed:`, utilResult.error)
                         }
-                    } else if (payment.reference.startsWith('BOOST-')) {
-                        const { processBoostPayment } = await import('@/lib/classifieds-payments')
-                        const boostResult = await processBoostPayment(payment.reference)
-                        if (boostResult.success || boostResult.alreadyProcessed) {
+                    } else if (payment.reference.startsWith('AIRPAY-')) {
+                        const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
+                        const airResult = await processAirtimeDirectOrder(payment.reference)
+                        if (airResult.success || airResult.alreadyProcessed) {
                             results.walletCredited++
-                            console.log(`[CronPayswitch] Boost payment ${payment.reference} credited`)
+                            console.log(`[CronPayswitch] Airtime order ${payment.reference} settled`)
                         } else {
-                            console.error(`[CronPayswitch] Boost payment ${payment.reference} failed:`, boostResult.error)
+                            console.error(`[CronPayswitch] Airtime order ${payment.reference} failed:`, airResult.error)
                         }
+                    } else if (isRetiredBoostReference(payment.reference)) {
+                        // Confirmed paid, but the product is gone. Throwing leaves the row pending so it is reported every run until refunded.
+                        reportRetiredBoostPayment('CronPayswitch', payment.reference)
+                        throw new Error(RETIRED_BOOST_MESSAGE)
                     } else if (payment.reference.startsWith('agent_upgrade_') || metadata.upgrade_type === 'agent') {
                         await processCompletedUpgradePayment(payment.reference, eventData)
                         results.walletCredited++
