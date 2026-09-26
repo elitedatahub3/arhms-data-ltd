@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
-import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
+import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { logCallback } from '@/lib/hubtel-payment-log'
 import { getShopMeta } from '@/lib/shop-meta-store'
 
@@ -201,6 +201,11 @@ export async function POST(request: NextRequest) {
             console.log('[HubtelWebhook] Routing USSD activation payment:', ClientReference)
             const { processCompletedUssdActivation } = await import('@/lib/payments')
             await processCompletedUssdActivation(ClientReference, mappedEventData)
+        } else if (isSmsPaymentReference(ClientReference, metadata)) {
+            // ── CUSTOMER SMS UNLOCK / CREDITS ─────────────────────────────────────
+            console.log('[HubtelWebhook] Routing Customer SMS payment:', ClientReference)
+            const { processCompletedSmsPayment } = await import('@/lib/payments')
+            await processCompletedSmsPayment(ClientReference, mappedEventData, metadata)
         } else if (ClientReference.startsWith('dealer_sub_') || metadata.upgrade_type === 'dealer_subscription') {
             // ── DEALER SUBSCRIPTION ───────────────────────────────────────────────
             console.log('[HubtelWebhook] Routing dealer subscription payment:', ClientReference)

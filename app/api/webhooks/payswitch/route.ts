@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
-import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription } from '@/lib/payments'
+import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { checkPaymentStatus } from '@/lib/payswitch-payment-service'
 import { resolvePayswitchReference } from '@/lib/payswitch-reference'
 import { getShopMeta } from '@/lib/shop-meta-store'
@@ -223,6 +223,9 @@ export async function POST(request: NextRequest) {
         } else if (reference.startsWith('ussd_activation_') || metadata.upgrade_type === 'ussd_activation') {
             const { processCompletedUssdActivation } = await import('@/lib/payments')
             await processCompletedUssdActivation(reference, eventData)
+        } else if (isSmsPaymentReference(reference, metadata)) {
+            const { processCompletedSmsPayment } = await import('@/lib/payments')
+            await processCompletedSmsPayment(reference, eventData, metadata)
         } else if (reference.startsWith('dealer_sub_') || metadata.upgrade_type === 'dealer_subscription') {
             await processCompletedDealerSubscription(reference, eventData)
         } else {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
-import { processCompletedWalletPayment } from '@/lib/payments'
+import { processCompletedWalletPayment, isSmsPaymentReference } from '@/lib/payments'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { checkPaymentStatus } from '@/lib/moolre-payment-service'
@@ -485,6 +485,26 @@ export async function GET(request: NextRequest) {
             }
             if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Short code activated!', shortCode: (result as any).shortCode })
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ussd?success=true`)
+        }
+
+        // For Customer SMS references, unlock or add credits. Same trap as the
+        // USSD branch above: without this the payment falls through and CREDITS
+        // THE WALLET instead of delivering what was bought.
+        if (isSmsPaymentReference(reference, (paymentRecord as any).metadata)) {
+            const metadata = ((paymentRecord as any).metadata || {}) as any
+            const { processCompletedSmsPayment } = await import('@/lib/payments')
+            const result = await processCompletedSmsPayment(reference, {
+                reference,
+                amount: Math.round(Number(paymentRecord.total_amount || paymentRecord.amount) * 100),
+                metadata,
+            }, metadata)
+            const smsHome = metadata.portal === 'sub' ? '/dashboard/sub/sms' : '/dashboard/shop/sms'
+            if (!result.success) {
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Payment could not be completed' }, { status: 500 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}${smsHome}?error=sms_payment_failed`)
+            }
+            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment complete!' })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}${smsHome}?success=true`)
         }
 
         // Note: processCompletedWalletPayment expects Paystack-like payload format `amount` in kobo/pesewas

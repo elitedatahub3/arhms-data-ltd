@@ -28,13 +28,14 @@ export const PAYMENT_PROVIDERS = ['moolre', 'hubtel', 'paystack', 'paystack_momo
 export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number]
 
 /** The independently-configurable areas of the app. */
-export type PaymentScope = 'web' | 'shop' | 'ussd'
+export type PaymentScope = 'web' | 'shop' | 'ussd' | 'sms'
 
 /** admin_settings key backing each scope. */
 export const SCOPE_SETTING_KEY: Record<PaymentScope, string> = {
     web: 'active_payment_provider_web',
     shop: 'active_payment_provider_shop',
     ussd: 'active_payment_provider_ussd',
+    sms: 'active_payment_provider_sms',
 }
 
 /**
@@ -50,6 +51,10 @@ export const SCOPE_PROVIDERS: Record<PaymentScope, readonly PaymentProvider[]> =
     web: ['moolre', 'hubtel', 'paystack', 'paystack_momo', 'payswitch'],
     shop: ['moolre', 'hubtel', 'paystack', 'paystack_momo', 'payswitch'],
     ussd: ['paystack_momo', 'hubtel'],
+    // Customer SMS is narrowed for the same reason as USSD: the unlock and the
+    // credit bundles only ever collect a phone + network, so a hosted-redirect
+    // gateway would strand the buyer on a checkout page they never asked for.
+    sms: ['paystack_momo', 'hubtel'],
 }
 
 export const DEFAULT_PAYMENT_PROVIDER: PaymentProvider = 'moolre'
@@ -66,6 +71,7 @@ export const SCOPE_FALLBACK_PROVIDER: Record<PaymentScope, PaymentProvider> = {
     web: DEFAULT_PAYMENT_PROVIDER,
     shop: DEFAULT_PAYMENT_PROVIDER,
     ussd: 'paystack_momo',
+    sms: 'paystack_momo',
 }
 
 /** Human label for admin UI / customer-facing copy. */

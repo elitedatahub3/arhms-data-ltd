@@ -446,6 +446,246 @@ export async function processCompletedUssdActivation(reference: string, provider
 }
 
 /**
+ * Customer SMS reference prefixes.
+ *
+ * Both purchases route through wallet_payments like every other one-time fee, so
+ * they need an arm in each webhook and reconciliation sweep. There are nine such
+ * dispatch sites; giving them one predicate and one entry point keeps a new SMS
+ * purchase type from having to be added to all nine again.
+ */
+export const SMS_UNLOCK_PREFIX = 'sms_unlock_'
+export const SMS_CREDITS_PREFIX = 'sms_credits_'
+
+export function isSmsPaymentReference(reference: string, metadata?: any): boolean {
+    const ref = reference || ''
+    const type = metadata?.upgrade_type
+    return ref.startsWith(SMS_UNLOCK_PREFIX)
+        || ref.startsWith(SMS_CREDITS_PREFIX)
+        || type === 'sms_unlock'
+        || type === 'sms_credits'
+}
+
+/**
+ * Routes a settled Customer SMS payment to the handler that owns it.
+ *
+ * The prefix decides, with the metadata as a fallback for the same reason the
+ * other flows check both: a gateway that echoes the reference back mangled still
+ * carries the metadata we sent it.
+ */
+export async function processCompletedSmsPayment(
+    reference: string,
+    providerMetadata?: any,
+    metadata?: any
+) {
+    const isUnlock = reference.startsWith(SMS_UNLOCK_PREFIX) || metadata?.upgrade_type === 'sms_unlock'
+    return isUnlock
+        ? processCompletedSmsUnlock(reference, providerMetadata)
+        : processCompletedSmsCreditPurchase(reference, providerMetadata)
+}
+
+/**
+ * Settles the one-time Customer SMS unlock: marks the payment completed and
+ * flips the caller's SMS account from `locked` to `active`.
+ *
+ * Idempotent on the same conditional wallet_payments update the USSD handler
+ * uses — webhook, verify-cron and the client poll can all reach this.
+ */
+export async function processCompletedSmsUnlock(reference: string, providerMetadata?: any) {
+    const supabase = createServerClient()
+
+    const { data: paymentData, error: paymentError } = await supabase
+        .from('wallet_payments')
+        .select('*')
+        .eq('reference', reference)
+        .single()
+
+    const payment = paymentData as any
+
+    if (paymentError || !payment) {
+        console.error('[SmsUnlock] Payment not found:', reference)
+        return { success: false, error: 'Payment not found' }
+    }
+
+    const originalMetadata = typeof payment.metadata === 'string'
+        ? JSON.parse(payment.metadata)
+        : (payment.metadata || {})
+
+    const accountId = originalMetadata?.sms_account_id
+    if (!accountId) {
+        console.error('[SmsUnlock] Payment has no sms_account_id in metadata:', reference)
+        return { success: false, error: 'Unlock is missing its SMS account reference' }
+    }
+
+    // Atomic idempotency check: only the transition out of `pending` wins.
+    const { data: updatedPayment, error: updatePaymentError } = await (supabase
+        .from('wallet_payments') as any)
+        .update({
+            status: 'completed',
+            metadata: { ...originalMetadata, provider_data: providerMetadata },
+            updated_at: new Date().toISOString(),
+        })
+        .eq('id', payment.id)
+        .eq('status', 'pending')
+        .select()
+        .single()
+
+    if (updatePaymentError) {
+        if (updatePaymentError.code === 'PGRST116') {
+            return { success: true, alreadyProcessed: true }
+        }
+        console.error('[SmsUnlock] Update payment error:', updatePaymentError)
+        return { success: false, error: 'Failed to update payment status' }
+    }
+
+    if (!updatedPayment) return { success: true, alreadyProcessed: true }
+
+    // Only a locked account is unlocked here: a suspended one stays suspended,
+    // so paying again can never wash away a suspension.
+    const { error: accountError } = await (supabase.from('sms_accounts') as any)
+        .update({
+            status: 'active',
+            unlocked_at: new Date().toISOString(),
+            unlock_reference: reference,
+            unlock_amount: payment.total_amount,
+            updated_at: new Date().toISOString(),
+        })
+        .eq('id', accountId)
+        .eq('status', 'locked')
+
+    if (accountError) {
+        console.error('[SmsUnlock] Account update error:', accountError)
+        // Put the payment back so a retry can finish it.
+        await (supabase.from('wallet_payments') as any)
+            .update({ status: 'pending' })
+            .eq('id', payment.id)
+        return { success: false, error: 'Could not unlock Customer SMS' }
+    }
+
+    const { data: subRow } = await supabase
+        .from('sub_agents')
+        .select('id')
+        .eq('user_id', payment.user_id)
+        .maybeSingle()
+
+    await (supabase.from('notifications') as any).insert({
+        user_id: payment.user_id,
+        title: 'Customer SMS Unlocked 💬',
+        message: 'You can now request your sender ID, buy SMS credits and message your customers.',
+        type: 'system',
+        action_url: subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+    })
+
+    return { success: true }
+}
+
+/**
+ * Settles an SMS credit bundle purchase: marks the payment completed and adds
+ * the bought credits to the account balance.
+ *
+ * The credit_sms_credits RPC is NOT itself idempotent — it adds every time it is
+ * called — so the guard is the conditional update on sms_credit_purchases below.
+ * Only the caller that moves the purchase out of `pending` goes on to credit.
+ */
+export async function processCompletedSmsCreditPurchase(reference: string, providerMetadata?: any) {
+    const supabase = createServerClient()
+
+    const { data: paymentData, error: paymentError } = await supabase
+        .from('wallet_payments')
+        .select('*')
+        .eq('reference', reference)
+        .single()
+
+    const payment = paymentData as any
+
+    if (paymentError || !payment) {
+        console.error('[SmsCredits] Payment not found:', reference)
+        return { success: false, error: 'Payment not found' }
+    }
+
+    const originalMetadata = typeof payment.metadata === 'string'
+        ? JSON.parse(payment.metadata)
+        : (payment.metadata || {})
+
+    const { data: updatedPayment, error: updatePaymentError } = await (supabase
+        .from('wallet_payments') as any)
+        .update({
+            status: 'completed',
+            metadata: { ...originalMetadata, provider_data: providerMetadata },
+            updated_at: new Date().toISOString(),
+        })
+        .eq('id', payment.id)
+        .eq('status', 'pending')
+        .select()
+        .single()
+
+    if (updatePaymentError) {
+        if (updatePaymentError.code === 'PGRST116') {
+            return { success: true, alreadyProcessed: true }
+        }
+        console.error('[SmsCredits] Update payment error:', updatePaymentError)
+        return { success: false, error: 'Failed to update payment status' }
+    }
+
+    if (!updatedPayment) return { success: true, alreadyProcessed: true }
+
+    // The second latch, and the one that actually guards the credits: whoever
+    // moves this row out of `pending` is the only caller that tops up.
+    const { data: purchase, error: purchaseError } = await (supabase
+        .from('sms_credit_purchases') as any)
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('reference', reference)
+        .eq('status', 'pending')
+        .select('id, account_id, credits')
+        .single()
+
+    if (purchaseError) {
+        if (purchaseError.code === 'PGRST116') {
+            return { success: true, alreadyProcessed: true }
+        }
+        console.error('[SmsCredits] Purchase update error:', purchaseError)
+        await (supabase.from('wallet_payments') as any)
+            .update({ status: 'pending' })
+            .eq('id', payment.id)
+        return { success: false, error: 'Failed to record the credit purchase' }
+    }
+
+    const { data: newBalance, error: creditError } = await (supabase as any)
+        .rpc('credit_sms_credits', {
+            p_account_id: purchase.account_id,
+            p_amount: purchase.credits,
+            p_purchased: true,
+        })
+
+    if (creditError) {
+        console.error('[SmsCredits] CRITICAL: credits not applied for paid purchase', reference, creditError)
+        // Reopen both rows rather than leave the buyer paid-but-uncredited.
+        await (supabase.from('sms_credit_purchases') as any)
+            .update({ status: 'pending', completed_at: null })
+            .eq('id', purchase.id)
+        await (supabase.from('wallet_payments') as any)
+            .update({ status: 'pending' })
+            .eq('id', payment.id)
+        return { success: false, error: 'Could not add the credits' }
+    }
+
+    const { data: subRow } = await supabase
+        .from('sub_agents')
+        .select('id')
+        .eq('user_id', payment.user_id)
+        .maybeSingle()
+
+    await (supabase.from('notifications') as any).insert({
+        user_id: payment.user_id,
+        title: 'SMS Credits Added 💬',
+        message: `${purchase.credits} SMS credits have been added. Your balance is now ${newBalance}.`,
+        type: 'system',
+        action_url: subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+    })
+
+    return { success: true, credits: purchase.credits, balance: newBalance }
+}
+
+/**
  * Processes a completed dealer subscription payment: marks the payment completed,
  * promotes the user to `dealer`, extends `dealer_expires_at` by the purchased plan
  * length, and re-bases their shop pricing onto the dealer cost tier.

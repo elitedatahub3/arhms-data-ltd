@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
-import { processCompletedWalletPayment } from '@/lib/payments'
+import { processCompletedWalletPayment, isSmsPaymentReference } from '@/lib/payments'
 import { getShopMeta } from '@/lib/shop-meta-store'
 import { clearPaystackMomoPending } from '@/lib/paystack-momo-checkout'
 import { clearPaystackMomoPromptCount } from '@/lib/hubtel-prompt-limit'
@@ -261,6 +261,10 @@ export async function POST(request: NextRequest) {
                 // USSD short code activation
                 const { processCompletedUssdActivation } = await import('@/lib/payments')
                 await processCompletedUssdActivation(reference, event.data)
+            } else if (isSmsPaymentReference(reference, metadata)) {
+                // Customer SMS unlock / credit bundle
+                const { processCompletedSmsPayment } = await import('@/lib/payments')
+                await processCompletedSmsPayment(reference, event.data, metadata)
             } else if (reference.startsWith('dealer_sub_') || metadata?.upgrade_type === 'dealer_subscription') {
                 // Dealer subscriptions
                 const { processCompletedDealerSubscription } = await import('@/lib/payments')
