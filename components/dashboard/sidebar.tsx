@@ -44,6 +44,7 @@ import {
     Loader2,
     Receipt,
     Gift,
+    UserPlus,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -62,6 +63,7 @@ const userNavItems = [
     { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
     { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
     { href: '/dashboard/my-orders', label: 'Orders', icon: ShoppingCart },
+    { href: '/dashboard/shop/sub-agents', label: 'Sub-Agents', icon: UserPlus },
     { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
     { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
     { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
@@ -86,6 +88,7 @@ const SUB_AGENT_HREF_OVERRIDES: Record<string, string> = {
     '/dashboard/afa-orders': '/dashboard/sub/afa',
     '/dashboard/utilities': '/dashboard/sub/utilities',
     '/dashboard/my-orders': '/dashboard/sub/orders',
+    '/dashboard/shop/sub-agents': '/dashboard/sub/sub-agents',
 }
 
 const adminNavItems = [
@@ -280,16 +283,20 @@ export function DashboardSidebar() {
 
     // Sub-agents run their Home/Results Checker/AFA/Pay Bills/Orders through
     // their own /dashboard/sub/* implementations (see SUB_AGENT_HREF_OVERRIDES);
-    // Role Upgrade doesn't apply to them at all. Everything else in
-    // `userNavItems` is genuinely shared and passes through unchanged.
+    // Role Upgrade doesn't apply to them at all, and Sub-Agents is hidden from
+    // a sub who may not recruit. Everything else in `userNavItems` is
+    // genuinely shared and passes through unchanged.
     const resolvedUserNavItems = userNavItems
         .filter(item => !isSubAgent || item.label !== 'Role Upgrade')
+        .filter(item => !(isSubAgent && subAgentRecruitBlocked) || item.href !== '/dashboard/shop/sub-agents')
         .map(item => (isSubAgent && SUB_AGENT_HREF_OVERRIDES[item.href])
             ? { ...item, href: SUB_AGENT_HREF_OVERRIDES[item.href] }
             : item)
 
+    // Sub-Agents lives in the Main Menu for everyone, so the sub's My Shop
+    // copy is dropped here (the mobile Shop sheet still keeps it).
     const resolvedShopNavItems = isSubAgent
-        ? subShopNavItems.filter(item => !subAgentRecruitBlocked || item.label !== 'My Sub-Agents')
+        ? subShopNavItems.filter(item => item.label !== 'My Sub-Agents')
         : shopNavItems
 
     // Get role config
@@ -519,6 +526,7 @@ export function DashboardSidebar() {
 
                     {resolvedUserNavItems
                     .filter(item => !rcOnly || item.href === '/dashboard/results-checker')
+                    .filter(item => isPageAccessible(item.href))
                     .filter(item => isPageAccessible('/dashboard/data-packages') || !item.href.startsWith('/dashboard/data-packages'))
                         .map((item) => {
                         const isExternal = 'external' in item && item.external

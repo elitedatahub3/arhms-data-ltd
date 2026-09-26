@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 
 interface SubAgent {
   id: string
@@ -177,8 +178,14 @@ export default function SubAgentsManager({
           <p className="font-semibold text-blue-900">Create your storefront first</p>
           <p className="text-blue-800 text-sm mt-1">
             Your sub-agents sell from prices you set on your own shop, so you need one
-            before you can recruit. Open <strong>My Shop</strong> to create it.
+            before you can recruit.
           </p>
+          <Link
+            href={pricingHref.startsWith('/dashboard/sub') ? '/dashboard/sub/shop' : '/dashboard/shop/setup'}
+            className="inline-block mt-4 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700"
+          >
+            Create my shop
+          </Link>
         </div>
       ) : error ? (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
