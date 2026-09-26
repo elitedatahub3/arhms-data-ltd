@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Wallet, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -35,6 +35,8 @@ export interface SmsPaymentFormProps {
     isSettled: () => Promise<boolean>
     onSettled: () => void
     disabled?: boolean
+    /** Sub portal: no platform naming on the wallet tile. */
+    deBranded?: boolean
 }
 
 export function SmsPaymentForm({
@@ -45,7 +47,9 @@ export function SmsPaymentForm({
     isSettled,
     onSettled,
     disabled = false,
+    deBranded = false,
 }: SmsPaymentFormProps) {
+    const [method, setMethod] = useState<'wallet' | 'momo'>('wallet')
     const [phone, setPhone] = useState('')
     const [network, setNetwork] = useState('MTN')
     const [reference, setReference] = useState<string | null>(null)
@@ -96,7 +100,7 @@ export function SmsPaymentForm({
     }
 
     const pay = async () => {
-        if (!phone.trim()) {
+        if (method === 'momo' && !phone.trim()) {
             toast.error('Enter the mobile money number to charge')
             return
         }
@@ -105,7 +109,12 @@ export function SmsPaymentForm({
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...extraBody, phone: phone.trim(), network }),
+                body: JSON.stringify({
+                    ...extraBody,
+                    paymentMethod: method === 'wallet' ? 'wallet' : undefined,
+                    phone: phone.trim(),
+                    network,
+                }),
             })
             const data = await res.json()
             if (!res.ok || !data?.success) {
@@ -144,6 +153,37 @@ export function SmsPaymentForm({
 
     return (
         <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+                <button
+                    type="button"
+                    onClick={() => setMethod('wallet')}
+                    disabled={polling || !!otpPrompt}
+                    className={cn(
+                        'rounded-2xl border-2 p-4 text-left transition-colors',
+                        method === 'wallet' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30' : 'border-gray-200 dark:border-gray-800'
+                    )}
+                >
+                    <Wallet className="w-5 h-5 text-emerald-600 mb-2" />
+                    <p className="font-bold text-sm">{deBranded ? 'Wallet' : 'ARHMS Wallet'}</p>
+                    <p className="text-xs text-muted-foreground">Instant — no phone prompt</p>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setMethod('momo')}
+                    disabled={polling || !!otpPrompt}
+                    className={cn(
+                        'rounded-2xl border-2 p-4 text-left transition-colors',
+                        method === 'momo' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30' : 'border-gray-200 dark:border-gray-800'
+                    )}
+                >
+                    <Smartphone className="w-5 h-5 text-emerald-600 mb-2" />
+                    <p className="font-bold text-sm">Mobile Money</p>
+                    <p className="text-xs text-muted-foreground">Approve on your phone</p>
+                </button>
+            </div>
+
+            {method === 'momo' && (
+            <>
             <div className="space-y-2">
                 <Label>Network</Label>
                 <div className="flex gap-2">
@@ -174,6 +214,8 @@ export function SmsPaymentForm({
                 />
                 <p className="text-xs text-muted-foreground">You&apos;ll get a prompt on this number to approve the payment.</p>
             </div>
+            </>
+            )}
 
             {otpPrompt ? (
                 // The charge is already open, so this replaces the pay button —

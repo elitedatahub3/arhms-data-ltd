@@ -29,7 +29,7 @@ export async function POST(request: Request) {
         }
 
         const body: any = await request.json().catch(() => ({}))
-        const { phone, network, otp, reference: submittedReference } = body
+        const { phone, network, paymentMethod, otp, reference: submittedReference } = body
 
         // Handled before anything is minted: this finishes a charge that already
         // exists rather than starting a new one.
@@ -66,6 +66,7 @@ export async function POST(request: Request) {
             amount: unlockPrice,
             phone: String(phone || ''),
             network: String(network || ''),
+            paymentMethod: String(paymentMethod || ''),
             description: 'ARHMS Customer SMS Activation',
         })
     } catch (error: any) {

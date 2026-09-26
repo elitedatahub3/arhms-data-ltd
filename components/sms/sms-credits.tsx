@@ -24,7 +24,7 @@ interface Bundle {
     pricePerSms: number
 }
 
-export function SmsCredits({ credits, onPurchased }: { credits: number; onPurchased: () => void }) {
+export function SmsCredits({ credits, onPurchased, deBranded = false }: { credits: number; onPurchased: () => void; deBranded?: boolean }) {
     const [bundles, setBundles] = useState<Bundle[]>([])
     const [loading, setLoading] = useState(true)
     const [selected, setSelected] = useState<Bundle | null>(null)
@@ -109,6 +109,7 @@ export function SmsCredits({ credits, onPurchased }: { credits: number; onPurcha
                             extraBody={{ bundleId: selected.id }}
                             amount={selected.price}
                             payLabel="Buy credits"
+                            deBranded={deBranded}
                             isSettled={isSettled}
                             onSettled={handleSettled}
                         />

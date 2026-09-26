@@ -26,7 +26,7 @@ export async function POST(request: Request) {
         }
 
         const body: any = await request.json().catch(() => ({}))
-        const { bundleId, phone, network, otp, reference: submittedReference } = body
+        const { bundleId, phone, network, paymentMethod, otp, reference: submittedReference } = body
 
         if (otp) {
             return submitSmsPurchaseOtp({
@@ -70,6 +70,7 @@ export async function POST(request: Request) {
             amount,
             phone: String(phone || ''),
             network: String(network || ''),
+            paymentMethod: String(paymentMethod || ''),
             extraMetadata: { bundle_id: (bundle as any).id, credits },
             description: 'ARHMS SMS Credits',
             beforeCharge: async (reference) => {

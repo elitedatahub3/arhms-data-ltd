@@ -162,9 +162,11 @@ export interface StartPurchaseParams {
     ctx: SmsContext
     kind: SmsPurchaseKind
     amount: number
-    /** Payer's handset details — mobile money is the only way to pay for this. */
+    /** Payer's handset details. Ignored when paying from the wallet. */
     phone: string
     network: string
+    /** 'wallet' settles server-side; anything else prompts the handset. */
+    paymentMethod?: string
     /** Merged into the wallet_payments metadata the settle handlers read. */
     extraMetadata?: Record<string, any>
     /** Runs after the pending row exists and before the gateway is called. */
@@ -181,7 +183,7 @@ export interface StartPurchaseParams {
  * pending row instead.
  */
 export async function startSmsPurchase(params: StartPurchaseParams) {
-    const { ctx, kind, amount, phone, network, extraMetadata, beforeCharge, description } = params
+    const { ctx, kind, amount, phone, network, paymentMethod, extraMetadata, beforeCharge, description } = params
     const { authUser, supabaseAdmin, account, settingsMap, portal } = ctx
 
     if (!(amount > 0)) {
@@ -195,7 +197,10 @@ export async function startSmsPurchase(params: StartPurchaseParams) {
         ? !!paystackProvider
         : !!(network && HUBTEL_CHANNEL_MAP[network])
 
-    if (!phone || !network || !networkSupported) {
+    const isWalletPayment = paymentMethod === 'wallet'
+
+    // Handset details only matter when a handset is going to be prompted.
+    if (!isWalletPayment && (!phone || !network || !networkSupported)) {
         return NextResponse.json({ error: 'Phone number and network are required' }, { status: 400 })
     }
 
@@ -212,34 +217,91 @@ export async function startSmsPurchase(params: StartPurchaseParams) {
         ...extraMetadata,
     }
 
-    const { data: wallet } = await supabaseAdmin
-        .from('wallets')
-        .select('id')
-        .eq('user_id', authUser.id)
-        .maybeSingle()
+    // Recorded on the payment so support can see how it was paid.
+    const walletMetadata = isWalletPayment ? { ...metadata, paid_from: 'wallet' } : metadata
 
-    if (!wallet) {
-        return NextResponse.json({ error: 'Your wallet could not be found. Please contact support.' }, { status: 404 })
+    let walletId: string | undefined
+
+    if (isWalletPayment) {
+        // Atomic: the RPC only deducts when the balance covers it, so two
+        // concurrent attempts cannot both succeed on one balance.
+        const { data: deductResult, error: deductError } = await (supabaseAdmin as any)
+            .rpc('deduct_wallet_balance', { p_user_id: authUser.id, p_amount: amount })
+
+        if (deductError) {
+            if (deductError.message?.includes('INSUFFICIENT_BALANCE')) {
+                return NextResponse.json(
+                    { error: `Not enough in your wallet. You need GHS ${amount.toFixed(2)}.` },
+                    { status: 400 }
+                )
+            }
+            console.error('[SmsPurchase] Wallet deduction error:', deductError)
+            return NextResponse.json({ error: 'Failed to take the payment from your wallet' }, { status: 500 })
+        }
+
+        walletId = (deductResult?.[0] || deductResult)?.wallet_id
+        if (!walletId) {
+            return NextResponse.json({ error: 'Your wallet could not be found. Please contact support.' }, { status: 404 })
+        }
+    } else {
+        const { data: wallet } = await supabaseAdmin
+            .from('wallets')
+            .select('id')
+            .eq('user_id', authUser.id)
+            .maybeSingle()
+
+        if (!wallet) {
+            return NextResponse.json({ error: 'Your wallet could not be found. Please contact support.' }, { status: 404 })
+        }
+        walletId = (wallet as any).id
+    }
+
+    // From here a wallet balance is already down, so every failure path puts it
+    // back. A gateway purchase has taken nothing yet, so this is a no-op there.
+    const refundWallet = async (why: string) => {
+        if (!isWalletPayment) return
+        console.error(`[SmsPurchase] Refunding wallet purchase (${why}):`, reference)
+        const { error } = await (supabaseAdmin as any)
+            .rpc('credit_wallet_balance', { p_user_id: authUser.id, p_amount: amount })
+        if (error) console.error('[SmsPurchase] CRITICAL: wallet refund failed for', reference, error)
     }
 
     const { error: paymentError } = await (supabaseAdmin.from('wallet_payments') as any)
         .insert({
             user_id: authUser.id,
-            wallet_id: (wallet as any).id,
+            wallet_id: walletId,
             amount,
             fee: 0,
             total_amount: amount,
             reference,
             // The row has to name its own gateway: the reconciliation sweeps are
             // scoped by provider, so a mislabelled row is one nothing recovers.
-            provider: gateway,
+            provider: isWalletPayment ? 'wallet' : gateway,
             status: 'pending',
-            metadata,
+            metadata: walletMetadata,
         })
 
     if (paymentError) {
         console.error('[SmsPurchase] wallet_payments insert failed:', paymentError)
+        await refundWallet('payment record insert failed')
         return NextResponse.json({ error: 'Failed to record payment attempt' }, { status: 500 })
+    }
+
+    if (isWalletPayment) {
+        // Statement line for the buyer. Fire-and-forget like the USSD route: a
+        // missing statement row must not fail a purchase already paid for.
+        ;(supabaseAdmin.from('wallet_transactions') as any).insert({
+            wallet_id: walletId,
+            user_id: authUser.id,
+            type: 'debit',
+            amount,
+            description: kind === 'sms_unlock' ? 'Customer SMS activation' : 'SMS credits purchase',
+            reference,
+            source: 'purchase',
+            status: 'completed',
+        }).then(({ error }: any) => {
+            if (error) console.error('[SmsPurchase] wallet_transactions insert failed:', error)
+        })
     }
 
     // The credits purchase writes its own ledger row here, so the settle handler
@@ -248,8 +310,41 @@ export async function startSmsPurchase(params: StartPurchaseParams) {
         const prepared = await beforeCharge(reference)
         if (!prepared.ok) {
             await (supabaseAdmin.from('wallet_payments') as any).update({ status: 'failed' }).eq('reference', reference)
+            await refundWallet('ledger row insert failed')
             return NextResponse.json({ error: prepared.error || 'Could not start this purchase' }, { status: 500 })
         }
+    }
+
+    // ── WALLET ───────────────────────────────────────────────────────────────
+    // Settled entirely server-side: the money is already ours, so there is no
+    // webhook to wait for and the buyer gets what they bought in this response.
+    if (isWalletPayment) {
+        const { processCompletedSmsPayment } = await import('@/lib/payments')
+        const result = await processCompletedSmsPayment(reference, {
+            reference,
+            amount: Math.round(amount * 100),
+            metadata: walletMetadata,
+        }, walletMetadata)
+
+        if (!result?.success) {
+            console.error('[SmsPurchase] Wallet settlement failed:', reference, result?.error)
+            await (supabaseAdmin.from('wallet_payments') as any).update({ status: 'failed' }).eq('reference', reference)
+            await refundWallet('settlement failed')
+            return NextResponse.json(
+                { error: result?.error || 'Could not complete this purchase. Your wallet has been refunded.' },
+                { status: 500 }
+            )
+        }
+
+        return NextResponse.json({
+            success: true,
+            gateway: 'wallet',
+            completed: true,
+            reference,
+            message: kind === 'sms_unlock'
+                ? 'Customer SMS is now unlocked.'
+                : 'Your SMS credits have been added.',
+        })
     }
 
     if (gateway === 'paystack_momo') {

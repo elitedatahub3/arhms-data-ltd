@@ -231,6 +231,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
                                 endpoint="/api/sms/unlock"
                                 amount={info.unlockPrice}
                                 payLabel="Unlock"
+                                deBranded={deBranded}
                                 isSettled={isUnlocked}
                                 onSettled={onUnlocked}
                             />
@@ -340,7 +341,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
                 </TabsContent>
 
                 <TabsContent value="credits" className="mt-4">
-                    <SmsCredits credits={account.credits} onPurchased={loadAccount} />
+                    <SmsCredits credits={account.credits} onPurchased={loadAccount} deBranded={deBranded} />
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-4">
