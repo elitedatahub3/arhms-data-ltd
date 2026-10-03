@@ -33,3 +33,33 @@ export function validateCronSecret(): void {
         )
     }
 }
+
+/**
+ * Validates authorization for a cron route.
+ * Supports:
+ *   - Header `Authorization: Bearer <CRON_SECRET>`
+ *   - Query parameter `?secret=<CRON_SECRET>` or `?key=<CRON_SECRET>` (for cron-job.org and monitors)
+ * Supports CRON_SECRET or UPSTASH_CRON_SECRET.
+ */
+export function isCronAuthorized(request: any): boolean {
+    const secret = process.env.CRON_SECRET || process.env.UPSTASH_CRON_SECRET
+    if (!secret) return false
+
+    const authHeader = request.headers.get('authorization')
+    if (authHeader === `Bearer ${secret}`) return true
+
+    try {
+        const url = request.nextUrl || new URL(request.url)
+        const querySecret = url.searchParams.get('secret') || url.searchParams.get('key')
+        if (querySecret && querySecret === secret) return true
+    } catch {
+        // url parsing fallback
+    }
+
+    return false
+}
+
+export function cronUnauthorizedResponse() {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+}
+

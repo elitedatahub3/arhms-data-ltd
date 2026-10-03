@@ -411,7 +411,7 @@ export async function sendOrderFailedSMS(
 export async function sendShopPricingApprovedSMS(phoneNumber: string, firstName: string) {
     return sendSMS({
         recipient: phoneNumber,
-        message: `${firstName} Great news! Your shop pricing has been approved. Your prices are now live. Visit ARHMSgh.com/dashboard/shop\n\nARHMSGh`,
+        message: `${firstName} Great news! Your shop pricing has been approved. Your prices are now live. Visit dataking.qzz.io/dashboard/shop\n\nARHMSGh`,
     })
 }
 
@@ -425,28 +425,28 @@ export async function sendShopPricingRejectedSMS(phoneNumber: string, firstName:
 export async function sendShopProfileApprovedSMS(phoneNumber: string, shopName: string) {
     return sendSMS({
         recipient: phoneNumber,
-        message: `Congrats! Your shop "${shopName}" has been approved. You can now set your prices and go live. ARHMSgh.com\n\nARHMSGh`,
+        message: `Congrats! Your shop "${shopName}" has been approved. You can now set your prices and go live. dataking.qzz.io\n\nARHMSGh`,
     })
 }
 
 export async function sendShopProfileRejectedSMS(phoneNumber: string, firstName: string, reason: string) {
     return sendSMS({
         recipient: phoneNumber,
-        message: `${firstName} Your shop application was not approved. Reason: ${reason}. Log in to update your profile. ARHMSgh.com\n\nARHMSGh`,
+        message: `${firstName} Your shop application was not approved. Reason: ${reason}. Log in to update your profile. dataking.qzz.io\n\nARHMSGh`,
     })
 }
 
 export async function sendSenderIdApprovedSMS(phoneNumber: string, sender: string) {
     return sendSMS({
         recipient: phoneNumber,
-        message: `Good news! Your sender ID "${sender}" has been approved by the networks. Your customer SMS will now arrive from ${sender}. ARHMSgh.com\n\nARHMSGh`,
+        message: `Good news! Your sender ID "${sender}" has been approved by the networks. Your customer SMS will now arrive from ${sender}. dataking.qzz.io\n\nARHMSGh`,
     })
 }
 
 export async function sendSenderIdRejectedSMS(phoneNumber: string, sender: string, reason: string) {
     return sendSMS({
         recipient: phoneNumber,
-        message: `Your sender ID "${sender}" was not approved. Reason: ${reason}. Log in to request a different name. ARHMSgh.com\n\nARHMSGh`,
+        message: `Your sender ID "${sender}" was not approved. Reason: ${reason}. Log in to request a different name. dataking.qzz.io\n\nARHMSGh`,
     })
 }
 

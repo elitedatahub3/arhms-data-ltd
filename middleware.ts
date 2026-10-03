@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { getCookieDomain } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { Redis } from '@upstash/redis'
@@ -9,6 +10,9 @@ import { Ratelimit } from '@upstash/ratelimit'
 // NEVER add a wildcard (*) here. Never reflect the raw Origin.
 // ============================================================
 const STATIC_ALLOWED_ORIGINS = [
+    'https://dataking.qzz.io',
+    'https://www.dataking.qzz.io',
+    'https://marketplace.dataking.qzz.io',
     'https://arhms-data-ltd.vercel.app',
     'https://project-d3owc.vercel.app',
     'https://arhmsgh.com',
@@ -123,6 +127,14 @@ function getSubdomain(request: NextRequest): string | null {
         return localMatch ? localMatch[1] : null
     }
 
+    // Dataking domain (dataking.qzz.io, www.dataking.qzz.io, marketplace.dataking.qzz.io)
+    if (host.endsWith('dataking.qzz.io')) {
+        if (parts.length > 3 && parts[0] !== 'www') {
+            return parts[0]
+        }
+        return null
+    }
+
     // Standard domain (arhmsgh.com, www.arhmsgh.com, marketplace.arhmsgh.com)
     if (host.endsWith('arhmsgh.com')) {
         // marketplace.arhmsgh.com -> 'marketplace'
@@ -176,6 +188,21 @@ function isTrustedOrigin(request: NextRequest, origin: string | null): boolean {
     if (!origin) return false
     // Static allowlist + env-derived origins
     if (ALLOWED_ORIGINS.has(origin) || origin === request.nextUrl.origin) return true
+
+    // Check if origin hostname matches or is a subdomain of dataking.qzz.io or arhmsgh.com
+    try {
+        const originUrl = new URL(origin)
+        const host = originUrl.hostname
+        if (
+            host === 'dataking.qzz.io' ||
+            host.endsWith('.dataking.qzz.io') ||
+            host === 'arhmsgh.com' ||
+            host.endsWith('.arhmsgh.com')
+        ) {
+            return true
+        }
+    } catch {}
+
     // x-forwarded-host check: Vercel proxy may normalize the host so the Origin
     // header matches the forwarded host rather than nextUrl.origin.
     const forwardedHost = request.headers.get('x-forwarded-host')
@@ -219,7 +246,7 @@ export async function middleware(request: NextRequest) {
     // own run of this middleware captures it. /auth/* keeps its old behaviour of going to
     // the same path on the main domain, so an old login link still lands somewhere useful.
     if (isMarketplace) {
-        const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
+        const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io'
         const target = pathname.startsWith('/auth')
             ? new URL(pathname + request.nextUrl.search, mainDomain)
             : new URL('/' + request.nextUrl.search, mainDomain)
@@ -257,18 +284,15 @@ export async function middleware(request: NextRequest) {
         const cleanUrl = new URL(request.url)
         cleanUrl.searchParams.delete('ref')
         const stash = NextResponse.redirect(cleanUrl)
+        const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.hostname
+        const refCookieDomain = getCookieDomain(host.split(':')[0])
         stash.cookies.set('arhms_ref', refParam.toUpperCase(), {
             path: '/',
             maxAge: 60 * 60 * 24 * 30,
             sameSite: 'lax',
             httpOnly: false,
             secure: process.env.NODE_ENV === 'production',
-            // Shared across subdomains in prod, mirroring the auth cookie domain in
-            // lib/supabase.ts, so a link opened on one subdomain still attributes when
-            // the user signs up on another.
-            ...(request.nextUrl.hostname.endsWith('arhmsgh.com')
-                ? { domain: '.arhmsgh.com' }
-                : {}),
+            ...(refCookieDomain ? { domain: refCookieDomain } : {}),
         })
         return addNoCacheHeaders(stash)
     }
@@ -306,6 +330,9 @@ export async function middleware(request: NextRequest) {
         request: { headers: request.headers },
     })
 
+    const requestHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.hostname
+    const authCookieDomain = getCookieDomain(requestHost.split(':')[0])
+
     const supabase = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -317,9 +344,10 @@ export async function middleware(request: NextRequest) {
                 setAll(cookiesToSet) {
                     cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
                     res = NextResponse.next({ request })
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        res.cookies.set(name, value, options)
-                    )
+                    cookiesToSet.forEach(({ name, value, options }) => {
+                        const opts = { path: '/', ...options, ...(authCookieDomain && { domain: authCookieDomain }) }
+                        res.cookies.set(name, value, opts)
+                    })
                 },
             },
         }
@@ -613,6 +641,7 @@ export async function middleware(request: NextRequest) {
                         httpOnly: true,
                         sameSite: 'lax',
                         secure: process.env.NODE_ENV === 'production',
+                        ...(authCookieDomain ? { domain: authCookieDomain } : {}),
                     })
                 }
             } catch (error) {
@@ -654,6 +683,7 @@ export async function middleware(request: NextRequest) {
                         httpOnly: true,
                         sameSite: 'lax',
                         secure: process.env.NODE_ENV === 'production',
+                        ...(authCookieDomain ? { domain: authCookieDomain } : {}),
                     })
                 } catch (error) {
                     console.error('[Middleware] Sub-agent check failed, failing open:', error)

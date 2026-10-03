@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
+import { isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 import { Redis } from '@upstash/redis'
 import { getShopMeta } from '@/lib/shop-meta-store'
 import { verifyTransaction } from '@/lib/paystack-momo-service'
@@ -87,8 +88,8 @@ function minutesAgo(minutes: number): string {
 export async function GET(request: NextRequest) {
     const startTime = Date.now()
 
-    if (request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     const supabase = createServerClient()
@@ -538,3 +539,10 @@ async function releaseGuestOrder(
     // 'shop' reserves nothing before payment — no order row exists yet — so there is
     // nothing to release. Dropping the marker is the whole cleanup.
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+

@@ -108,16 +108,37 @@ export async function initiatePayment(params: InitiatePaymentParams): Promise<In
         }
 
         // Detect OTP requirement — Moolre can indicate this via:
-        //  • data.status === '200_OTP_REQ'  (string status code)
-        //  • data.requiresotp === true       (boolean field)
-        //  • data.txstatus === 5             (numeric code, if used)
-        const rawStatus = String(data.status ?? '')
-        const isOtpRequired = 
+        //  • Explicit status: data.status === '200_OTP_REQ' or status containing 'OTP'
+        //  • Boolean fields: data.requiresotp, data.otp_required, data.requires_otp
+        //  • Message field: data.message containing 'otp'
+        //  • On initial call without otpCode: Moolre collection dispatches an OTP SMS to
+        //    the payer's phone which must be verified to authorize the debit.
+        const rawStatus = String(data.status ?? '').toUpperCase()
+        const rawMsg = String(data.message ?? '').toUpperCase()
+        const dataStatus = String(data.data?.status ?? '').toUpperCase()
+        const dataMsg = String(data.data?.message ?? '').toUpperCase()
+
+        const hasExplicitOtpSignal = 
             rawStatus === '200_OTP_REQ' || 
             rawStatus.includes('OTP') ||
+            dataStatus.includes('OTP') ||
+            rawMsg.includes('OTP') ||
+            dataMsg.includes('OTP') ||
             data.requiresotp === true ||
             data.requiresotp === 'true' ||
-            data.otp_required === true
+            data.data?.requiresotp === true ||
+            data.data?.requiresotp === 'true' ||
+            data.otp_required === true ||
+            data.otp_required === 'true' ||
+            data.data?.otp_required === true ||
+            data.data?.otp_required === 'true' ||
+            data.requires_otp === true ||
+            data.requires_otp === 'true' ||
+            data.txstatus === 5 ||
+            data.data?.txstatus === 5
+
+        // If no OTP has been entered yet, Moolre sends an OTP code on payment initiation.
+        const isOtpRequired = !params.otpCode || hasExplicitOtpSignal
 
         if (isOtpRequired) {
             return {

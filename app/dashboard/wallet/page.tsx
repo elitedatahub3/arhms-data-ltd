@@ -706,7 +706,7 @@ function WalletContent() {
                 open={otpRequired}
                 onOpenChange={(open) => { if (!open) { setOtpRequired(false); setOtpCode('') } }}
             >
-                <DialogContent className="w-[95%] max-w-sm rounded-2xl">
+                <DialogContent className="w-[95%] max-w-sm rounded-2xl z-[110]">
                     <DialogHeader>
                         <DialogTitle>Enter OTP</DialogTitle>
                         <DialogDescription>

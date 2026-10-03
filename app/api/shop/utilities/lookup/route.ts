@@ -73,11 +73,25 @@ export async function POST(request: NextRequest) {
         const db = createServerClient() as any
         const def = UTILITY_SERVICES[service]
 
-        const { data: shop } = await db
+        let shop: any = null
+        const shopRes = await db
             .from('shop_profiles')
             .select('id, shop_name, owner_id, utilities_enabled, approval_status, is_active')
             .eq('shop_slug', shopSlug.trim())
             .maybeSingle()
+
+        if (shopRes?.data) {
+            shop = shopRes.data
+        } else if (shopRes?.error) {
+            const fallbackRes = await db
+                .from('shop_profiles')
+                .select('id, shop_name, owner_id, approval_status, is_active')
+                .eq('shop_slug', shopSlug.trim())
+                .maybeSingle()
+            if (fallbackRes?.data) {
+                shop = { ...fallbackRes.data, utilities_enabled: false }
+            }
+        }
 
         if (!shop || shop.approval_status !== 'approved' || shop.is_active !== true) {
             return NextResponse.json({ error: 'Shop not found' }, { status: 404 })

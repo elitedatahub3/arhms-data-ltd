@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { areCronJobsEnabled, cronDisabledResponse } from '@/lib/cron-control'
+import { areCronJobsEnabled, cronDisabledResponse, isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 
 const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,9 +11,8 @@ const supabaseAdmin = createClient(
 export async function GET(request: NextRequest) {
     if (!areCronJobsEnabled()) return cronDisabledResponse()
 
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     // ── Load settings ────────────────────────────────────────────────────────
@@ -277,3 +276,10 @@ export async function GET(request: NextRequest) {
     console.log(`[CronRefulfill] Done — fulfilled:${fulfilled} skipped:${skipped} failed:${failed}`)
     return NextResponse.json({ success: true, total: pendingOrders.length, fulfilled, skipped, failed })
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+

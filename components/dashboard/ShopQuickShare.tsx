@@ -13,7 +13,8 @@ interface ShopQuickShareProps {
 
 export function ShopQuickShare({ shopSlug }: ShopQuickShareProps) {
     const [copied, setCopied] = useState(false)
-    const shopUrl = `${process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')}/shop/${shopSlug}`
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io')
+    const shopUrl = `${baseOrigin}/shop/${shopSlug}`
 
     const handleCopy = async () => {
         try {

@@ -44,9 +44,8 @@ const inter = Inter({
 
 export const metadata: Metadata = {
     // Without this, Next resolves relative OG/Twitter image paths against whatever host
-    // it can infer — the production build happens to guess arhmsgh.com, a local build
-    // guesses localhost. Pinning it makes every share preview point at the real site.
-    metadataBase: new URL('https://arhmsgh.com'),
+    // it can infer. Pinning it makes every share preview point at the real site.
+    metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io'),
     title: 'ARHMS TECHNOLOGIES',
     description: "Ghana's trusted data bundle reselling platform. Buy and resell MTN, Telecel and AirtelTigo bundles instantly.",
     keywords: ['Ghana', 'mobile data', 'airtime', 'MTN', 'Telecel', 'AirtelTigo', 'data bundles', 'reseller'],

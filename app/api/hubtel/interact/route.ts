@@ -637,7 +637,7 @@ export async function POST(req: Request) {
                     return respond(
                         SessionId,
                         'release',
-                        'We could not identify your mobile money network. Please buy at arhmsgh.com.'
+                        'We could not identify your mobile money network. Please buy at dataking.qzz.io.'
                     );
                 }
 

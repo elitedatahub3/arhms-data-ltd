@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
@@ -312,7 +312,7 @@ export async function POST(request: NextRequest) {
             throw new Error(moolreResponse.error || 'Failed to initialize payment')
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.status === '200_OTP_REQ' || (!otpCode && moolreResponse.success)) {
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',
@@ -326,6 +326,7 @@ export async function POST(request: NextRequest) {
             success: true,
             gateway: 'moolre',
             reference,
+            otpRequired: false,
             message: 'Payment prompt sent to your phone. Please approve to continue.',
         })
     } catch (error: any) {

@@ -24,11 +24,25 @@ async function ownedShop(request: NextRequest) {
     if (!user) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
 
     const db = createServerClient() as any
-    const { data: shop } = await db
+    let shop: any = null
+    const shopRes = await db
         .from('shop_profiles')
         .select('id, owner_id, shop_name, utility_fee_percent, utilities_enabled')
         .eq('owner_id', user.id)
         .maybeSingle()
+
+    if (shopRes?.data) {
+        shop = shopRes.data
+    } else if (shopRes?.error) {
+        const fallbackRes = await db
+            .from('shop_profiles')
+            .select('id, owner_id, shop_name')
+            .eq('owner_id', user.id)
+            .maybeSingle()
+        if (fallbackRes?.data) {
+            shop = { ...fallbackRes.data, utility_fee_percent: 0, utilities_enabled: false }
+        }
+    }
 
     if (!shop) return { error: NextResponse.json({ error: 'You do not have a shop' }, { status: 404 }) }
 

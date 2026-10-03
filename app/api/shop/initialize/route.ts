@@ -324,20 +324,26 @@ export async function POST(request: NextRequest) {
 
         // ── PAYSTACK BRANCH ──────────────────────────────────────────────────────
         if (shopProvider === 'paystack') {
-            const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email: validatedGuestEmail || `guest-${cleanPhone}@checkout.arhmsgh.com`,
-                    amount: totalAmount, // already in pesewas
-                    reference: shopRef,
-                    callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/shop/${shopSlug}/success?reference=${shopRef}`,
-                    metadata: fullMetadata,
-                }),
-            })
+            const requestOrigin = request.headers.get('origin') ||
+                (request.headers.get('x-forwarded-host') ? `${request.headers.get('x-forwarded-proto') || 'https'}://${request.headers.get('x-forwarded-host')}` : null) ||
+                (request.headers.get('host') ? `https://${request.headers.get('host')}` : null) ||
+                process.env.NEXT_PUBLIC_APP_URL ||
+                'https://www.dataking.qzz.io'
+
+                const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: validatedGuestEmail || `guest-${cleanPhone}@checkout.dataking.qzz.io`,
+                        amount: totalAmount, // already in pesewas
+                        reference: shopRef,
+                        callback_url: `${requestOrigin.replace(/\/$/, '')}/shop/${shopSlug}/success?reference=${shopRef}`,
+                        metadata: fullMetadata,
+                    }),
+                })
 
             const paystackData = await paystackRes.json()
 
@@ -532,7 +538,7 @@ export async function POST(request: NextRequest) {
             console.log('[ShopInit] OTP verified successfully. Sending follow-up payment request.')
             moolreResponse = await initiatePayment({
                 amount: totalAmount / 100,
-                payerPhone: cleanPhone,
+                payerPhone: payerClean,
                 channel: channelId,
                 externalRef: shopRef,
             })
@@ -542,7 +548,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Payment initialization failed' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.status === '200_OTP_REQ' || (!otpCode && moolreResponse.success)) {
             if (!existingRef) {
                 await saveShopMeta(shopRef, fullMetadata)
             }
@@ -565,7 +571,7 @@ export async function POST(request: NextRequest) {
             console.error('[ShopInit] could not record duplicate-click guard:', e)
         }
 
-        return NextResponse.json({ success: true, gateway: 'moolre', reference: shopRef, message: 'Payment prompt sent to your phone. Please approve to complete your order.' })
+        return NextResponse.json({ success: true, gateway: 'moolre', reference: shopRef, otpRequired: false, message: 'Payment prompt sent to your phone. Please approve to complete your order.' })
     } catch (error) {
         console.error('[Shop Initialize] Error:', error)
         // Order metadata lives in Redis, so an exhausted quota or an outage stops

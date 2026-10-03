@@ -46,7 +46,7 @@ export default function SubShopPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://arhmsgh.com'
+  const origin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io')
 
   // Reads through /api/shop/profile (service role) rather than the browser
   // Supabase client, so an expired token or RLS hiccup surfaces as an error to
