@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
 import { randomBytes } from 'crypto'
 import bcrypt from 'bcryptjs'
-import { COMMISSION_KEY_TAG } from '@/lib/api-auth'
+import { COMMISSION_KEY_TAG, SMS_KEY_TAG } from '@/lib/api-auth'
 
 // GET    — key metadata (prefix, status, last_used_at) for every kind. Never the full key.
 // POST   — generate a key of one kind. Returns the full key ONCE.
@@ -16,7 +16,7 @@ import { COMMISSION_KEY_TAG } from '@/lib/api-auth'
 // commission key would silently destroy the standard key the caller is mid-integration
 // with. Every query below therefore carries an .eq('kind', …).
 
-const KINDS = ['standard', 'commission'] as const
+const KINDS = ['standard', 'commission', 'sms'] as const
 type Kind = typeof KINDS[number]
 
 /**
@@ -29,11 +29,13 @@ type Kind = typeof KINDS[number]
 const KIND_TAG: Record<Kind, string> = {
     standard:   'kf_live_',
     commission: COMMISSION_KEY_TAG,
+    sms:        SMS_KEY_TAG,
 }
 
 const KIND_NAME: Record<Kind, string> = {
     standard:   'Standard API Key',
     commission: 'Commission Services Key',
+    sms:        'SMS API Key',
 }
 
 function parseKind(raw: unknown): Kind | null {
@@ -91,7 +93,7 @@ export async function POST(request: NextRequest) {
 
         const kind = parseKind(kindRaw)
         if (!kind) {
-            return NextResponse.json({ error: 'kind must be "standard" or "commission"' }, { status: 400 })
+            return NextResponse.json({ error: 'kind must be "standard", "commission" or "sms"' }, { status: 400 })
         }
 
         const randomPart = randomBytes(16).toString('hex')
@@ -108,7 +110,10 @@ export async function POST(request: NextRequest) {
             .single()
         const userRole = (userData as any)?.role ?? 'customer'
         const isAdmin = userRole === 'admin' || userRole === 'sub-admin'
-        const keyStatus = isAdmin ? 'active' : 'pending'
+        // SMS keys go live at once: every send is prepaid from SMS credits and
+        // still passes the content rules and daily limit, so there is nothing
+        // for an approval to protect that the send path does not already.
+        const keyStatus = isAdmin || kind === 'sms' ? 'active' : 'pending'
 
         // Replace only this kind. Regenerating is how a key is rotated, so the old
         // row for the SAME kind must go — but the other kind is left alone.
@@ -132,7 +137,7 @@ export async function POST(request: NextRequest) {
         }
 
         const label = KIND_NAME[kind]
-        const message = isAdmin
+        const message = keyStatus === 'active'
             ? `${label} generated. Copy the key now — it will not be shown again.`
             : `${label} generated. Copy the key now — it will not be shown again. Awaiting admin approval.`
 
@@ -170,7 +175,7 @@ export async function PATCH(request: NextRequest) {
 
         const kind = parseKind(body?.kind)
         if (!kind) {
-            return NextResponse.json({ error: 'kind must be "standard" or "commission"' }, { status: 400 })
+            return NextResponse.json({ error: 'kind must be "standard", "commission" or "sms"' }, { status: 400 })
         }
 
         const raw = body?.webhook_url
@@ -233,7 +238,7 @@ export async function DELETE(request: NextRequest) {
         // Kind arrives on the query string: DELETE bodies are not reliably forwarded.
         const kind = parseKind(new URL(request.url).searchParams.get('kind') ?? undefined)
         if (!kind) {
-            return NextResponse.json({ error: 'kind must be "standard" or "commission"' }, { status: 400 })
+            return NextResponse.json({ error: 'kind must be "standard", "commission" or "sms"' }, { status: 400 })
         }
 
         const supabase = createServerClient()

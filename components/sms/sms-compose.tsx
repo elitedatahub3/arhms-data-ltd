@@ -23,7 +23,7 @@ import {
 import { Send, Loader2, Users, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { countSegments, checkMessageContent, SMS_MESSAGE_MAX, SMS_MESSAGE_MIN } from '@/lib/sms/sms-rules'
+import { countSegments, checkMessageContent, SMS_MESSAGE_MAX, SMS_MESSAGE_MIN, type SmsMode } from '@/lib/sms/sms-rules'
 import type { SmsGroup } from '@/components/sms/sms-contacts'
 
 export interface AllowedSender {
@@ -42,7 +42,10 @@ export function SmsCompose({
     onSent,
     onNeedCredits,
     onNeedSender,
+    mode = 'platform',
 }: {
+    /** Platform Mode refuses links; Business Mode allows them. */
+    mode?: SmsMode
     credits: number
     allowedSenders: AllowedSender[]
     groups: SmsGroup[]
@@ -80,7 +83,8 @@ export function SmsCompose({
     const estimatedCost = segmentInfo.segments * estimatedRecipients
     const hasOwnSender = allowedSenders.some((s) => s.type === 'own')
     const tooShort = message.trim().length < SMS_MESSAGE_MIN
-    const contentCheck = useMemo(() => checkMessageContent(message), [message])
+    // The same check the send path applies; here it is only an early warning.
+    const contentCheck = useMemo(() => checkMessageContent(message, mode), [message, mode])
 
     const toggleTarget = (id: string) => {
         setTargets((prev) => {
@@ -245,10 +249,9 @@ export function SmsCompose({
                                 <span className="text-amber-600">Emoji or special characters: 70 characters per part</span>
                             )}
                         </div>
-                        {!contentCheck.ok && (
-                            <p className="text-xs text-red-600 flex items-start gap-1.5">
-                                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                                {contentCheck.error}
+                        {!contentCheck.ok && message.trim().length >= SMS_MESSAGE_MIN && (
+                            <p className="flex items-start gap-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 p-2 text-xs text-amber-800 dark:text-amber-300">
+                                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {contentCheck.error}
                             </p>
                         )}
                     </div>
@@ -280,7 +283,7 @@ export function SmsCompose({
 
                     <Button
                         onClick={openConfirm}
-                        disabled={tooShort || !contentCheck.ok || !estimatedRecipients || sending}
+                        disabled={tooShort || !estimatedRecipients || sending}
                         className="w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700 font-bold text-base gap-2"
                     >
                         <Send className="w-4 h-4" /> Review & send

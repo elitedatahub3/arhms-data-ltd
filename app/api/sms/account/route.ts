@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext, smsBlockReason, isCustomerSmsEnabled, SMS_DISABLED_MESSAGE } from '@/lib/sms/sms-purchase'
 import { getAllowedSenders } from '@/lib/sms/customer-sms'
+import { getSmsBusiness, countSentToday, dailyLimitFor, senderCapFor } from '@/lib/sms/platform'
 
 /**
  * Everything the Customer SMS home screen renders from, in one call.
@@ -17,7 +18,7 @@ export async function GET() {
         const { supabaseAdmin, account, shop, role, sub, settingsMap, unlockPrice, portal } = ctx
 
         const enabled = isCustomerSmsEnabled(settingsMap)
-        const blockedReason = enabled ? smsBlockReason(shop, sub) : SMS_DISABLED_MESSAGE
+        const blockedReason = enabled ? smsBlockReason(shop, sub, ctx.userStatus) : SMS_DISABLED_MESSAGE
 
         // loadSmsContext selects a fixed column list, so the toggles are read here.
         const { data: toggles } = await supabaseAdmin
@@ -45,8 +46,18 @@ export async function GET() {
             .eq('account_id', account.id)
             .eq('opted_out', false)
 
+        const [business, sentToday] = await Promise.all([
+            getSmsBusiness(supabaseAdmin, account.id),
+            countSentToday(supabaseAdmin, account.id),
+        ])
+
         return NextResponse.json({
             success: true,
+            mode: ctx.mode,
+            businessStatus: business?.status ?? null,
+            dailyLimit: dailyLimitFor(ctx.mode, settingsMap),
+            sentToday,
+            senderCap: senderCapFor(ctx.mode, settingsMap),
             // The page hides the whole feature on this rather than selling
             // something that cannot be used.
             enabled,

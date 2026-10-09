@@ -24,7 +24,13 @@ interface Bundle {
     pricePerSms: number
 }
 
-export function SmsCredits({ credits, onPurchased, deBranded = false }: { credits: number; onPurchased: () => void; deBranded?: boolean }) {
+export function SmsCredits({ credits, onPurchased, deBranded = false, portal }: {
+    credits: number
+    onPurchased: () => void
+    deBranded?: boolean
+    /** 'platform' from the SMS Platform pages, so the receipt notification links back there. */
+    portal?: 'platform'
+}) {
     const [bundles, setBundles] = useState<Bundle[]>([])
     const [loading, setLoading] = useState(true)
     const [selected, setSelected] = useState<Bundle | null>(null)
@@ -106,7 +112,7 @@ export function SmsCredits({ credits, onPurchased, deBranded = false }: { credit
                         <SmsPaymentForm
                             key={selected.id}
                             endpoint="/api/sms/credits/purchase"
-                            extraBody={{ bundleId: selected.id }}
+                            extraBody={{ bundleId: selected.id, ...(portal ? { portal } : {}) }}
                             amount={selected.price}
                             payLabel="Buy credits"
                             deBranded={deBranded}
