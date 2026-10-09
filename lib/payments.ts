@@ -572,7 +572,7 @@ export async function processCompletedSmsUnlock(reference: string, providerMetad
         title: 'Customer SMS Unlocked 💬',
         message: 'You can now request your sender ID, buy SMS credits and message your customers.',
         type: 'system',
-        action_url: subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+        action_url: originalMetadata.portal === 'platform' ? '/dashboard/sms' : subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
     })
 
     return { success: true }
@@ -679,7 +679,7 @@ export async function processCompletedSmsCreditPurchase(reference: string, provi
         title: 'SMS Credits Added 💬',
         message: `${purchase.credits} SMS credits have been added. Your balance is now ${newBalance}.`,
         type: 'system',
-        action_url: subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+        action_url: originalMetadata.portal === 'platform' ? '/dashboard/sms' : subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
     })
 
     return { success: true, credits: purchase.credits, balance: newBalance }

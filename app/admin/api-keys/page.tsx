@@ -41,7 +41,7 @@ interface ApiKeyRow {
     name: string
     status: 'pending' | 'active' | 'revoked'
     /** Absent on rows created before v2; those are all data keys. */
-    kind?: 'standard' | 'commission'
+    kind?: 'standard' | 'commission' | 'sms'
     last_used_at: string | null
     created_at: string
     users: {
@@ -64,6 +64,7 @@ const STATUS_BADGE: Record<string, string> = {
 const KIND_BADGE: Record<string, { label: string; className: string }> = {
     standard:   { label: 'Data',       className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
     commission: { label: 'Commission', className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
+    sms:        { label: 'SMS',        className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
 }
 
 export default function AdminApiKeysPage() {
@@ -176,6 +177,7 @@ export default function AdminApiKeysPage() {
                                 <SelectItem value="all">All types</SelectItem>
                                 <SelectItem value="standard">Data</SelectItem>
                                 <SelectItem value="commission">Commission</SelectItem>
+                                <SelectItem value="sms">SMS</SelectItem>
                             </SelectContent>
                         </Select>
                         <Button variant="ghost" size="icon" onClick={fetchKeys}>
@@ -209,9 +211,9 @@ export default function AdminApiKeysPage() {
                                             </span>
                                             <span className={cn(
                                                 'text-[10px] font-bold px-2 py-0.5 rounded-full uppercase',
-                                                KIND_BADGE[k.kind ?? 'standard'].className
+                                                (KIND_BADGE[k.kind ?? 'standard'] ?? KIND_BADGE.standard).className
                                             )}>
-                                                {KIND_BADGE[k.kind ?? 'standard'].label}
+                                                {(KIND_BADGE[k.kind ?? 'standard'] ?? KIND_BADGE.standard).label}
                                             </span>
                                             <span className="text-[10px] text-muted-foreground bg-secondary/50 px-2 py-0.5 rounded-full uppercase font-semibold">
                                                 {k.users.role}

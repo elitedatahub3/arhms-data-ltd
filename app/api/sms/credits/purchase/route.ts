@@ -3,6 +3,7 @@ import {
     loadSmsContext,
     isCustomerSmsEnabled,
     startSmsPurchase,
+    withPortal,
     submitSmsPurchaseOtp,
     SMS_DISABLED_MESSAGE,
 } from '@/lib/sms/sms-purchase'
@@ -65,7 +66,7 @@ export async function POST(request: Request) {
         const amount = Number((bundle as any).price)
 
         return startSmsPurchase({
-            ctx,
+            ctx: withPortal(ctx, body.portal),
             kind: 'sms_credits',
             amount,
             phone: String(phone || ''),

@@ -20,6 +20,8 @@ import {
 import { resolveProviderForScope, SCOPE_SETTING_KEY } from '@/lib/payment-provider'
 import { resolveSubAgentContext, type SubAgentContext } from '@/lib/sub-agents'
 import { resolveSmsAccount, type SmsAccount } from '@/lib/sms/customer-sms'
+import { getAccountMode, SMS_PLATFORM_SETTING_KEYS } from '@/lib/sms/platform'
+import type { SmsMode } from '@/lib/sms/sms-rules'
 
 export const SMS_PROVIDER_KEY = SCOPE_SETTING_KEY.sms
 
@@ -69,8 +71,23 @@ export interface SmsContext {
     sub: SubAgentContext
     settingsMap: Record<string, any>
     unlockPrice: number
-    /** Which portal the caller is in, so redirects and notifications land right. */
-    portal: 'shop' | 'sub'
+    /**
+     * Which portal the caller is in, so redirects and notifications land right.
+     * Resolved as shop or sub here; a route serving the SMS Platform pages sets
+     * 'platform' from the request with withPortal().
+     */
+    portal: SmsPortal
+    /** users.status — an inactive account cannot use SMS at all. */
+    userStatus: string
+    /** Platform Mode until a business registration is approved. */
+    mode: SmsMode
+}
+
+export type SmsPortal = 'shop' | 'sub' | 'platform'
+
+/** Honours { portal: 'platform' } from the SMS Platform pages; anything else keeps the resolved portal. */
+export function withPortal(ctx: SmsContext, requested: unknown): SmsContext {
+    return requested === 'platform' ? { ...ctx, portal: 'platform' } : ctx
 }
 
 /**
@@ -93,7 +110,7 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
 
     const { data: dbUser } = await supabaseAdmin
         .from('users')
-        .select('role')
+        .select('role, status')
         .eq('id', authUser.id)
         .maybeSingle()
 
@@ -108,7 +125,7 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
     const { data: settings } = await supabaseAdmin
         .from('admin_settings')
         .select('key, value')
-        .in('key', [...SMS_UNLOCK_PRICE_KEYS, 'sms_customer_enabled', 'sms_inline_send_max', 'sms_pool_senders', SMS_PROVIDER_KEY])
+        .in('key', [...SMS_UNLOCK_PRICE_KEYS, 'sms_customer_enabled', 'sms_inline_send_max', 'sms_pool_senders', SMS_PROVIDER_KEY, ...SMS_PLATFORM_SETTING_KEYS])
 
     const settingsMap: Record<string, any> = {}
     for (const row of (settings || [])) settingsMap[(row as any).key] = (row as any).value
@@ -125,6 +142,8 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
         ? Number(String(rawPrice).replace(/^"+|"+$/g, ''))
         : DEFAULT_UNLOCK_PRICE
 
+    const mode = await getAccountMode(supabaseAdmin, account.id)
+
     return {
         authUser,
         supabaseAdmin,
@@ -135,19 +154,25 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
         settingsMap,
         unlockPrice,
         portal: sub.isSub ? 'sub' : 'shop',
+        userStatus: (dbUser as any)?.status || 'active',
+        mode,
     }
 }
 
 /**
- * Why this caller cannot use Customer SMS at all, or null when they can.
+ * Why this caller cannot use SMS at all, or null when they can.
+ *
+ * Since the SMS Platform opened SMS to every user, a shop is no longer needed:
+ * only an inactive account or a sub-agent membership that is not active blocks
+ * it. Shop-only features (importing customers from orders, order confirmation
+ * SMS) check for the shop themselves.
  *
  * A sub is gated on their own membership only — the same call the USSD till
  * makes, and for the same reason: their upline's subscription state is
  * something the sub cannot fix and does not stop them trading elsewhere.
  */
-export function smsBlockReason(shop: any, sub: SubAgentContext): string | null {
-    if (!shop) return 'You need a shop before you can send SMS to customers'
-    if (shop.approval_status !== 'approved') return 'Your shop must be approved before you can send SMS'
+export function smsBlockReason(_shop: any, sub: SubAgentContext, userStatus: string = 'active'): string | null {
+    if (userStatus && userStatus !== 'active') return 'Your account is not active. Please contact support.'
     if (sub.isSub && sub.status !== 'active') {
         return sub.status === 'suspended'
             ? 'Your sub-agent account is suspended. Contact your Lead to be reinstated.'

@@ -200,6 +200,7 @@ const NAV_VARIANTS = {
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
                 { href: '/dashboard/upgrade', label: 'Role Upgrade', icon: Crown },
+                { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
             ],
             wallet: [
@@ -242,6 +243,7 @@ const NAV_VARIANTS = {
                 { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+                { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
             ],
             wallet: [
@@ -280,6 +282,7 @@ const NAV_VARIANTS = {
                 { href: '/admin/packages', label: 'Packages', icon: Package },
                 { href: '/admin/announcements', label: 'Announce', icon: Bell },
                 { href: '/admin/sms-broadcast', label: 'SMS', icon: MessageSquare },
+                { href: '/admin/sms-businesses', label: 'SMS Businesses', icon: Store },
                 { href: '/admin/email-broadcast', label: 'Email', icon: Send },
                 { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
                 { href: '/admin/referrals', label: 'Referrals', icon: Gift },

@@ -590,6 +590,34 @@ function SmsSettings() {
 
             <Card>
                 <CardHeader>
+                    <CardTitle className="text-base">SMS Platform limits</CardTitle>
+                    <CardDescription>Platform Mode is every account&apos;s default; Business Mode follows an approved business registration.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+                        {[
+                            { key: 'sms_daily_limit_platform', label: 'Daily limit · Platform', placeholder: '1000' },
+                            { key: 'sms_daily_limit_business', label: 'Daily limit · Business', placeholder: '0' },
+                            { key: 'sms_sender_cap_platform', label: 'Sender IDs · Platform', placeholder: '3' },
+                            { key: 'sms_sender_cap_business', label: 'Sender IDs · Business', placeholder: '200' },
+                        ].map((f) => (
+                            <div key={f.key} className="space-y-1.5">
+                                <Label className="text-xs">{f.label}</Label>
+                                <Input type="number" min={0} value={settings[f.key] || ''} onChange={(e) => setField(f.key, e.target.value)} placeholder={f.placeholder} />
+                            </div>
+                        ))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">Daily limits count recipients per day; 0 means no limit.</p>
+                    <div className="space-y-1.5 max-w-sm">
+                        <Label className="text-xs">Documents WhatsApp number</Label>
+                        <Input value={settings.sms_business_docs_whatsapp || ''} onChange={(e) => setField('sms_business_docs_whatsapp', e.target.value)} placeholder="233244123456" />
+                        <p className="text-[11px] text-muted-foreground">Where business owners send their Ghana Card and registration certificate. Leave empty to hide the box.</p>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
                     <CardTitle className="text-base">Unlock price (GHS, one time)</CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-3 grid-cols-2 sm:grid-cols-4">

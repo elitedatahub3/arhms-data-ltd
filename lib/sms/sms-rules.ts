@@ -89,18 +89,22 @@ export const SENDER_ID_MAX = 11
 const BLOCKED_SUBSTRINGS = [
     'DATA', 'BUNDLE', 'TELECEL', 'VODAFONE', 'AIRTELTIGO', 'AIRTEL',
     'TIGO', 'MTN', 'MOMO', 'MOBILEMONEY',
+    // Banks and payment rails: a message "from" one of these is the classic
+    // phishing opener, and the networks refuse them for the same reason.
+    'BANK', 'ECOBANK', 'STANBIC', 'ABSA', 'FIDELITY', 'CALBANK', 'ZENITH',
+    'HUBTEL', 'PAYSTACK', 'EXPRESSPAY', 'ZEEPAY', 'GHIPSS',
 ]
 
 /**
  * Short words that would otherwise swallow innocent names — blocking "GLO" as a
  * substring would reject "Global Shop", so these only match as whole words.
  */
-const BLOCKED_WORDS = ['GLO', 'AT']
+const BLOCKED_WORDS = ['GLO', 'AT', 'GCB', 'UBA', 'CBG', 'ADB', 'ECG', 'GRA', 'SSNIT', 'NHIS', 'NCA']
 
 /** Shown in the request form, so the owner reads them before typing a name. */
 export const SENDER_ID_TIPS = [
     'Use your real business name — the networks check it against your Ghana Card and business details.',
-    'Do not put DATA, BUNDLE, MOMO or any network name (MTN, Telecel, AirtelTigo) in it. Names like these are rejected outright.',
+    'Do not put DATA, BUNDLE, MOMO, BANK or any network, bank or government name (MTN, Telecel, GCB, ECG, GRA…) in it. Names like these are rejected outright.',
     `Keep it to ${SENDER_ID_MAX} characters or fewer — letters, numbers and spaces only.`,
     'Approval is done by the networks, not by us, so it can take a few working days.',
 ]
@@ -139,7 +143,7 @@ export function validateSenderId(name: string): SenderIdCheck {
         if (squashed.includes(word)) {
             return {
                 ok: false,
-                error: `Sender ID cannot contain "${word}" — the networks reject names that look like a telco or a data service. Use your business name instead.`,
+                error: `Sender ID cannot contain "${word}" — the networks reject names that look like a telco, a bank or a data service. Use your business name instead.`,
             }
         }
     }
@@ -148,7 +152,7 @@ export function validateSenderId(name: string): SenderIdCheck {
         if (upper.split(/[^A-Z0-9]+/).includes(word)) {
             return {
                 ok: false,
-                error: `Sender ID cannot contain "${word}" — the networks reject names that look like a telco. Use your business name instead.`,
+                error: `Sender ID cannot contain "${word}" — the networks reject names that look like a telco, a bank or a government body. Use your business name instead.`,
             }
         }
     }
@@ -168,3 +172,152 @@ export function validateSenderId(name: string): SenderIdCheck {
  * without anybody editing a list.
  */
 export const SUB_AGENTS_GROUP_ID = 'system:sub-agents'
+
+// ============================================================
+// MODES & CONTENT
+// ============================================================
+
+/**
+ * Platform Mode is where every account starts. Business Mode is earned by an
+ * approved business registration and is what allows links in messages.
+ */
+export type SmsMode = 'platform' | 'business'
+
+// Explicit schemes and www. always count. A bare domain counts only with a TLD
+// people actually use in links, so "GHS 5.00" or "Mr.Ofori" is not a URL.
+const URL_PATTERN =
+    /(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|gh|io|co|me|ly|xyz|info|biz|link|app|site|online|shop|store|top|click|live|to|gl|cc|ws)\b(?:\/\S*)?/i
+
+/**
+ * Scam patterns refused in every mode. These are the scripts that circulate in
+ * Ghana — "wrong transfer, send it back", "your MoMo is blocked", "send me your
+ * PIN" — and a sender ID on our account delivering one is our problem too.
+ *
+ * Deliberately narrow: an ordinary OTP ("Your code is 1234. Do not share it")
+ * must pass, since that is the commonest thing the SMS API is used for.
+ */
+const FRAUD_PATTERNS: { pattern: RegExp; label: string }[] = [
+    { pattern: /\b(?:send|share|give|tell|provide|reply with|forward)\s+(?:it\s+|me\s+|us\s+)?(?:your|the)\s+(?:momo\s+|mobile money\s+|bank\s+|atm\s+|card\s+)?(?:pin|otp|password|secret code|verification code)\b/i, label: 'asks for a PIN or code' },
+    { pattern: /\b(?:momo|mobile money|wallet|sim)\b[^.!?\n]{0,30}\b(?:has been|is|was|will be)\s+(?:blocked|suspended|frozen|deactivated)\b/i, label: 'claims a MoMo account is blocked' },
+    { pattern: /\b(?:wrong(?:ly)?|mistaken(?:ly)?|by mistake)\b[^.!?\n]{0,60}\b(?:send (?:it |the money )?back|refund|reverse|return (?:it|the money))\b/i, label: 'asks for a "wrong transfer" refund' },
+    { pattern: /\byou(?:'ve| have)? won\b[^.!?\n]{0,60}\b(?:promo|lottery|draw|prize|jackpot|cash)\b/i, label: 'claims a prize' },
+    { pattern: /\b(?:verify|confirm|update|reactivate|unblock)\s+your\s+(?:momo|mobile money|bank|wallet)\b/i, label: 'asks to verify a MoMo or bank account' },
+]
+
+// "Do not share your PIN" is the warning, not the scam. Checked by hand rather
+// than with a lookbehind, which older Safari cannot parse — this file ships to
+// the browser.
+const NEGATION_BEFORE = /\b(?:not|never|don't|dont|won't)\s*$/i
+
+function findFraud(text: string): string | null {
+    for (const { pattern, label } of FRAUD_PATTERNS) {
+        const match = pattern.exec(text)
+        if (!match) continue
+        const before = text.slice(Math.max(0, match.index - 15), match.index)
+        if (NEGATION_BEFORE.test(before)) continue
+        return label
+    }
+    return null
+}
+
+export interface ContentCheck {
+    ok: boolean
+    error?: string
+    /** Set when the only problem is a link, so the UI can point at Business Mode. */
+    needsBusinessMode?: boolean
+}
+
+/**
+ * Message content rules by mode.
+ *
+ * Called by the compose box (as a hint) and by the send path (as the gate),
+ * for dashboard and API sends alike.
+ */
+export function checkMessageContent(message: string, mode: SmsMode): ContentCheck {
+    const text = message ?? ''
+
+    const fraud = findFraud(text)
+    if (fraud) {
+        return { ok: false, error: `This message looks like a scam (it ${fraud}) and cannot be sent. Contact support if this is a mistake.` }
+    }
+
+    if (mode !== 'business' && URL_PATTERN.test(text)) {
+        return {
+            ok: false,
+            needsBusinessMode: true,
+            error: 'Links are only allowed in Business Mode. Remove the link, or register your business to unlock links.',
+        }
+    }
+
+    return { ok: true }
+}
+
+// ============================================================
+// BUSINESS REGISTRATION
+// ============================================================
+
+export const BUSINESS_NAME_MIN = 2
+export const BUSINESS_NAME_MAX = 120
+export const BUSINESS_DESCRIPTION_MIN = 10
+export const BUSINESS_DESCRIPTION_MAX = 2000
+
+const GHANA_CARD_PATTERN = /^GHA-(\d{9})-(\d)$/
+
+/** GHA-123456789-0, typed with any spacing or case. */
+export function normaliseGhanaCard(raw: string): string | null {
+    const compact = String(raw ?? '').toUpperCase().replace(/\s+/g, '')
+    const withDashes = /^GHA\d{10}$/.test(compact) ? `GHA-${compact.slice(3, 12)}-${compact.slice(12)}` : compact
+    return GHANA_CARD_PATTERN.test(withDashes) ? withDashes : null
+}
+
+/** The four digits that are kept: the last three of the number plus the check digit. */
+export function ghanaCardLast4(card: string): string | null {
+    const match = GHANA_CARD_PATTERN.exec(card)
+    return match ? `${match[1].slice(-3)}${match[2]}` : null
+}
+
+/** 1234 → GHA-*****123-4, the only form the card is ever shown in again. */
+export function maskGhanaCard(last4: string | null | undefined): string | null {
+    if (!last4 || !/^\d{4}$/.test(last4)) return null
+    return `GHA-*****${last4.slice(0, 3)}-${last4.slice(3)}`
+}
+
+/** 0244123456, +233 24 412 3456 or 233244123456 → 233244123456. */
+export function normaliseWhatsApp(raw: string): string | null {
+    const digits = String(raw ?? '').replace(/\D/g, '')
+    if (/^233\d{9}$/.test(digits)) return digits
+    if (/^0\d{9}$/.test(digits)) return `233${digits.slice(1)}`
+    return null
+}
+
+/** "https://Shop.com/about" → "shop.com". Null when it is not a plausible domain. */
+export function normaliseDomain(raw: string): string | null {
+    const trimmed = String(raw ?? '').trim().toLowerCase()
+    if (!trimmed) return null
+    const host = trimmed.replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0]
+    return /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/.test(host) ? host : null
+}
+
+export interface BusinessInput {
+    businessName: string
+    description: string
+    domain: string
+    ghanaCard: string
+    whatsapp: string
+}
+
+/**
+ * What stops a registration from being SUBMITTED. A draft may be saved with
+ * gaps; only the name is required for that.
+ */
+export function businessSubmitErrors(input: BusinessInput): string[] {
+    const errors: string[] = []
+    const name = (input.businessName ?? '').trim()
+    const description = (input.description ?? '').trim()
+    if (name.length < BUSINESS_NAME_MIN || name.length > BUSINESS_NAME_MAX) errors.push(`Business name must be ${BUSINESS_NAME_MIN}–${BUSINESS_NAME_MAX} characters`)
+    if (description.length < BUSINESS_DESCRIPTION_MIN || description.length > BUSINESS_DESCRIPTION_MAX) errors.push(`Description must be ${BUSINESS_DESCRIPTION_MIN}–${BUSINESS_DESCRIPTION_MAX} characters`)
+    if (!normaliseDomain(input.domain)) errors.push('Enter your business website or domain')
+    if (!normaliseGhanaCard(input.ghanaCard)) errors.push('Enter a valid Ghana Card number (GHA-XXXXXXXXX-X)')
+    if (!normaliseWhatsApp(input.whatsapp)) errors.push('Enter a valid WhatsApp number (e.g. 233244123456)')
+    return errors
+}

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { validateAdminAccess } from '@/lib/auth-utils'
 import { SMS_UNLOCK_PRICE_KEYS, SMS_PROVIDER_KEY } from '@/lib/sms/sms-purchase'
+import { SMS_PLATFORM_SETTING_KEYS } from '@/lib/sms/platform'
+import { normaliseWhatsApp } from '@/lib/sms/sms-rules'
 import { isKingFlexySmsConfigured } from '@/lib/kingflexy-sms-service'
 import { getActiveSmsProvider } from '@/lib/sms-service'
 
@@ -24,6 +26,8 @@ const SETTING_KEYS = [
     'sms_inline_send_max',
     SMS_PROVIDER_KEY,
     ...SMS_UNLOCK_PRICE_KEYS,
+    // SMS Platform: daily limits and sender caps per mode, and the documents WhatsApp.
+    ...SMS_PLATFORM_SETTING_KEYS,
 ]
 
 const unquote = (v: any) => (v === null || v === undefined ? '' : String(v).replace(/^"+|"+$/g, ''))
@@ -84,7 +88,16 @@ export async function POST(request: NextRequest) {
                 if (!SETTING_KEYS.includes(key)) continue
                 const value = String(raw ?? '').trim()
 
-                if ((SMS_UNLOCK_PRICE_KEYS as readonly string[]).includes(key) || key === 'sms_inline_send_max') {
+                if (key === 'sms_business_docs_whatsapp') {
+                    const wa = value ? normaliseWhatsApp(value) : ''
+                    if (wa === null) {
+                        return NextResponse.json({ error: 'Documents WhatsApp must be a Ghana number, e.g. 233244123456' }, { status: 400 })
+                    }
+                    updates.push({ key, value: wa })
+                    continue
+                }
+
+                if ((SMS_UNLOCK_PRICE_KEYS as readonly string[]).includes(key) || key === 'sms_inline_send_max' || key.startsWith('sms_daily_limit_') || key.startsWith('sms_sender_cap_')) {
                     const n = Number(value)
                     if (!Number.isFinite(n) || n < 0) {
                         return NextResponse.json({ error: `${key} must be a number of zero or more` }, { status: 400 })

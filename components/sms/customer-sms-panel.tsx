@@ -37,6 +37,7 @@ interface AccountInfo {
     contactCount: number
     isSub: boolean
     unlockPrice: number
+    mode?: 'platform' | 'business'
     account: {
         status: 'locked' | 'active' | 'suspended'
         credits: number
@@ -325,6 +326,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
                 <TabsContent value="send" className="mt-4">
                     <SmsCompose
+                        mode={info.mode}
                         credits={account.credits}
                         allowedSenders={info.allowedSenders}
                         groups={groups}

@@ -4,6 +4,7 @@ import {
     smsBlockReason,
     isCustomerSmsEnabled,
     startSmsPurchase,
+    withPortal,
     submitSmsPurchaseOtp,
     SMS_DISABLED_MESSAGE,
 } from '@/lib/sms/sms-purchase'
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
             })
         }
 
-        const blockedReason = smsBlockReason(shop, sub)
+        const blockedReason = smsBlockReason(shop, sub, ctx.userStatus)
         if (blockedReason) {
             // A sub blocked on membership is a 403 (they may not trade at all);
             // a missing or unapproved shop is a 400 (fix the shop and come back).
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
         }
 
         return startSmsPurchase({
-            ctx,
+            ctx: withPortal(ctx, body.portal),
             kind: 'sms_unlock',
             amount: unlockPrice,
             phone: String(phone || ''),

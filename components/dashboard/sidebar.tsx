@@ -70,6 +70,7 @@ const userNavItems = [
     { href: '/dashboard/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/dashboard/profile', label: 'Profile', icon: User },
     { href: '/dashboard/install', label: 'Download App', icon: Download },
+    { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
     { href: '/dashboard/developer-api', label: 'Developer API', icon: Code2 },
     { href: '/dashboard/commission-wallet', label: 'Commission Wallet', icon: Percent },
 ]
@@ -114,6 +115,7 @@ const adminNavItems = [
     { href: '/admin/announcements', label: 'Announce', icon: Bell },
     { href: '/admin/sms-broadcast', label: 'SMS', icon: MessageSquare },
     { href: '/admin/sms-senders', label: 'Customer SMS', icon: MessageSquare },
+    { href: '/admin/sms-businesses', label: 'SMS Businesses', icon: Store },
     { href: '/admin/email-broadcast', label: 'Email', icon: Send },
     { href: '/admin/finance', label: 'Finance', icon: Banknote },
     { href: '/admin/hubtel-payments', label: 'Hubtel Payments', icon: Banknote },

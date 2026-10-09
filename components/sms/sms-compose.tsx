@@ -23,7 +23,7 @@ import {
 import { Send, Loader2, Users, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { countSegments, SMS_MESSAGE_MAX, SMS_MESSAGE_MIN } from '@/lib/sms/sms-rules'
+import { countSegments, checkMessageContent, SMS_MESSAGE_MAX, SMS_MESSAGE_MIN, type SmsMode } from '@/lib/sms/sms-rules'
 import type { SmsGroup } from '@/components/sms/sms-contacts'
 
 export interface AllowedSender {
@@ -42,7 +42,10 @@ export function SmsCompose({
     onSent,
     onNeedCredits,
     onNeedSender,
+    mode = 'platform',
 }: {
+    /** Platform Mode refuses links; Business Mode allows them. */
+    mode?: SmsMode
     credits: number
     allowedSenders: AllowedSender[]
     groups: SmsGroup[]
@@ -80,6 +83,8 @@ export function SmsCompose({
     const estimatedCost = segmentInfo.segments * estimatedRecipients
     const hasOwnSender = allowedSenders.some((s) => s.type === 'own')
     const tooShort = message.trim().length < SMS_MESSAGE_MIN
+    // The same check the send path applies; here it is only an early warning.
+    const contentCheck = useMemo(() => checkMessageContent(message, mode), [message, mode])
 
     const toggleTarget = (id: string) => {
         setTargets((prev) => {
@@ -93,6 +98,7 @@ export function SmsCompose({
     const openConfirm = () => {
         if (!allowedSenders.length) { onNeedSender(); return }
         if (tooShort) { toast.error(`Write at least ${SMS_MESSAGE_MIN} characters`); return }
+        if (!contentCheck.ok) { toast.error(contentCheck.error); return }
         if (!estimatedRecipients) { toast.error('Choose who to send to'); return }
         if (estimatedCost > credits && !targets.size) {
             toast.error(`This send needs ${estimatedCost} credits but you have ${credits}`)
@@ -243,6 +249,11 @@ export function SmsCompose({
                                 <span className="text-amber-600">Emoji or special characters: 70 characters per part</span>
                             )}
                         </div>
+                        {!contentCheck.ok && message.trim().length >= SMS_MESSAGE_MIN && (
+                            <p className="flex items-start gap-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 p-2 text-xs text-amber-800 dark:text-amber-300">
+                                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {contentCheck.error}
+                            </p>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 rounded-2xl bg-muted/60 p-3 text-center">
