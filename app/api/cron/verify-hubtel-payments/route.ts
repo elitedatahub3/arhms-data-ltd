@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSAGE } from '@/lib/retired-boost'
 import { createServerClient } from '@/lib/supabase'
+import { isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 import { checkPaymentStatus } from '@/lib/hubtel-payment-service'
 import { processCompletedWalletPayment, processCompletedUpgradePayment, processCompletedDealerSubscription, isSmsPaymentReference } from '@/lib/payments'
 import { logStatusCheck } from '@/lib/hubtel-payment-log'
@@ -53,9 +54,8 @@ function cronBackoffMs(_ageMs: number, checkCount: number): number {
 export async function GET(request: NextRequest) {
     const startTime = Date.now()
 
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     const supabase = createServerClient()
@@ -250,3 +250,10 @@ export async function GET(request: NextRequest) {
     console.log('[CronHubtel] Run complete:', results)
     return NextResponse.json({ success: true, ...results })
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+

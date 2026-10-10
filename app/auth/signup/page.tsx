@@ -38,7 +38,7 @@ export default function SignupPage() {
     const [lockoutMinutes, setLockoutMinutes] = useState<number | null>(null)
     const { signUp } = useAuth()
     const router = useRouter()
-    const [guestUrl, setGuestUrl] = useState('https://arhmsgh.com/shop/demo')
+    const [guestUrl, setGuestUrl] = useState('/shop/demo')
 
     useEffect(() => {
         fetch('/api/public/config').then(response => response.ok ? response.json() : null).then(data => {
@@ -299,7 +299,7 @@ export default function SignupPage() {
                                         id="email"
                                         name="email"
                                         type="email"
-                                        placeholder="you@arhmsgh.com"
+                                        placeholder="you@dataking.qzz.io"
                                         value={formData.email}
                                         onChange={handleChange}
                                         required

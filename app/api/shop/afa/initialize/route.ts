@@ -265,8 +265,14 @@ export async function POST(request: NextRequest) {
 
             // ── PAYSTACK BRANCH ───────────────────────────────────────────────
             if (provider === 'paystack') {
-                const guestEmail = validEmail || `guest-${cleanPhone}@checkout.arhmsgh.com`
+                const guestEmail = validEmail || `guest-${cleanPhone}@checkout.dataking.qzz.io`
                 const amountInPesewas = Math.round(totalAmount * 100)
+
+                const requestOrigin = request.headers.get('origin') ||
+                    (request.headers.get('x-forwarded-host') ? `${request.headers.get('x-forwarded-proto') || 'https'}://${request.headers.get('x-forwarded-host')}` : null) ||
+                    (request.headers.get('host') ? `https://${request.headers.get('host')}` : null) ||
+                    process.env.NEXT_PUBLIC_APP_URL ||
+                    'https://www.dataking.qzz.io'
 
                 const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
                     method: 'POST',
@@ -278,7 +284,7 @@ export async function POST(request: NextRequest) {
                         email: guestEmail,
                         amount: amountInPesewas,
                         reference: referenceCode,
-                        callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/shop/${shopSlug}/success?reference=${referenceCode}`,
+                        callback_url: `${requestOrigin.replace(/\/$/, '')}/shop/${shopSlug}/success?reference=${referenceCode}`,
                         metadata: {
                             type: 'afa_registration',
                             shop_slug: shopSlug,
@@ -395,12 +401,12 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ error: moolreResponse.error || 'Payment initialization failed' }, { status: 500 })
             }
 
-            if (moolreResponse.status === '200_OTP_REQ') {
+            if (moolreResponse.status === '200_OTP_REQ' || moolreResponse.success) {
                 return NextResponse.json({
                     success: true,
                     otpRequired: true,
                     reference: referenceCode,
-                    message: 'OTP required. Please enter the code sent to your phone.',
+                    message: 'OTP is required to complete this payment. Please enter the code sent to your phone.',
                 })
             }
 

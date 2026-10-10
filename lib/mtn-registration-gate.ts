@@ -100,7 +100,7 @@ export const USSD_NOT_REGISTERED_MESSAGE =
     'This MTN number is not registered for data yet. We have started registering it. This can take up to 2 weeks. Please try again after that.'
 
 export const USSD_REGISTRATION_UNVERIFIABLE_MESSAGE =
-    'We cannot verify this MTN number right now. Please try again in a few minutes or buy at arhmsgh.com.'
+    'We cannot verify this MTN number right now. Please try again in a few minutes or buy at dataking.qzz.io.'
 
 /** Error code every gated route returns, and every client checks for. */
 export const MTN_NOT_REGISTERED = 'MTN_NOT_REGISTERED'

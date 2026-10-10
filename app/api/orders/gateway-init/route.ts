@@ -556,7 +556,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Failed to initialize mobile money payment' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.status === '200_OTP_REQ' || (!otpCode && moolreResponse.success)) {
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',

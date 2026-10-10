@@ -514,7 +514,8 @@ export default function ShopSetupPage() {
         )
     }
 
-    const shopUrl = form.shop_slug ? `${process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')}/shop/${form.shop_slug}` : ''
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io')
+    const shopUrl = form.shop_slug ? `${baseOrigin}/shop/${form.shop_slug}` : ''
     const dividerList = showAllDividers ? DIVIDER_PRESETS : POPULAR_DIVIDERS
     const platform = detectPlatform(form.community_link)
 

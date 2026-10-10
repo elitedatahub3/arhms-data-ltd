@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 
 /**
  * Escalation Cron: Sweep sub withdrawals stuck in shop_owner_pending
  *
- * Runs hourly (registered in vercel.json; Vercel supplies the CRON_SECRET
- * Authorization header the check below expects).
+ * Runs hourly (can be registered in cron-job.org with Bearer or ?secret=).
  *
  * A withdrawal escalates when its 48h window has lapsed:
  *   status: 'shop_owner_pending' → 'pending' (enters admin queue)
@@ -23,12 +23,9 @@ import { createServerClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
   // === Auth: Require valid cron secret ===
-  const authHeader = request.headers.get('authorization')
-  const cronSecret = process.env.CRON_SECRET || process.env.UPSTASH_CRON_SECRET || ''
-
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+  if (!isCronAuthorized(request)) {
     console.warn('[Escalate Cron] Unauthorized cron call')
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return cronUnauthorizedResponse()
   }
 
   const supabase: any = createServerClient()
@@ -128,3 +125,10 @@ export async function GET(request: NextRequest) {
     )
   }
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+

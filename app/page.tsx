@@ -74,8 +74,7 @@ export default async function HomePage() {
             const shopSlug = await getCachedFallbackShopSlug()
 
             if (shopSlug) {
-                const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
-                guestUrl = `${baseUrl}/shop/${shopSlug}`
+                guestUrl = `/shop/${shopSlug}`
             } else {
                 guestUrl = ''
             }

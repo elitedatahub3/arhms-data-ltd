@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { Database } from '@/types/supabase'
 
+import { getCookieDomain } from '@/lib/supabase'
+
 /**
  * Drop-in async replacement for createRouteHandlerClient from @supabase/auth-helpers-nextjs.
  * Uses @supabase/ssr so the cookie format matches the middleware and browser client.
@@ -19,8 +21,12 @@ export async function createRouteHandlerClient(_options?: any) {
                     return cookieStore.getAll()
                 },
                 setAll(cookiesToSet) {
+                    const domain = getCookieDomain()
                     cookiesToSet.forEach(({ name, value, options }) => {
-                        try { cookieStore.set(name, value, options) } catch {}
+                        try {
+                            const opts = { path: '/', ...options, ...(domain && { domain }) }
+                            cookieStore.set(name, value, opts)
+                        } catch {}
                     })
                 },
             },

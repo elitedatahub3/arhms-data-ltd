@@ -266,7 +266,7 @@ export async function POST(request: NextRequest) {
             }
 
             // OTP required — return so frontend can prompt the user
-            if (moolreResponse.status === '200_OTP_REQ') {
+            if (moolreResponse.status === '200_OTP_REQ' || (!otpCode && moolreResponse.success)) {
                 return NextResponse.json({
                     success: true,
                     gateway: 'moolre',

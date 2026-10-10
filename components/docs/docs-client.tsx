@@ -69,7 +69,7 @@ const RATE_LIMITS: { bucket: string; endpoints: string; perMinute: number }[] = 
 // messages quoted from the code so a partner can match on what they will really see.
 const ERROR_CODES: { code: number; name: string; when: string; action: string }[] = [
     { code: 400, name: 'Bad Request',          when: 'A field is missing or malformed — an invalid phone number, an unknown network, an amount outside the biller\'s range.', action: 'Fix the request. The message names the field. Retrying unchanged will fail again.' },
-    { code: 401, name: 'Unauthorized',         when: '"Missing Authorization header" or "Invalid API key".', action: 'Send the key in the Authorization header, on arhmsgh.com (not www).' },
+    { code: 401, name: 'Unauthorized',         when: '"Missing Authorization header" or "Invalid API key".', action: 'Send the key in the Authorization header, on dataking.qzz.io.' },
     { code: 402, name: 'Payment Required',     when: '"Insufficient wallet balance. Top up your wallet and retry."', action: 'Top up from the dashboard. Nothing was charged.' },
     { code: 403, name: 'Forbidden',            when: 'The key is pending approval or revoked, the account is suspended, the role is not allowed, or a standard key was sent to a Commission endpoint (or vice versa).', action: 'Read the message — it says which. Pending keys need admin approval.' },
     { code: 404, name: 'Not Found',            when: 'No order with that reference, or no such utility account.', action: 'Check the reference. For bills, poll with the reference from the /pay response.' },
@@ -549,9 +549,7 @@ export default function DocsClient() {
                                 <p className="mt-1">
                                     The API allows requests from any origin, so a call from browser JavaScript will succeed —
                                     and hand your key to anyone who opens DevTools. Keep the key in an environment variable
-                                    on your backend. Use <code className="font-mono">arhmsgh.com</code>, never{' '}
-                                    <code className="font-mono">www.arhmsgh.com</code>: the www host redirects, and the
-                                    redirect drops your Authorization header.
+                                    on your backend. Use <code className="font-mono">dataking.qzz.io</code>.
                                 </p>
                             </div>
                         </div>
