@@ -439,8 +439,12 @@ export function mapBundlePortalStatus(status: string): MappedStatus {
  * `allowed` holds approved numbers; `inFlight` those approved but blocked by an
  * unfinished order (can_order false). A number whose lookup failed is in
  * neither set and is reported in `failed`.
+ *
+ * Also consulted by the MTN registration gate (lib/mtn-registration-gate.ts): a
+ * number accepted here is let through even if Agent Portal has not enabled it. The
+ * gate passes its own per-call `timeoutMs`, tighter than the checker page's default.
  */
-export async function verifyMtnNumbers(msisdns: string[], concurrency = 5): Promise<{
+export async function verifyMtnNumbers(msisdns: string[], concurrency = 5, options?: { timeoutMs?: number }): Promise<{
     success: boolean
     allowed: Set<string>
     inFlight: Set<string>
@@ -458,7 +462,7 @@ export async function verifyMtnNumbers(msisdns: string[], concurrency = 5): Prom
         while (next < msisdns.length) {
             const number = msisdns[next++]
             try {
-                const { ok, data, status } = await callApi('verify_number', { network: 'mtn', recipient: normalizePhone(number) }, 10_000)
+                const { ok, data, status } = await callApi('verify_number', { network: 'mtn', recipient: normalizePhone(number) }, options?.timeoutMs ?? 10_000)
                 if (ok && data?.success === true && data?.data) {
                     if (data.data.allowed === true) {
                         allowed.add(number)

@@ -1736,9 +1736,9 @@ export default function FulfillmentPage() {
                         outright</strong> on that surface — nothing is charged and no order is created, and a bulk
                         order is refused whole if any one number in it is unregistered. When OFF, that surface goes
                         through silently. The developer API is never affected: those orders sit pending until MTN
-                        enables the number. Runs the Agent Portal registration check whichever supplier is
-                        currently fulfilling MTN, so some sales your active supplier could have delivered will be
-                        turned away instead. Checking a number also submits it for registration — turning a switch
+                        enables the number. A number goes through if either Agent Portal has registered it or
+                        BundlePortal accepts it, whichever supplier is currently fulfilling MTN, so some sales
+                        your active supplier could have delivered may still be turned away. Checking a number also submits it for registration — turning a switch
                         off later does not undo that. Changes apply within a minute.
                     </p>
                     {([

@@ -33,6 +33,11 @@
  * So do not "restore consistency" by wiring this into an API v1 route. That exemption
  * is the requirement; scripts/test-mtn-gate-strict.ts asserts the whole import graph.
  *
+ * A number counts as registered if Agent Portal has enabled it OR BundlePortal's
+ * verify_number accepts it. Both are asked in parallel; BundlePortal can only ever turn
+ * a refusal into a pass, never the reverse, and its answers are not cached (the cache's
+ * positives are permanent and mean "Agent Portal enabled").
+ *
  * Three things worth knowing before you change anything here:
  *
  *   1. Checking is NOT read-only. verifyMtnWhitelist() auto-submits any number that
@@ -55,6 +60,7 @@
  *      loadGateSettings for why that is a deliberate choice with a real cost attached.
  */
 import { verifyMtnWhitelist } from '@/lib/agentportal-service'
+import { verifyMtnNumbers as verifyBundlePortalNumbers } from '@/lib/bundleportal-service'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
 import { redactIdentifier } from '@/lib/safe-log'
 import { ALL_MTN_GATE_KEYS, resolveGateEnabled, type GateSurface } from '@/lib/mtn-gate-keys'
@@ -94,6 +100,12 @@ const UPSTREAM_TIMEOUT_MS = 4000
  * the caller as a broken service. Better to answer "cannot verify" fast than to hang.
  */
 const USSD_UPSTREAM_TIMEOUT_MS = 1500
+
+/**
+ * BundlePortal checks one number per call. Higher than its checker page's 5 so a
+ * bulk paste stays bounded; only numbers not already known registered reach it.
+ */
+const BUNDLEPORTAL_CONCURRENCY = 10
 
 /** The single wait time quoted to buyers. Change it here and everywhere follows. */
 export const REGISTRATION_WAIT_TEXT = 'up to 2 weeks'
@@ -346,8 +358,22 @@ async function resolveRegistrationStatuses(
         }
     }
 
-    if (needsUpstream.length > 0) {
-        const { success, allowed, error } = await verifyMtnWhitelist(needsUpstream, { timeoutMs })
+    // BundlePortal is asked about every number not already known registered — including
+    // cached negatives, since its answers are never cached — alongside Agent Portal
+    // rather than after it, so the wait is the slower of the two, not their sum.
+    const needsBundlePortal = candidates.filter(n => statusByNumber.get(n) !== 'registered')
+    const [agentPortal, bundlePortal] = await Promise.all([
+        needsUpstream.length > 0
+            ? verifyMtnWhitelist(needsUpstream, { timeoutMs })
+            : null,
+        needsBundlePortal.length > 0
+            ? verifyBundlePortalNumbers(needsBundlePortal, BUNDLEPORTAL_CONCURRENCY, { timeoutMs })
+                .catch((error: any) => ({ success: false, allowed: new Set<string>(), error: error?.message }))
+            : null,
+    ])
+
+    if (agentPortal) {
+        const { success, allowed, error } = agentPortal
 
         if (!success) {
             console.error('[MtnGate] Verify failed for', needsUpstream.length, 'number(s):', error)
@@ -362,6 +388,15 @@ async function resolveRegistrationStatuses(
             }
             await recordRegistrationResults(supabase, results)
         }
+    }
+
+    // BundlePortal can only turn a refusal or an unknown into a pass. If it failed or
+    // has no key, nothing changes — so the fail-open/fail-closed rules still hold.
+    if (bundlePortal) {
+        if (!bundlePortal.success) {
+            console.error('[MtnGate] BundlePortal verify failed:', bundlePortal.error)
+        }
+        for (const number of bundlePortal.allowed) statusByNumber.set(number, 'registered')
     }
 
     return statusByNumber

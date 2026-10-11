@@ -41,6 +41,9 @@ import path from 'path'
 type UpstreamMode = 'allow' | 'deny' | 'fail'
 let upstreamMode: UpstreamMode = 'deny'
 let upstreamCalls = 0
+/** BundlePortal's verify_number — a second opinion that can only let a number through. */
+let bundlePortalMode: UpstreamMode = 'deny'
+let bundlePortalCalls = 0
 
 const REPO_ROOT = path.resolve(__dirname, '..')
 
@@ -56,6 +59,22 @@ const originalLoad = (Module as any)._load
                 return {
                     success: true,
                     allowed: upstreamMode === 'allow' ? new Set(msisdns) : new Set<string>(),
+                }
+            },
+        }
+    }
+    if (request === '@/lib/bundleportal-service') {
+        return {
+            verifyMtnNumbers: async (msisdns: string[]) => {
+                bundlePortalCalls++
+                if (bundlePortalMode === 'fail') {
+                    return { success: false, allowed: new Set<string>(), inFlight: new Set<string>(), failed: new Set(msisdns), error: 'stubbed outage' }
+                }
+                return {
+                    success: true,
+                    allowed: bundlePortalMode === 'allow' ? new Set(msisdns) : new Set<string>(),
+                    inFlight: new Set<string>(),
+                    failed: new Set<string>(),
                 }
             },
         }
@@ -112,6 +131,8 @@ interface Case {
     name: string
     enabled: boolean
     upstream: UpstreamMode
+    /** BundlePortal's answer. Defaults to deny. */
+    bundlePortal?: UpstreamMode
     phone: string
     network: string
     wantBlocked: boolean
@@ -156,6 +177,31 @@ const cases: Case[] = [
         enabled: true, upstream: 'deny', phone: TELECEL, network: 'MTN',
         wantBlocked: false, wantBatchGated: false,
     },
+    {
+        name: 'Agent Portal refuses, BundlePortal accepts → allowed',
+        enabled: true, upstream: 'deny', bundlePortal: 'allow', phone: MTN, network: 'MTN',
+        wantBlocked: false, wantBatchGated: false,
+    },
+    {
+        name: 'Agent Portal outage, BundlePortal accepts → allowed (USSD no longer refuses)',
+        enabled: true, upstream: 'fail', bundlePortal: 'allow', phone: MTN, network: 'MTN',
+        wantBlocked: false, wantBatchGated: false,
+    },
+    {
+        name: 'Agent Portal refuses, BundlePortal outage → REFUSED (unchanged)',
+        enabled: true, upstream: 'deny', bundlePortal: 'fail', phone: MTN, network: 'MTN',
+        wantBlocked: true, wantReason: 'unregistered', wantBatchGated: true,
+    },
+    {
+        name: 'both outages → REFUSED on USSD, fail open on web',
+        enabled: true, upstream: 'fail', bundlePortal: 'fail', phone: MTN, network: 'MTN',
+        wantBlocked: true, wantReason: 'unverifiable', wantBatchGated: false,
+    },
+    {
+        name: 'Agent Portal accepts → allowed whatever BundlePortal says',
+        enabled: true, upstream: 'allow', bundlePortal: 'fail', phone: MTN, network: 'MTN',
+        wantBlocked: false, wantBatchGated: false,
+    },
 ]
 
 async function main() {
@@ -164,14 +210,16 @@ async function main() {
 
     for (const c of cases) {
         upstreamMode = c.upstream
+        bundlePortalMode = c.bundlePortal ?? 'deny'
+        bundlePortalCalls = 0
         upstreamCalls = 0
         clearGateSettingsCache()
 
         // Strict (USSD) path. `enabled` is passed in, so the DB stub is irrelevant here.
         const strict = await checkMtnRegistrationStrict(
-            makeSupabase(null), c.phone, c.network, { enabled: c.enabled }
+            makeSupabase({}), c.phone, c.network, { enabled: c.enabled }
         )
-        const strictCalls = upstreamCalls
+        const strictCalls = upstreamCalls + bundlePortalCalls
 
         // Batch (web) path, same inputs, gate state read from the DB stub instead.
         upstreamCalls = 0
