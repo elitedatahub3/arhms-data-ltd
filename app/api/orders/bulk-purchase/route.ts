@@ -169,7 +169,8 @@ export async function POST(request: NextRequest) {
         // reconciling which lines went through against which did not.
         const { unregistered } = await checkMtnRegistrationBatch(
             supabase,
-            validatedOrders.map((o: any) => ({ phoneNumber: o.phoneNumber, packageNetwork: o.network }))
+            validatedOrders.map((o: any) => ({ phoneNumber: o.phoneNumber, packageNetwork: o.network })),
+            'site'
         )
         if (unregistered.length > 0) {
             return NextResponse.json(

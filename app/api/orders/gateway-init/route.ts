@@ -204,7 +204,8 @@ export async function POST(request: NextRequest) {
         if (!otpCode) {
             const { unregistered } = await checkMtnRegistrationBatch(
                 supabase,
-                metadataItems.map((i: any) => ({ phoneNumber: i.phone_number, packageNetwork: i.network }))
+                metadataItems.map((i: any) => ({ phoneNumber: i.phone_number, packageNetwork: i.network })),
+                'site'
             )
             if (unregistered.length > 0) {
                 return NextResponse.json(

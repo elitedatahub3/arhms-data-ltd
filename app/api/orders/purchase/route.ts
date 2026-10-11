@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
 
         // MTN registration gate. Runs before the wallet is touched, so a refusal
         // charges nothing and creates no order. Off unless an admin turns it on.
-        const gate = await checkMtnRegistration(supabase, phoneNumber, (pkg as any).network)
+        const gate = await checkMtnRegistration(supabase, phoneNumber, (pkg as any).network, 'site')
         if (gate.gated) {
             return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
         }

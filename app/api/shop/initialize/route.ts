@@ -293,7 +293,7 @@ export async function POST(request: NextRequest) {
         // so a held order is one they can neither track nor chase. Refusing the sale is
         // kinder than banking it against a two-week wait they cannot follow up on.
         if (orderType !== 'airtime') {
-            const gate = await checkMtnRegistration(db, cleanPhone, pkgNetwork)
+            const gate = await checkMtnRegistration(db, cleanPhone, pkgNetwork, 'shop')
             if (gate.gated) {
                 return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
             }

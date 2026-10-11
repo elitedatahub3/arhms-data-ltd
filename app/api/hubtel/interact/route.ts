@@ -4,6 +4,8 @@ import { waitUntil } from '@vercel/functions';
 import { isUssdEnabled, USSD_ENABLED_KEY, USSD_OFFLINE_MESSAGE } from '@/lib/ussd-availability';
 import {
     checkMtnRegistrationStrict,
+    resolveGateEnabled,
+    ALL_MTN_GATE_KEYS,
     isMtnPackageNetwork,
     USSD_NOT_REGISTERED_MESSAGE,
     USSD_REGISTRATION_UNVERIFIABLE_MESSAGE,
@@ -105,9 +107,6 @@ const USSD_FLAG_TTL_MS = 60_000;
 /** admin_settings key naming which gateway collects for a USSD sale. */
 const USSD_PROVIDER_KEY = SCOPE_SETTING_KEY.ussd;
 
-/** Shared with every other surface — the same switch the admin fulfillment page writes. */
-const MTN_GATE_KEY = 'mtn_registration_gate_enabled';
-
 interface UssdFlags {
     enabled: boolean;
     /** 'paystack_momo' (we collect) | 'hubtel' (AddToCart, the pre-Paystack path). */
@@ -136,7 +135,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
             getSupabaseAdmin()
                 .from('admin_settings')
                 .select('key, value')
-                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MTN_GATE_KEY]),
+                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, ...ALL_MTN_GATE_KEYS]),
             3000,
             'ussd flags fetch timeout'
         );
@@ -161,12 +160,13 @@ async function getUssdFlags(): Promise<UssdFlags> {
             // runs on. The 'ussd' scope's fallback is paystack_momo, not the global
             // Moolre default, which has no USSD branch at all.
             paymentProvider: resolveProviderForScope(raw[USSD_PROVIDER_KEY], 'ussd'),
-            // Read exactly as loadGateSettings() reads it, so this route and the web
-            // routes can never disagree about whether the gate is on. Deliberately NOT
+            // Resolved by the same helper loadGateSettings() uses, under the main-site
+            // toggle (USSD sells the main catalogue), so this route and the dashboard can
+            // never disagree about whether the gate is on. Deliberately NOT
             // isUssdEnabled(): that helper's extra strictness belongs to the switch that
             // stops the service, and applying it here would be borrowing a rule from an
             // unrelated decision.
-            mtnGateEnabled: String(raw[MTN_GATE_KEY]) === 'true',
+            mtnGateEnabled: resolveGateEnabled(raw, 'site'),
         };
         ussdFlagCache = { flags, at: Date.now() };
         return flags;

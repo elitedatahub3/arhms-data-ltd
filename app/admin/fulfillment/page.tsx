@@ -33,6 +33,12 @@ import { toast } from 'sonner'
 import { ADMIN_VERIFYING_LABEL, getOrderDisplayStatus } from '@/lib/order-status-display'
 import { formatCurrency, cn } from '@/lib/utils'
 import { format } from 'date-fns'
+import {
+    LEGACY_MTN_GATE_KEY,
+    MTN_GATE_KEYS,
+    resolveGateEnabled as mtnGateFromMap,
+    type GateSurface as MtnGateSurface,
+} from '@/lib/mtn-gate-keys'
 
 interface Order {
     id: string
@@ -180,11 +186,11 @@ export default function FulfillmentPage() {
     const [cronAutoCompleteDelay, setCronAutoCompleteDelay] = useState('30')
     const [isSavingCronSettings, setIsSavingCronSettings] = useState(false)
 
-    // MTN registration gate — refuses orders to unregistered MTN numbers on storefronts
-    // and USSD only. The dashboard and the API are not gated at all.
-    // Off unless the DB says otherwise.
-    const [mtnGateEnabled, setMtnGateEnabled] = useState(false)
-    const [isSavingMtnGate, setIsSavingMtnGate] = useState(false)
+    // MTN registration gate — refuses orders to unregistered MTN numbers. One switch per
+    // surface: 'shop' is the storefronts, 'site' is the main site (dashboard + USSD).
+    // The developer API is never gated. Off unless the DB says otherwise.
+    const [mtnGate, setMtnGate] = useState<Record<MtnGateSurface, boolean>>({ shop: false, site: false })
+    const [savingMtnGate, setSavingMtnGate] = useState<MtnGateSurface | null>(null)
 
     useEffect(() => {
         if (dbUser?.role === 'admin') {
@@ -278,7 +284,9 @@ export default function FulfillmentPage() {
                     'cron_auto_refulfill_delay_minutes',
                     'cron_auto_complete_enabled',
                     'cron_auto_complete_delay_minutes',
-                    'mtn_registration_gate_enabled',
+                    MTN_GATE_KEYS.shop,
+                    MTN_GATE_KEYS.site,
+                    LEGACY_MTN_GATE_KEY,
                 ])
 
             const map = (data || []).reduce((acc: any, curr: any) => {
@@ -340,7 +348,7 @@ export default function FulfillmentPage() {
             setCronRefulfillDelay(map.cron_auto_refulfill_delay_minutes || '5')
             setCronAutoCompleteEnabled(map.cron_auto_complete_enabled === 'true')
             setCronAutoCompleteDelay(map.cron_auto_complete_delay_minutes || '30')
-            setMtnGateEnabled(map.mtn_registration_gate_enabled === 'true')
+            setMtnGate({ shop: mtnGateFromMap(map, 'shop'), site: mtnGateFromMap(map, 'site') })
         } catch (error) {
             console.error('Failed to fetch settings:', error)
         }
@@ -369,22 +377,30 @@ export default function FulfillmentPage() {
 
     // Saves immediately on toggle. Optimistic, with a rollback on failure — an admin
     // must never be left believing this switch is off when the DB still says on.
-    const saveMtnGateSetting = async (enabled: boolean) => {
-        const previous = mtnGateEnabled
-        setMtnGateEnabled(enabled)
-        setIsSavingMtnGate(true)
+    //
+    // Both keys are written on every save, so the first flip after the split pins the
+    // other surface to what the admin is looking at rather than leaving it riding the
+    // legacy key.
+    const saveMtnGateSetting = async (surface: MtnGateSurface, enabled: boolean) => {
+        const previous = mtnGate
+        const next = { ...mtnGate, [surface]: enabled }
+        setMtnGate(next)
+        setSavingMtnGate(surface)
         try {
-            const { error } = await (supabase.from('admin_settings') as any)
-                .upsert([{ key: 'mtn_registration_gate_enabled', value: String(enabled) }])
+            const { error } = await (supabase.from('admin_settings') as any).upsert([
+                { key: MTN_GATE_KEYS.shop, value: String(next.shop) },
+                { key: MTN_GATE_KEYS.site, value: String(next.site) },
+            ])
             if (error) throw error
+            const where = surface === 'shop' ? 'shop storefronts' : 'the main site and USSD'
             toast.success(enabled
-                ? 'Unregistered MTN numbers are now refused on storefronts and USSD'
-                : 'MTN registration check turned off')
+                ? `Unregistered MTN numbers are now refused on ${where}`
+                : `MTN registration check turned off for ${where}`)
         } catch (error: any) {
-            setMtnGateEnabled(previous)
+            setMtnGate(previous)
             toast.error('Failed to save setting: ' + error.message)
         } finally {
-            setIsSavingMtnGate(false)
+            setSavingMtnGate(null)
         }
     }
 
@@ -1714,34 +1730,47 @@ export default function FulfillmentPage() {
                         <ShieldCheck className="w-4 h-4" /> MTN Number Registration
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="px-4 pb-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-background rounded-xl border">
-                        <div className="flex-1">
-                            <p className="text-sm font-bold">🔒 Block Orders To Unregistered MTN Numbers</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                                When ON, an MTN number that isn&apos;t registered yet is <strong>refused outright on the
-                                dashboard, shop storefronts and USSD</strong> — nothing is charged and no order is
-                                created, and a bulk order is refused whole if any one number in it is unregistered.
-                                This does not affect the developer API: those orders are never stopped, and they sit
-                                pending until MTN enables the number. When OFF, every surface goes through silently.
-                                Runs the Agent Portal registration check whichever supplier is
-                                currently fulfilling MTN, so some sales your active supplier could have delivered will
-                                be turned away instead. Note that checking a number also submits it for registration —
-                                turning this off later does not undo that. Changes apply within a minute.
-                            </p>
+                <CardContent className="px-4 pb-4 space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                        When a switch is ON, an MTN number that isn&apos;t registered yet is <strong>refused
+                        outright</strong> on that surface — nothing is charged and no order is created, and a bulk
+                        order is refused whole if any one number in it is unregistered. When OFF, that surface goes
+                        through silently. The developer API is never affected: those orders sit pending until MTN
+                        enables the number. Runs the Agent Portal registration check whichever supplier is
+                        currently fulfilling MTN, so some sales your active supplier could have delivered will be
+                        turned away instead. Checking a number also submits it for registration — turning a switch
+                        off later does not undo that. Changes apply within a minute.
+                    </p>
+                    {([
+                        {
+                            surface: 'site',
+                            title: '🏠 Main Site',
+                            detail: 'Dashboard purchases (wallet, bulk and Direct Pay) and USSD.',
+                        },
+                        {
+                            surface: 'shop',
+                            title: '🛍️ Shop Storefronts',
+                            detail: 'Guest checkouts on every shop storefront.',
+                        },
+                    ] as const).map(({ surface, title, detail }) => (
+                        <div key={surface} className="flex items-center gap-3 p-3 bg-background rounded-xl border">
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-bold">{title}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">{detail}</p>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0">
+                                <Switch
+                                    checked={mtnGate[surface]}
+                                    onCheckedChange={(enabled) => saveMtnGateSetting(surface, enabled)}
+                                    disabled={savingMtnGate !== null}
+                                    id={`mtn-reg-gate-${surface}`}
+                                />
+                                <label htmlFor={`mtn-reg-gate-${surface}`} className="text-xs font-bold w-7">
+                                    {savingMtnGate === surface ? '...' : mtnGate[surface] ? 'ON' : 'OFF'}
+                                </label>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                            <Switch
-                                checked={mtnGateEnabled}
-                                onCheckedChange={saveMtnGateSetting}
-                                disabled={isSavingMtnGate}
-                                id="mtn-reg-gate-toggle"
-                            />
-                            <label htmlFor="mtn-reg-gate-toggle" className="text-xs font-bold">
-                                {isSavingMtnGate ? '...' : mtnGateEnabled ? 'ON' : 'OFF'}
-                            </label>
-                        </div>
-                    </div>
+                    ))}
                 </CardContent>
             </Card>
 

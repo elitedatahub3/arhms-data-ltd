@@ -67,22 +67,22 @@ const originalLoad = (Module as any)._load
 }
 
 /**
- * Minimal supabase double. Only the three shapes the gate uses:
- *   .from(t).select(c).eq(k, v)      → settings read
- *   .from(t).select(c).in(k, vals)   → cache read
- *   .from(t).upsert(rows, opts)      → cache write
+ * Minimal supabase double. Only the shapes the gate uses:
+ *   .from('admin_settings').select(c).in('key', keys)   → settings read
+ *   .from(t).select(c).in(k, vals)                      → cache read
+ *   .from(t).upsert(rows, opts)                         → cache write
+ * `settings` maps admin_settings key → value; a missing key is an absent row.
  * Cache always misses, so every case reaches the stubbed upstream.
  */
-function makeSupabase(gateEnabledRow: string | null) {
+function makeSupabase(settings: Record<string, string>) {
     return {
-        from() {
+        from(table: string) {
             return {
                 select() {
                     return {
-                        eq: async () => ({
-                            data: gateEnabledRow === null ? [] : [{ key: 'x', value: gateEnabledRow }],
-                        }),
-                        in: async () => ({ data: [], error: null }),
+                        in: async () => table === 'admin_settings'
+                            ? { data: Object.entries(settings).map(([key, value]) => ({ key, value })), error: null }
+                            : { data: [], error: null },
                     }
                 },
                 upsert: async () => ({ error: null }),
@@ -97,6 +97,8 @@ const {
     checkMtnRegistrationStrict,
     checkMtnRegistrationBatch,
     clearGateSettingsCache,
+    MTN_GATE_KEYS,
+    LEGACY_MTN_GATE_KEY,
     USSD_NOT_REGISTERED_MESSAGE,
     USSD_REGISTRATION_UNVERIFIABLE_MESSAGE,
 } = gate
@@ -175,8 +177,9 @@ async function main() {
         upstreamCalls = 0
         clearGateSettingsCache()
         const batch = await checkMtnRegistrationBatch(
-            makeSupabase(c.enabled ? 'true' : 'false'),
-            [{ phoneNumber: c.phone, packageNetwork: c.network }]
+            makeSupabase({ [MTN_GATE_KEYS.site]: c.enabled ? 'true' : 'false' }),
+            [{ phoneNumber: c.phone, packageNetwork: c.network }],
+            'site'
         )
 
         const problems: string[] = []
@@ -200,6 +203,36 @@ async function main() {
         } else {
             console.log(`  FAIL  ${c.name}`)
             for (const p of problems) console.log(`          ${p}`)
+            failed++
+        }
+    }
+
+    // ── Per-surface toggles ──────────────────────────────────────────────────────
+    // Shop and main site switch independently; a surface whose own key was never
+    // written follows the pre-split legacy key, and an explicit 'false' beats it.
+    console.log('')
+    upstreamMode = 'deny'
+    const surfaceCases: Array<{ name: string; settings: Record<string, string>; shop: boolean; site: boolean }> = [
+        { name: 'no rows → both off', settings: {}, shop: false, site: false },
+        { name: 'shop on, site off', settings: { [MTN_GATE_KEYS.shop]: 'true', [MTN_GATE_KEYS.site]: 'false' }, shop: true, site: false },
+        { name: 'site on, shop off', settings: { [MTN_GATE_KEYS.shop]: 'false', [MTN_GATE_KEYS.site]: 'true' }, shop: false, site: true },
+        { name: 'legacy on, no new rows → both on', settings: { [LEGACY_MTN_GATE_KEY]: 'true' }, shop: true, site: true },
+        { name: 'legacy on, shop explicitly off', settings: { [LEGACY_MTN_GATE_KEY]: 'true', [MTN_GATE_KEYS.shop]: 'false' }, shop: false, site: true },
+    ]
+    for (const sc of surfaceCases) {
+        const got: Record<string, boolean> = {}
+        for (const surface of ['shop', 'site'] as const) {
+            clearGateSettingsCache()
+            const r = await checkMtnRegistrationBatch(
+                makeSupabase(sc.settings), [{ phoneNumber: MTN, packageNetwork: 'MTN' }], surface
+            )
+            got[surface] = r.unregistered.length > 0
+        }
+        if (got.shop === sc.shop && got.site === sc.site) {
+            console.log(`  PASS  ${sc.name}`)
+            passed++
+        } else {
+            console.log(`  FAIL  ${sc.name}: shop=${got.shop} site=${got.site}, want shop=${sc.shop} site=${sc.site}`)
             failed++
         }
     }

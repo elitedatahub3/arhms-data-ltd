@@ -47,14 +47,25 @@
  *      the backstop it always was. The exception is checkMtnRegistrationStrict(), used
  *      only by USSD, which fails CLOSED; see the note on that function for why.
  *
- *   3. It is off by default, and that toggle is the ONLY thing controlling it.
- *      admin_settings.mtn_registration_gate_enabled runs the check regardless of which
- *      supplier currently fulfils MTN — see loadGateSettings for why that is a
- *      deliberate choice with a real cost attached.
+ *   3. It is off by default, and two toggles are the ONLY thing controlling it:
+ *      mtn_registration_gate_shop_enabled (shop storefronts) and
+ *      mtn_registration_gate_site_enabled (the main site: dashboard + USSD). Every
+ *      caller names its surface, so one can be on while the other is off. Either runs
+ *      the check regardless of which supplier currently fulfils MTN — see
+ *      loadGateSettings for why that is a deliberate choice with a real cost attached.
  */
 import { verifyMtnWhitelist } from '@/lib/agentportal-service'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
 import { redactIdentifier } from '@/lib/safe-log'
+import { ALL_MTN_GATE_KEYS, resolveGateEnabled, type GateSurface } from '@/lib/mtn-gate-keys'
+
+export {
+    ALL_MTN_GATE_KEYS,
+    LEGACY_MTN_GATE_KEY,
+    MTN_GATE_KEYS,
+    resolveGateEnabled,
+    type GateSurface,
+} from '@/lib/mtn-gate-keys'
 
 /**
  * Only plain MTN data orders are gated.
@@ -152,10 +163,7 @@ export function registrationRequiredBody(phoneNumbers: string[], total?: number)
 
 // ─── Admin settings (memoized) ──────────────────────────────────────────────────
 
-interface GateSettings {
-    /** The one and only switch. Nothing else gates this. */
-    enabled: boolean
-}
+type GateSettings = Record<GateSurface, boolean>
 
 let settingsCache: { value: GateSettings; expiresAt: number } | null = null
 
@@ -178,18 +186,23 @@ let settingsCache: { value: GateSettings; expiresAt: number } | null = null
 async function loadGateSettings(supabase: any): Promise<GateSettings> {
     if (settingsCache && settingsCache.expiresAt > Date.now()) return settingsCache.value
 
-    const disabled: GateSettings = { enabled: false }
+    const disabled: GateSettings = { shop: false, site: false }
 
     try {
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('admin_settings')
             .select('key, value')
-            .eq('key', 'mtn_registration_gate_enabled')
+            .in('key', ALL_MTN_GATE_KEYS)
+        if (error) throw error
 
-        const row = (data || [])[0]
+        const raw: Record<string, unknown> = {}
+        for (const row of data || []) raw[row.key] = row.value
 
-        // Absent row means off. Deploying this must not change buyer-facing behaviour.
-        const value: GateSettings = { enabled: String(row?.value) === 'true' }
+        // Absent rows mean off. Deploying this must not change buyer-facing behaviour.
+        const value: GateSettings = {
+            shop: resolveGateEnabled(raw, 'shop'),
+            site: resolveGateEnabled(raw, 'site'),
+        }
 
         settingsCache = { value, expiresAt: Date.now() + SETTINGS_TTL_MS }
         return value
@@ -363,12 +376,13 @@ async function resolveRegistrationStatuses(
  */
 export async function checkMtnRegistrationBatch(
     supabase: any,
-    entries: Array<{ phoneNumber: string; packageNetwork: string }>
+    entries: Array<{ phoneNumber: string; packageNetwork: string }>,
+    surface: GateSurface
 ): Promise<BatchGateResult> {
     const empty: BatchGateResult = { unregistered: [], statusByNumber: new Map() }
 
     const settings = await loadGateSettings(supabase)
-    if (!settings.enabled) return empty
+    if (!settings[surface]) return empty
 
     const candidates = collectCandidates(entries)
     if (candidates.size === 0) return empty
@@ -398,11 +412,12 @@ export async function checkMtnRegistrationBatch(
 export async function checkMtnRegistration(
     supabase: any,
     rawPhone: string,
-    packageNetwork: string
+    packageNetwork: string,
+    surface: GateSurface
 ): Promise<RegistrationGateResult> {
     const { unregistered } = await checkMtnRegistrationBatch(supabase, [
         { phoneNumber: rawPhone, packageNetwork },
-    ])
+    ], surface)
 
     if (unregistered.length === 0) return { gated: false }
     return { gated: true, normalizedNumber: unregistered[0] }
@@ -426,7 +441,8 @@ export type StrictGateResult =
  * AGENTPORTAL_API_KEY is unset, every MTN USSD data sale stops. That is the accepted
  * trade, not an oversight.
  *
- * `enabled` is passed in rather than read here on purpose. /api/hubtel/interact already
+ * `enabled` is passed in rather than read here on purpose — the route resolves it with
+ * resolveGateEnabled(raw, 'site'), USSD being part of the main site. /api/hubtel/interact already
  * batches every admin_settings key it needs into a single round trip, because on that
  * route a millisecond costs a sale — adding a second lookup inside a keypress would
  * undo the thing that route is built around.

@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
         // Service-role client: the gate reads admin_settings and writes the cache,
         // neither of which is reachable under the caller's RLS.
         const supabase = createServerClient()
-        const { statusByNumber } = await checkMtnRegistrationBatch(supabase, entries)
+        const { statusByNumber } = await checkMtnRegistrationBatch(supabase, entries, 'site')
 
         // Key the response by the caller's original input so the UI can line results up
         // with its own rows without re-implementing normalization.
