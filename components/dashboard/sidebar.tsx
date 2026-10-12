@@ -442,9 +442,8 @@ export function DashboardSidebar() {
                         <div className={cn("mx-4 mt-6 p-5 rounded-2xl border shadow-sm",
                             onDarkPanel
                                 ? "bg-white/10 border-white/15 text-white"
-                                : dbUser.role === 'customer'
-                                    ? "bg-brand-gold/[0.06] border-brand-gold/20 dark:bg-brand-gold/[0.08] dark:border-brand-gold/20 text-slate-800 dark:text-slate-100"
-                                    : "bg-secondary/5 border-border/50 text-foreground"
+                                // Same yellow fill as the admin "Reprocess" button.
+                                : "bg-yellow-500 border-yellow-600 text-black"
                         )}>
                             <div className="flex items-center gap-4 mb-4">
                                 <div className={cn(
@@ -459,6 +458,9 @@ export function DashboardSidebar() {
                                         {dbUser?.first_name} {dbUser?.last_name}
                                     </p>
                                     <div className="flex items-center gap-1.5 mt-0.5">
+                                        {/* badgeClass is a 15% wash; keep it on the surface it was
+                                            designed for so the yellow card doesn't bleed through. */}
+                                        <span className={cn("inline-flex rounded-full", !onDarkPanel && "bg-background")}>
                                         <span
                                             className={cn(
                                                 "text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest",
@@ -472,6 +474,7 @@ export function DashboardSidebar() {
                                         >
                                             {isSubAgent ? 'Sub-Agent' : currentRole.label}
                                         </span>
+                                        </span>
                                     </div>
                                 </div>
                             </div>
@@ -483,12 +486,12 @@ export function DashboardSidebar() {
                                 // navy panel produced a washed-out grey slab.
                                 onDarkPanel
                                     ? "bg-black/25 border-white/10"
-                                    : "bg-background/50 border-border/50"
+                                    : "bg-white/30 border-black/10"
                             )}>
                                 <div>
                                     <p className={cn(
                                         "text-[9px] uppercase tracking-widest font-bold mb-0.5",
-                                        onDarkPanel ? "text-white/70" : "text-muted-foreground"
+                                        onDarkPanel ? "text-white/70" : "text-black/60"
                                     )}>Balance</p>
                                     <p className="text-lg font-black text-current tracking-tight">{formatCurrency(walletBalance)}</p>
                                 </div>
