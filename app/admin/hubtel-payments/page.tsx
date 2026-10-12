@@ -23,6 +23,7 @@ import {
     PaginationPrevious,
 } from '@/components/ui/pagination'
 import { toast } from 'sonner'
+import { ShopPaymentIssues } from '@/components/admin/shop-payment-issues'
 
 const ITEMS_PER_PAGE = 20
 
@@ -300,6 +301,8 @@ export default function HubtelPaymentsPage() {
                     USSD, airtime and utility bills — including the ones that failed.
                 </p>
             </div>
+
+            <ShopPaymentIssues />
 
             <Card>
                 <CardHeader className="space-y-1 pb-3">

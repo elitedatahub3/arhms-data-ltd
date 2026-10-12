@@ -140,13 +140,17 @@ export async function POST(request: NextRequest) {
             // They are NOT stored in wallet_payments, so we must handle them separately
             // before the DB lookup to avoid "Payment not found" errors.
             if (reference && reference.startsWith('SHOP-')) {
-                // Hosted checkout echoes back the whole metadata object we sent at
-                // init. The MoMo rail deliberately sends a compact payload instead —
-                // ids and slugs, no display text — so fall back to the copy in Redis,
-                // exactly as /api/shop/verify and the PaySwitch sweep already do.
-                let shopMetadata = metadata
-                if (!shopMetadata?.shop_id) {
-                    shopMetadata = await getShopMeta<any>(reference)
+                // The stored copy (Redis, then shop_payment_meta) is the full order and
+                // always wins. The MoMo rail sends Paystack only a compact payload —
+                // {kind, shop_id, shop_slug, ref} — which HAS shop_id but no package,
+                // network or price. Falling back only when shop_id was missing let that
+                // compact payload through, every MoMo storefront order failed here with
+                // "Price configuration missing", and only a buyer still polling with the
+                // tab open ever got their order. The echoed metadata is used only when
+                // nothing is stored and it is a full order (hosted checkout sends one).
+                let shopMetadata = await getShopMeta<any>(reference)
+                if (!shopMetadata?.shop_id && metadata?.shop_id && (metadata.package_id || metadata.airtime_amount)) {
+                    shopMetadata = metadata
                 }
 
                 if (!shopMetadata?.shop_id) {
@@ -166,13 +170,29 @@ export async function POST(request: NextRequest) {
 
                 const { processShopOrder } = await import('@/lib/shop-order-processor')
                 console.log('[PaystackWebhook] Routing shop order payment')
-                await processShopOrder(
+                const result = await processShopOrder(
                     reference,
                     shopMetadata,
                     paidAmountKobo,
                     shopMetadata.slug ?? shopMetadata.shop_slug
                 )
-                await clearPaystackMomoPending(reference)
+
+                if (result.success) {
+                    await clearPaystackMomoPending(reference)
+                } else {
+                    // Paid, no order. Keep the marker and the ledger row pending so the
+                    // reconciliation cron retries; still 200 so Paystack does not
+                    // redeliver into the same failure. The cron owns retries now.
+                    console.error('[PaystackWebhook] SHOP- paid but order not created:', reference, result.error)
+                    const { logCallback } = await import('@/lib/hubtel-payment-log')
+                    await logCallback({
+                        clientReference: reference,
+                        status: 'failed',
+                        amount: paidAmountKobo / 100,
+                        message: `Paid but order not created yet: ${result.error ?? 'unknown error'}. Will retry.`,
+                        raw: event.data,
+                    })
+                }
                 return NextResponse.json({ received: true })
             }
 

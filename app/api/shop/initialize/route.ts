@@ -324,6 +324,12 @@ export async function POST(request: NextRequest) {
 
         // ── PAYSTACK BRANCH ──────────────────────────────────────────────────────
         if (shopProvider === 'paystack') {
+            // Paystack echoes the metadata back, but the stored copy is what opens the
+            // ledger row the reconciliation cron settles from if no webhook arrives.
+            if (!existingRef) {
+                await saveShopMeta(shopRef, fullMetadata)
+            }
+
             const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
                 method: 'POST',
                 headers: {
@@ -343,6 +349,8 @@ export async function POST(request: NextRequest) {
 
             if (!paystackData.status) {
                 console.error('[ShopInit] Paystack init failed:', paystackData)
+                // No checkout page was created, so nothing can be paid on this reference.
+                if (!existingRef) await deleteShopMeta(shopRef)
                 return NextResponse.json({ error: 'Payment gateway error' }, { status: 500 })
             }
 
@@ -520,6 +528,13 @@ export async function POST(request: NextRequest) {
             }
         }
 
+        // Metadata must be stored BEFORE the prompt, as on every other rail: it used to
+        // be written after initiatePayment returned, so a Redis-and-database failure
+        // there left a live prompt with the order details stored nowhere.
+        if (!existingRef) {
+            await saveShopMeta(shopRef, fullMetadata)
+        }
+
         let moolreResponse = await initiatePayment({
             amount: totalAmount / 100,
             payerPhone: payerClean,
@@ -539,13 +554,12 @@ export async function POST(request: NextRequest) {
         }
 
         if (!moolreResponse.success) {
+            // Refused: no prompt went out on a fresh reference, so drop its record.
+            if (!existingRef) await deleteShopMeta(shopRef)
             return NextResponse.json({ error: moolreResponse.error || 'Payment initialization failed' }, { status: 500 })
         }
 
         if (moolreResponse.status === '200_OTP_REQ') {
-            if (!existingRef) {
-                await saveShopMeta(shopRef, fullMetadata)
-            }
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',
@@ -553,10 +567,6 @@ export async function POST(request: NextRequest) {
                 reference: shopRef,
                 message: 'OTP is required to complete this payment. Please enter the code sent to your phone.',
             })
-        }
-
-        if (!existingRef) {
-            await saveShopMeta(shopRef, fullMetadata)
         }
 
         try {
@@ -572,7 +582,7 @@ export async function POST(request: NextRequest) {
         // checkout. Say so plainly (and 503, so it reads as retryable) instead of
         // a generic "Internal server error" that gives the shopper nothing to act on.
         const detail = error instanceof Error ? `${error.name} ${error.message}` : String(error)
-        if (/upstash|max requests limit|redis/i.test(detail)) {
+        if (/upstash|max requests limit|redis|ShopMeta durable write failed/i.test(detail)) {
             return NextResponse.json(
                 { error: 'Payments are temporarily unavailable. Please try again in a few minutes.' },
                 { status: 503 }

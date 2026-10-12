@@ -10,11 +10,40 @@ import type { PaymentProvider } from './payment-provider'
 // In-memory lock to prevent race conditions between frontend verification and Paystack webhooks
 const processingLocks = new Set<string>();
 
+type ShopOrderResult = { success: boolean; error?: string; orderId?: string; isDuplicate?: boolean }
+
 /**
  * Shared logic for processing a successful shop storefront payment.
  * Handles idempotency, security amount validation, order creation, profit credit, and fulfillment.
+ *
+ * Every caller (webhooks, /api/shop/verify, the reconciliation cron, the admin
+ * retry) only reaches this once the gateway says the money is in, so the outcome
+ * is written to the payment ledger here, in one place: settled, or a counted
+ * failure that the cron retries and eventually hands to a human. A paid payment
+ * that cannot become an order is never silent again.
  */
 export async function processShopOrder(
+    reference: string,
+    metadata: Parameters<typeof settleShopOrder>[1],
+    paidAmountPesewas: number,
+    slug?: string
+): Promise<ShopOrderResult> {
+    const result = await settleShopOrder(reference, metadata, paidAmountPesewas, slug)
+
+    // A same-Lambda lock skip has no order id yet; the call holding the lock
+    // writes the real outcome.
+    if (result.isDuplicate && !result.orderId) return result
+
+    const { markShopPaymentSettled, markShopPaymentIssue } = await import('./shop-meta-store')
+    if (result.success) {
+        await markShopPaymentSettled(reference)
+    } else {
+        await markShopPaymentIssue(reference, result.error || 'Unknown settlement error')
+    }
+    return result
+}
+
+async function settleShopOrder(
     reference: string,
     metadata: {
         shop_id: string;
@@ -53,7 +82,7 @@ export async function processShopOrder(
     },
     paidAmountPesewas: number,
     slug?: string
-): Promise<{ success: boolean; error?: string; orderId?: string; isDuplicate?: boolean }> {
+): Promise<ShopOrderResult> {
     const supabase = createServerClient()
     const db = supabase as any
 
@@ -372,6 +401,20 @@ export async function processShopOrder(
                 const retry = await insertOrder(withoutGrandparent)
                 newOrder = retry.data
                 createError = retry.error
+            }
+
+            if (createError?.code === '23505') {
+                // Lost the race on shop_orders.paystack_reference UNIQUE: the webhook,
+                // the buyer's poll and the cron can all settle the same payment from
+                // different Lambdas, which the in-memory lock above cannot see. The
+                // winner owns profit credit and fulfilment; this call is a duplicate.
+                const { data: winner } = await db
+                    .from('shop_orders')
+                    .select('id')
+                    .eq('paystack_reference', reference)
+                    .maybeSingle()
+                console.log(`[Shop Order Processor] Concurrent settle lost the insert race; order ${winner?.id} already exists.`)
+                return { success: true, orderId: winner?.id, isDuplicate: true }
             }
 
             if (createError) {
