@@ -18,6 +18,7 @@
  */
 import { logInitiate } from '@/lib/hubtel-payment-log'
 import { getDispatcher } from '@/lib/http-dispatcher'
+import { webhookBaseUrl } from './webhook-base-url'
 
 const HUBTEL_RECEIVE_BASE_URL = 'https://rmp.hubtel.com/merchantaccount/merchants'
 const HUBTEL_STATUS_BASE_URL = 'https://api-txnstatus.hubtel.com/transactions'
@@ -264,7 +265,7 @@ export async function initiatePayment(params: HubtelInitiateParams): Promise<Hub
     try {
         const account = getCollectionAccount()
         const authHeader = getHubtelAuthHeader()
-        const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/hubtel`
+        const callbackUrl = `${webhookBaseUrl()}/api/webhooks/hubtel`
 
         const payload = {
             // Both of these are echoed back by Hubtel — see toHubtelSafeText.

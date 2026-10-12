@@ -25,6 +25,7 @@ import {
     describeHubtelNetworkFailure,
 } from '@/lib/hubtel-payment-service'
 import { sanitizeForLog } from '@/lib/safe-log'
+import { webhookBaseUrl } from './webhook-base-url'
 
 const HUBTEL_CS_BASE_URL = 'https://cs.hubtel.com/commissionservices'
 
@@ -207,7 +208,7 @@ export async function topUpAirtime(params: AirtimeTopUpParams): Promise<AirtimeT
         const payload = {
             Destination: toHubtelMsisdn(phone),
             Amount: round2(amount),
-            CallbackUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/hubtel-airtime`,
+            CallbackUrl: `${webhookBaseUrl()}/api/webhooks/hubtel-airtime`,
             ClientReference: clientReference,
         }
         payloadForLog = payload
