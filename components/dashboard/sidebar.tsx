@@ -309,6 +309,8 @@ export function DashboardSidebar() {
     // Roles whose sidebar chrome is a solid dark panel need light-on-dark
     // treatment for anything rendered inside it.
     const onDarkPanel = currentRole.darkPanel
+    // Plain customers (not admins, sub-admins or sub-agents) get the yellow profile card.
+    const isCustomerCard = !onDarkPanel && currentRole === roleConfig.customer
 
     // Results Checker Only mode collapses the sidebar for regular users, but admins
     // and sub-admins keep their full sidebar (they need it to reach Admin → Settings
@@ -442,8 +444,12 @@ export function DashboardSidebar() {
                         <div className={cn("mx-4 mt-6 p-5 rounded-2xl border shadow-sm",
                             onDarkPanel
                                 ? "bg-white/10 border-white/15 text-white"
-                                // Same yellow fill as the admin "Reprocess" button.
-                                : "bg-yellow-500 border-yellow-600 text-black"
+                                : isCustomerCard
+                                    // Same yellow fill as the admin "Reprocess" button.
+                                    ? "bg-yellow-500 border-yellow-600 text-black"
+                                    : dbUser.role === 'customer'
+                                        ? "bg-brand-gold/[0.06] border-brand-gold/20 dark:bg-brand-gold/[0.08] dark:border-brand-gold/20 text-slate-800 dark:text-slate-100"
+                                        : "bg-secondary/5 border-border/50 text-foreground"
                         )}>
                             <div className="flex items-center gap-4 mb-4">
                                 <div className={cn(
@@ -460,7 +466,7 @@ export function DashboardSidebar() {
                                     <div className="flex items-center gap-1.5 mt-0.5">
                                         {/* badgeClass is a 15% wash; keep it on the surface it was
                                             designed for so the yellow card doesn't bleed through. */}
-                                        <span className={cn("inline-flex rounded-full", !onDarkPanel && "bg-background")}>
+                                        <span className={cn("inline-flex rounded-full", isCustomerCard && "bg-background")}>
                                         <span
                                             className={cn(
                                                 "text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest",
@@ -486,12 +492,14 @@ export function DashboardSidebar() {
                                 // navy panel produced a washed-out grey slab.
                                 onDarkPanel
                                     ? "bg-black/25 border-white/10"
-                                    : "bg-white/30 border-black/10"
+                                    : isCustomerCard
+                                        ? "bg-white/30 border-black/10"
+                                        : "bg-background/50 border-border/50"
                             )}>
                                 <div>
                                     <p className={cn(
                                         "text-[9px] uppercase tracking-widest font-bold mb-0.5",
-                                        onDarkPanel ? "text-white/70" : "text-black/60"
+                                        onDarkPanel ? "text-white/70" : isCustomerCard ? "text-black/60" : "text-muted-foreground"
                                     )}>Balance</p>
                                     <p className="text-lg font-black text-current tracking-tight">{formatCurrency(walletBalance)}</p>
                                 </div>
