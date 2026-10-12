@@ -45,6 +45,17 @@ export async function POST(request: NextRequest) {
 
         const event = JSON.parse(body)
 
+        // Heartbeat. The webhook went silent for days in October 2026 (the URL in
+        // the Paystack dashboard changed) and nothing noticed, because the cron
+        // quietly settled everything 5-15 minutes late. The admin payments page
+        // reads this and warns when deliveries stop.
+        await (supabase.from('admin_settings') as any)
+            .upsert({
+                key: 'paystack_webhook_last_received',
+                value: { at: new Date().toISOString(), event: String(event?.event ?? ''), reference: String(event?.data?.reference ?? '') },
+            }, { onConflict: 'key' })
+            .then(() => {}, (e: any) => console.error('[PaystackWebhook] heartbeat write failed:', e?.message))
+
         if (event.event === 'charge.success') {
             const { reference, amount: paidAmountKobo } = event.data
             const metadata = event.data.metadata

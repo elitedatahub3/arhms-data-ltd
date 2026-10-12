@@ -6,6 +6,13 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 
+type WebhookHealth = {
+    lastAt: string | null
+    lastEvent: string | null
+    sweptSince: number
+    healthy: boolean
+}
+
 type Issue = {
     reference: string
     provider: string | null
@@ -31,6 +38,7 @@ export function ShopPaymentIssues() {
     const [issues, setIssues] = useState<Issue[]>([])
     const [stalePending, setStalePending] = useState(0)
     const [migrated, setMigrated] = useState(true)
+    const [webhook, setWebhook] = useState<WebhookHealth | null>(null)
     const [busy, setBusy] = useState<string | null>(null)
 
     const load = useCallback(async () => {
@@ -41,6 +49,7 @@ export function ShopPaymentIssues() {
             setIssues(data.issues || [])
             setStalePending(data.stalePending || 0)
             setMigrated(data.migrated !== false)
+            setWebhook(data.webhook ?? null)
         } catch {
             /* the main page still works without this panel */
         }
@@ -79,21 +88,48 @@ export function ShopPaymentIssues() {
         }
     }
 
+    // Shown above everything else: when Paystack stops delivering, every payment
+    // waits 5-15 minutes for the backup sweep and buyers think it failed.
+    const webhookWarning = webhook && !webhook.healthy ? (
+        <Card className="border-red-300 dark:border-red-800">
+            <CardContent className="py-3 text-sm space-y-1">
+                <p className="font-semibold text-red-700 dark:text-red-400">
+                    Paystack webhook is not arriving
+                </p>
+                <p className="text-muted-foreground">
+                    {webhook.sweptSince} payment{webhook.sweptSince === 1 ? ' was' : 's were'} confirmed by the backup
+                    sweep instead of the webhook{' '}
+                    {webhook.lastAt
+                        ? <>since the last delivery ({new Date(webhook.lastAt).toLocaleString()})</>
+                        : <>in the last 24 hours, and no delivery has been recorded</>}.
+                    Nothing is lost, but buyers wait 5–15 minutes. In the Paystack dashboard
+                    (Settings → API Keys &amp; Webhooks) set the <b>Live</b> webhook URL to{' '}
+                    <code>https://arhmsgh.com/api/webhooks/paystack</code> (no www).
+                </p>
+            </CardContent>
+        </Card>
+    ) : null
+
     if (!migrated) {
         return (
-            <Card className="border-amber-300">
-                <CardContent className="py-3 text-sm text-amber-700">
-                    Storefront payment ledger not set up yet. Run migration
-                    <code className="mx-1">20261013000000_shop_payment_ledger.sql</code>
-                    to see paid storefront payments that did not become orders.
-                </CardContent>
-            </Card>
+            <div className="space-y-4">
+                {webhookWarning}
+                <Card className="border-amber-300">
+                    <CardContent className="py-3 text-sm text-amber-700">
+                        Storefront payment ledger not set up yet. Run migration
+                        <code className="mx-1">20261013000000_shop_payment_ledger.sql</code>
+                        to see paid storefront payments that did not become orders.
+                    </CardContent>
+                </Card>
+            </div>
         )
     }
 
-    if (issues.length === 0 && stalePending === 0) return null
+    if (issues.length === 0 && stalePending === 0) return webhookWarning
 
     return (
+        <div className="space-y-4">
+        {webhookWarning}
         <Card className="border-red-300 dark:border-red-800">
             <CardHeader className="space-y-1 pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
@@ -141,5 +177,6 @@ export function ShopPaymentIssues() {
                 </CardContent>
             )}
         </Card>
+        </div>
     )
 }

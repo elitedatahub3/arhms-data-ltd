@@ -44,6 +44,8 @@ export async function GET() {
     if (auth.error) return auth.error
 
     const db = createServerClient() as any
+    const webhook = await paystackWebhookHealth(db)
+
     const { data, error } = await db
         .from('shop_payment_meta')
         .select('reference, provider, slug, attempts, last_error, created_at, last_checked_at, metadata')
@@ -59,6 +61,7 @@ export async function GET() {
             migrated: !notMigrated,
             issues: [],
             stalePending: 0,
+            webhook,
             error: notMigrated ? undefined : error.message,
         })
     }
@@ -88,7 +91,46 @@ export async function GET() {
         price: row.metadata?.selling_price ?? row.metadata?.airtime_amount ?? null,
     }))
 
-    return NextResponse.json({ success: true, migrated: true, issues, stalePending: stalePending ?? 0 })
+    return NextResponse.json({ success: true, migrated: true, issues, stalePending: stalePending ?? 0, webhook })
+}
+
+/**
+ * Is Paystack actually delivering webhooks?
+ *
+ * Silence alone proves nothing at 3am. What proves the webhook is dead is a payment
+ * the backup sweep had to settle ("status_check" success in hubtel_payment_logs)
+ * AFTER the last webhook arrived: Paystack had something to tell us and did not.
+ */
+async function paystackWebhookHealth(db: any) {
+    const { data: beat } = await db
+        .from('admin_settings')
+        .select('value')
+        .eq('key', 'paystack_webhook_last_received')
+        .maybeSingle()
+    const value = typeof beat?.value === 'string' ? safeParse(beat.value) : beat?.value
+    const lastAt: string | null = value?.at ?? null
+
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const since = lastAt && lastAt > dayAgo ? lastAt : dayAgo
+    const { count: sweptSince } = await db
+        .from('hubtel_payment_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('stage', 'status_check')
+        .eq('status', 'success')
+        .gt('updated_at', since)
+
+    return {
+        lastAt,
+        lastEvent: value?.event ?? null,
+        sweptSince: sweptSince ?? 0,
+        // Not zero: a sweep tick can beat a live webhook by a few seconds, and the
+        // Hubtel sweep logs the same stage. Three is a pattern, not a coincidence.
+        healthy: (sweptSince ?? 0) < 3,
+    }
+}
+
+function safeParse(raw: string): any {
+    try { return JSON.parse(raw) } catch { return null }
 }
 
 export async function POST(request: NextRequest) {
