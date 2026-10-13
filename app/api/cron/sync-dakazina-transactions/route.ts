@@ -195,7 +195,9 @@ export async function GET(request: NextRequest) {
             const { data: found, error: lookupErr } = await (supabase
                 .from('orders') as any)
                 .select('id, status, shop_order_id')
-                .in('id', ids)
+                // Storefront orders send shop_orders.id as the ref, not orders.id —
+                // see the matching note in the Dakazina webhook.
+                .or(`id.in.(${ids.join(',')}),shop_order_id.in.(${ids.join(',')})`)
                 .eq('status', 'processing')   // only ever advance in-flight orders
                 .limit(2)
 

@@ -163,10 +163,15 @@ export async function POST(request: NextRequest) {
         ].map(v => v.toLowerCase())))
 
         if (ownIds.length > 0) {
+            // The embedded id is whatever we sent as incoming_api_ref, and that is NOT
+            // always orders.id: the storefront sends its shop_orders.id. Matching only
+            // orders.id left every first-attempt storefront order stuck in processing.
+            // ownIds are regex-checked UUIDs, so they are safe inside the filter string.
+            const idList = ownIds.join(',')
             const { data: byOwnId, error: ownIdError } = await (supabase
                 .from('orders') as any)
                 .select('id, status, shop_order_id')
-                .in('id', ownIds)
+                .or(`id.in.(${idList}),shop_order_id.in.(${idList})`)
                 .limit(2)
 
             if (ownIdError) {
