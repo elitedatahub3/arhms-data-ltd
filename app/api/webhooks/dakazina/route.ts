@@ -189,28 +189,37 @@ export async function POST(request: NextRequest) {
 
         // Direct and storefront orders both stamp the supplier id on
         // orders.dakazina_reference, so this one lookup covers each.
+        //
+        // candidates alone used to miss every storefront order: their embedded id is
+        // the SHOP order's uuid, which never exists in orders.id (checked above), so
+        // byOwnId always came back empty for them — but dakazina_reference was stamped
+        // with that same clean, already-extracted uuid, never with the raw/garbled
+        // reference string candidates holds. Matching only against candidates compared
+        // a garbled string to a clean one and always lost. ownIds (the extracted uuids)
+        // has to be searched here too, or every storefront delivery falls through to
+        // "No order matches" and the order never leaves 'processing'.
         const { data: matches, error: lookupError } = await (supabase
             .from('orders') as any)
             .select('id, status, shop_order_id')
-            .in('dakazina_reference', candidates)
+            .in('dakazina_reference', Array.from(new Set([...candidates, ...ownIds])))
             .limit(2)
 
         if (lookupError) {
-            console.error(`[DakazinaWebhook] Lookup failed for [${candidates.join(', ')}]: ${lookupError.message}`)
+            console.error(`[DakazinaWebhook] Lookup failed for [${candidates.join(', ')}] / ids [${ownIds.join(', ')}]: ${lookupError.message}`)
             // DEVIATION 1 (no fallback cron): 5xx so they retry. A sibling supplier
             // would return 2xx here and let its cron reconcile; we have no cron.
             return NextResponse.json({ success: false, error: 'Lookup failed' }, { status: 500 })
         }
 
         if (!matches || matches.length === 0) {
-            console.warn(`[DakazinaWebhook] No order matches [${candidates.join(', ')}]`)
+            console.warn(`[DakazinaWebhook] No order matches [${candidates.join(', ')}] / ids [${ownIds.join(', ')}]`)
             return NextResponse.json({ success: true, updated: 0 }, { status: 200 })
         }
 
         // Refuse to guess. Two rows sharing a reference means the stamp is not unique,
         // and completing an arbitrary one of them would be worse than completing none.
         if (matches.length > 1) {
-            console.error(`[DakazinaWebhook] AMBIGUOUS: [${candidates.join(', ')}] matches multiple orders — refusing`)
+            console.error(`[DakazinaWebhook] AMBIGUOUS: [${candidates.join(', ')}] / ids [${ownIds.join(', ')}] matches multiple orders — refusing`)
             return NextResponse.json({ success: true, updated: 0 }, { status: 200 })
         }
 
