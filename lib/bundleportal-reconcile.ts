@@ -56,7 +56,7 @@ export async function reconcileBundlePortalOrders(opts: { runBudgetMs?: number; 
     try {
         const { data, error } = await (supabase
             .from('shop_orders') as any)
-            .select('id, status')
+            .select('id, status, created_at')
             .eq('fulfilled_by', 'bundleportal')
             .eq('status', 'processing')
             .order('created_at', { ascending: true })
@@ -70,7 +70,7 @@ export async function reconcileBundlePortalOrders(opts: { runBudgetMs?: number; 
     try {
         const { data, error } = await (supabase
             .from('orders') as any)
-            .select('id, shop_order_id, status')
+            .select('id, shop_order_id, status, created_at')
             .eq('fulfillment_method', 'bundleportal')
             .eq('status', 'processing')
             .order('created_at', { ascending: true })
@@ -92,19 +92,64 @@ export async function reconcileBundlePortalOrders(opts: { runBudgetMs?: number; 
     }
 
     // ── One batched read of the supplier's history ────────────────────────────
-    const statuses = await fetchRecentOrderStatuses({
+    // Page back to the oldest backlog order (with slack for clock skew between
+    // our created_at and theirs), so an order is only "missing" once the scan has
+    // actually read past the moment it was placed.
+    const createdTimes = [...shopOrders, ...mainOrders]
+        .map(o => Date.parse(String(o.created_at ?? '')))
+        .filter(Number.isFinite)
+    const scanBackTo = createdTimes.length > 0
+        ? new Date(Math.min(...createdTimes) - 15 * 60_000).toISOString()
+        : undefined
+
+    const scan = await fetchRecentOrderStatuses({
         wantedOrderIds,
         budgetMs: opts.scanBudgetMs ?? 30_000,
+        scanBackTo,
     })
+    const statuses = scan.statuses
 
     const lookup = (order: any) =>
         statuses.get(String(order.id)) || (order.shop_order_id ? statuses.get(String(order.shop_order_id)) : undefined)
 
-    // A row the scan never saw is NOT resolved — it may have fallen off the pages
-    // we read. Report it so a backlog older than the history window is visible.
-    const unseen = [...shopOrders, ...mainOrders].filter(o => !lookup(o)).length
-    if (unseen > 0) {
-        errors.push(`${unseen} of ${shopOrders.length + mainOrders.length} backlog rows were not found in the scanned history`)
+    // A storefront order is one shop_orders row AND one orders row; count it once.
+    const backlog = new Map<string, any>()
+    for (const o of shopOrders) backlog.set(String(o.id), o)
+    for (const o of mainOrders) {
+        const key = String(o.shop_order_id || o.id)
+        if (!backlog.has(key)) backlog.set(key, o)
+    }
+
+    const scanReachedFullDepth = ['all_found', 'end_of_history', 'reached_cutoff'].includes(scan.stopReason)
+    const oldestSeenMs = scan.oldestSeenAt ? Date.parse(scan.oldestSeenAt) : Infinity
+    const missing: any[] = []
+    const notReached: any[] = []
+    const staleInFlight: { order: any; raw: string }[] = []
+    const STALE_MS = 2 * 60 * 60_000
+
+    for (const o of backlog.values()) {
+        const hit = lookup(o)
+        const createdMs = Date.parse(String(o.created_at ?? ''))
+        if (!hit) {
+            const scannedPastIt = scanReachedFullDepth || (Number.isFinite(createdMs) && oldestSeenMs <= createdMs)
+            ;(scannedPastIt ? missing : notReached).push(o)
+        } else if (hit.status === 'processing' && Number.isFinite(createdMs) && Date.now() - createdMs > STALE_MS) {
+            staleInFlight.push({ order: o, raw: hit.raw })
+        }
+    }
+
+    const hoursOld = (o: any) => Math.floor((Date.now() - Date.parse(String(o.created_at))) / 3_600_000)
+
+    // Most actionable first: errors[0] is what the admin push notification shows.
+    if (missing.length > 0) {
+        errors.push(`${missing.length} of ${backlog.size} BundlePortal orders are not in their history at all — check they were really placed (e.g. ${missing[0].id})`)
+    }
+    if (staleInFlight.length > 0) {
+        const oldest = staleInFlight.reduce((a, b) => (Date.parse(a.order.created_at) <= Date.parse(b.order.created_at) ? a : b))
+        errors.push(`${staleInFlight.length} BundlePortal orders still undelivered after 2h+ (oldest ${hoursOld(oldest.order)}h, supplier says "${oldest.raw}") — chase BundlePortal or refund`)
+    }
+    if (notReached.length > 0) {
+        errors.push(`BundlePortal history scan incomplete (${scan.stopReason}, ${scan.pagesRead} pages) — ${notReached.length} of ${backlog.size} orders not checked this run`)
     }
 
     /** Apply the scan result to one table's backlog. */

@@ -331,37 +331,71 @@ export async function fulfillOrder(
 }
 
 // ─── Batch Status Read ─────────────────────────────────────────────────────────
+// Why a scan stopped. Only 'all_found', 'end_of_history' and 'reached_cutoff'
+// mean the history was read far enough back to call a missing order missing;
+// every other reason means the scan simply did not get there.
+export type ScanStopReason =
+    | 'all_found'
+    | 'end_of_history'
+    | 'reached_cutoff'
+    | 'page_limit'
+    | 'time_budget'
+    | 'fetch_failed'
+    | 'circuit_open'
+    | 'no_key'
+
+export interface OrderStatusScan {
+    statuses: Map<string, { status: MappedStatus; raw: string }>
+    stopReason: ScanStopReason
+    pagesRead: number
+    // created_at of the oldest transaction read, i.e. how far back the scan reached.
+    oldestSeenAt: string | null
+}
+
 /**
  * Resolve the current status of many orders in one pass, keyed by the order_id
  * WE sent (orders.id or shop_orders.id).
  *
- * v2 has no per-order status call, so this pages get_transactions (newest first)
- * and builds an order_id → status map. Stops as soon as every wanted id is
- * accounted for, the page budget is spent, or the time budget runs out.
+ * v2 has no per-order status call and get_transactions takes no filters, only
+ * limit/offset, so this pages it (newest first) and builds an order_id → status
+ * map. Pass `scanBackTo` (the oldest backlog order's created_at) and it keeps
+ * paging until it reaches transactions older than that, instead of giving up
+ * after a fixed few pages — a fixed window let busy-day orders fall out of
+ * reach within hours and get reported as "not found" while still undelivered.
  */
 export async function fetchRecentOrderStatuses(opts: {
     wantedOrderIds: string[]
     budgetMs?: number
     maxPages?: number
     pageSize?: number
-}): Promise<Map<string, { status: MappedStatus; raw: string }>> {
-    const resolved = new Map<string, { status: MappedStatus; raw: string }>()
+    scanBackTo?: string
+}): Promise<OrderStatusScan> {
+    const statuses = new Map<string, { status: MappedStatus; raw: string }>()
+    const result = (stopReason: ScanStopReason, pagesRead = 0, oldestSeenAt: string | null = null): OrderStatusScan =>
+        ({ statuses, stopReason, pagesRead, oldestSeenAt })
 
-    if (!BUNDLEPORTAL_API_KEY || opts.wantedOrderIds.length === 0) return resolved
+    if (!BUNDLEPORTAL_API_KEY) return result('no_key')
+    if (opts.wantedOrderIds.length === 0) return result('all_found')
     if (!checkCircuit()) {
         console.warn('[BundlePortal] Circuit breaker is OPEN — skipping status scan.')
-        return resolved
+        return result('circuit_open')
     }
 
     const wanted = new Set(opts.wantedOrderIds)
     const budgetMs = opts.budgetMs ?? 30_000
-    const maxPages = opts.maxPages ?? 10
+    const maxPages = opts.maxPages ?? (opts.scanBackTo ? 30 : 10)
     const pageSize = opts.pageSize ?? 100
+    const cutoffMs = opts.scanBackTo ? Date.parse(opts.scanBackTo) : NaN
     const deadline = Date.now() + budgetMs
+
+    let stopReason: ScanStopReason = 'page_limit'
+    let pagesRead = 0
+    let oldestSeenMs = Infinity
 
     try {
         for (let page = 0; page < maxPages; page++) {
-            if (Date.now() >= deadline || wanted.size === resolved.size) break
+            if (statuses.size === wanted.size) { stopReason = 'all_found'; break }
+            if (Date.now() >= deadline) { stopReason = 'time_budget'; break }
 
             const { status, ok, data, rawText } = await callApi(
                 'get_transactions',
@@ -369,30 +403,40 @@ export async function fetchRecentOrderStatuses(opts: {
                 Math.max(2_000, deadline - Date.now())
             )
             if (!ok || data?.success !== true) {
-                console.error(`[BundlePortal] get_transactions failed (HTTP ${status}):`, data?.message || rawText.slice(0, 300))
+                console.error(`[BundlePortal] get_transactions failed (HTTP ${status}) on page ${page}:`, data?.message || rawText.slice(0, 300))
+                stopReason = 'fetch_failed'
                 break
             }
+            pagesRead++
 
             const rows: any[] = Array.isArray(data?.data?.transactions) ? data.data.transactions : []
-            if (rows.length === 0) break
+            if (rows.length === 0) { stopReason = 'end_of_history'; break }
 
             for (const row of rows) {
+                const createdMs = Date.parse(String(row?.created_at ?? ''))
+                if (Number.isFinite(createdMs) && createdMs < oldestSeenMs) oldestSeenMs = createdMs
+
                 const id = row?.order_id === undefined || row?.order_id === null ? null : String(row.order_id)
-                if (!id || !wanted.has(id) || resolved.has(id)) continue
+                if (!id || !wanted.has(id) || statuses.has(id)) continue
                 const raw = String(row?.status ?? '')
-                resolved.set(id, { status: mapBundlePortalStatus(raw), raw })
+                statuses.set(id, { status: mapBundlePortalStatus(raw), raw })
             }
 
+            if (statuses.size === wanted.size) { stopReason = 'all_found'; break }
             // A short page means we reached the end of the history.
-            if (rows.length < pageSize) break
+            if (rows.length < pageSize) { stopReason = 'end_of_history'; break }
+            if (Number.isFinite(cutoffMs) && oldestSeenMs < cutoffMs) { stopReason = 'reached_cutoff'; break }
         }
         recordSuccess()
     } catch (err: any) {
         recordFailure()
+        stopReason = 'fetch_failed'
         console.error('[BundlePortal] Status scan failed:', err?.message)
     }
 
-    return resolved
+    const oldestSeenAt = Number.isFinite(oldestSeenMs) ? new Date(oldestSeenMs).toISOString() : null
+    console.log(`[BundlePortal] Status scan: ${statuses.size}/${wanted.size} found, ${pagesRead} page(s), stop=${stopReason}, reached back to ${oldestSeenAt ?? 'n/a'}`)
+    return result(stopReason, pagesRead, oldestSeenAt)
 }
 
 /**
@@ -403,8 +447,8 @@ export async function checkOrderStatus(orderId: string): Promise<StatusResponse>
     if (!checkCircuit()) return { success: false, status: 'pending', message: 'Service unavailable (circuit open)' }
     if (!BUNDLEPORTAL_API_KEY) return { success: false, status: 'pending', message: 'API key not configured' }
 
-    const resolved = await fetchRecentOrderStatuses({ wantedOrderIds: [orderId], budgetMs: 10_000 })
-    const hit = resolved.get(orderId)
+    const { statuses } = await fetchRecentOrderStatuses({ wantedOrderIds: [orderId], budgetMs: 10_000 })
+    const hit = statuses.get(orderId)
     if (!hit) return { success: false, status: 'pending', message: 'Order not found in recent history' }
 
     return { success: true, status: hit.status, message: hit.raw }
