@@ -66,13 +66,27 @@ export async function GET(request: NextRequest) {
             results.checked++
             const order = leg.airtime_orders
 
+            const status = await getAirtimeOrderStatus(leg.client_reference)
+
             if (order.status !== 'processing' && order.status !== 'pending') {
                 // Already resolved by another path (admin action, race with the
-                // webhook-less flow) — nothing left for this sweep to do.
+                // webhook-less flow), so the order is not ours to touch. The leg still
+                // has to be closed: this query takes the OLDEST open legs, and one left
+                // open here holds a batch slot forever. Enough of them and every new
+                // order sits past the limit, never checked — which is exactly how
+                // GHD-MV83RQT7 stayed 'processing' behind 22 hand-completed orders.
+                if (status.success && (status.status === 'completed' || status.status === 'failed')) {
+                    await supabase
+                        .from('airtime_fulfillment_legs')
+                        .update({
+                            status: status.status === 'completed' ? 'success' : 'failed',
+                            raw: (status.raw ?? null) as any,
+                            updated_at: new Date().toISOString(),
+                        })
+                        .eq('id', leg.id)
+                }
                 continue
             }
-
-            const status = await getAirtimeOrderStatus(leg.client_reference)
 
             if (!status.success) {
                 // Could not reach them, or they do not recognise the reference. Leave
