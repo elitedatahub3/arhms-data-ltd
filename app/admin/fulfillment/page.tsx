@@ -32,6 +32,7 @@ import {
 import { toast } from 'sonner'
 import { ADMIN_VERIFYING_LABEL, getOrderDisplayStatus } from '@/lib/order-status-display'
 import { formatCurrency, cn } from '@/lib/utils'
+import { SUPPLIER_NAMES, isSupplierId } from '@/lib/supplier-ids'
 import { format } from 'date-fns'
 import {
     LEGACY_MTN_GATE_KEY,
@@ -74,6 +75,8 @@ interface FulfillmentSettings {
     netpulse_networks: Record<string, boolean>
     hendylinks_networks: Record<string, boolean>
     bundleportal_networks: Record<string, boolean>
+    /** network → supplier tried when the primary definitely refuses (lib/supplier-router). */
+    fallback: Record<string, SupplierId | null>
 }
 
 const NETWORKS = ['MTN', 'Telecel', 'AT-iShare', 'AT-BigTime']
@@ -132,7 +135,8 @@ export default function FulfillmentPage() {
         agentportal_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
         netpulse_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
         hendylinks_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
-        bundleportal_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {})
+        bundleportal_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
+        fallback: {}
     })
     const [isSavingSettings, setIsSavingSettings] = useState(false)
 
@@ -340,7 +344,11 @@ export default function FulfillmentPage() {
                 bundleportal_networks: NETWORKS.reduce((acc, n) => ({
                     ...acc,
                     [n]: dbBundleportalNetworks[n] === true
-                }), {} as Record<string, boolean>)
+                }), {} as Record<string, boolean>),
+                fallback: NETWORKS.reduce((acc, n) => ({
+                    ...acc,
+                    [n]: isSupplierId(dbFulfillmentSettings.fallback?.[n]) ? dbFulfillmentSettings.fallback[n] : null
+                }), {} as Record<string, SupplierId | null>)
             })
 
             // Load cron settings
@@ -409,7 +417,7 @@ export default function FulfillmentPage() {
         try {
             const updates = [
                 { key: 'auto_fulfillment_enabled', value: String(newSettings.is_global_enabled) },
-                { key: 'fulfillment_settings', value: JSON.stringify({ networks: newSettings.networks, codecraft_networks: newSettings.codecraft_networks, kingflexy_networks: newSettings.kingflexy_networks, eazydata_networks: newSettings.eazydata_networks, agentportal_networks: newSettings.agentportal_networks, netpulse_networks: newSettings.netpulse_networks, hendylinks_networks: newSettings.hendylinks_networks, bundleportal_networks: newSettings.bundleportal_networks }) }
+                { key: 'fulfillment_settings', value: JSON.stringify({ networks: newSettings.networks, codecraft_networks: newSettings.codecraft_networks, kingflexy_networks: newSettings.kingflexy_networks, eazydata_networks: newSettings.eazydata_networks, agentportal_networks: newSettings.agentportal_networks, netpulse_networks: newSettings.netpulse_networks, hendylinks_networks: newSettings.hendylinks_networks, bundleportal_networks: newSettings.bundleportal_networks, fallback: newSettings.fallback }) }
             ]
 
             const { error } = await (supabase
@@ -440,8 +448,22 @@ export default function FulfillmentPage() {
                 if (key === targetKey) continue
                 newSettings[key] = { ...settings[key], [network]: false }
             }
+            // A supplier can't be its own fallback: promoting the fallback clears it.
+            if (settings.fallback[network] === provider) {
+                newSettings.fallback = { ...settings.fallback, [network]: null }
+            }
         }
         saveSettings(newSettings)
+    }
+
+    const setFallback = (network: string, provider: SupplierId | null) => {
+        saveSettings({ ...settings, fallback: { ...settings.fallback, [network]: provider } })
+    }
+
+    /** The supplier connected for a network, if exactly one is. */
+    const primaryFor = (network: string): SupplierId | null => {
+        const on = (Object.keys(SUPPLIER_KEYS) as SupplierId[]).filter(id => settings[SUPPLIER_KEYS[id]][network] === true)
+        return on.length === 1 ? on[0] : null
     }
 
     const toggleGlobal = () => {
@@ -1333,6 +1355,61 @@ export default function FulfillmentPage() {
                 </Card>
             </div>
 
+            {/* Fallback supplier — where an order goes when the primary refuses it */}
+            <Card className="border-sky-200 dark:border-sky-900">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm md:text-base flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-sky-600" />
+                        Fallback supplier
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                        If the connected supplier can&apos;t take an order (no balance, out of stock, bad key, rejected number),
+                        it goes straight to the fallback. A timeout or server error does not switch, since the first
+                        supplier may already be delivering it.
+                    </p>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {NETWORKS.map(net => {
+                        const primary = primaryFor(net)
+                        const fallback = settings.fallback[net] ?? null
+                        return (
+                            <div key={`fallback-${net}`} className="rounded-lg border p-3 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold text-xs md:text-sm">{net}</span>
+                                    <span className="text-[10px] text-muted-foreground truncate">
+                                        Primary: <span className="font-bold text-foreground">{primary ? SUPPLIER_NAMES[primary] : 'none'}</span>
+                                    </span>
+                                </div>
+                                <Select
+                                    value={fallback ?? 'none'}
+                                    onValueChange={(v) => setFallback(net, v === 'none' ? null : v as SupplierId)}
+                                    disabled={isSavingSettings || !primary}
+                                >
+                                    <SelectTrigger className="h-8 text-xs">
+                                        <SelectValue placeholder="No fallback" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="none">No fallback</SelectItem>
+                                        {(Object.keys(SUPPLIER_KEYS) as SupplierId[])
+                                            .filter(id => id !== primary)
+                                            .map(id => (
+                                                <SelectItem key={id} value={id}>{SUPPLIER_NAMES[id]}</SelectItem>
+                                            ))}
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-[10px] text-muted-foreground">
+                                    {!primary
+                                        ? 'Connect a supplier below first — with none connected, this network is paused.'
+                                        : fallback
+                                            ? `${SUPPLIER_NAMES[primary]} → ${SUPPLIER_NAMES[fallback]}`
+                                            : 'Refused orders stay pending'}
+                                </p>
+                            </div>
+                        )
+                    })}
+                </CardContent>
+            </Card>
+
             {/* Network Connections — Mutex Toggle System */}
             <div className="space-y-3">
                 {/* DataKazina Row */}
@@ -2047,6 +2124,10 @@ export default function FulfillmentPage() {
                                         const isHeld = getOrderDisplayStatus(order) === 'verifying'
                                         const isQueued = order.status === 'processing'
                                             && order.mtn_fulfillment_tracking?.some((t: any) => t.api_response?.note === 'Background Queue Fulfillment Success')
+                                        // Set by lib/supplier-router when the fallback supplier took the order.
+                                        const fallbackTrail: string | undefined = order.mtn_fulfillment_tracking
+                                            ?.map((t: any) => t.api_response?.fallback)
+                                            .find((f: any) => typeof f === 'string')
                                         return (
                                         <div
                                             key={order.id}
@@ -2109,6 +2190,11 @@ export default function FulfillmentPage() {
                                                         >
                                                             {isHeld ? 'Verifying' : isQueued ? 'Queued Processing' : order.status}
                                                         </Badge>
+                                                        {fallbackTrail && (
+                                                            <p className="text-[10px] text-sky-700 dark:text-sky-400 font-semibold mt-1 leading-tight" title={fallbackTrail}>
+                                                                Fallback: {fallbackTrail}
+                                                            </p>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="space-y-0.5">

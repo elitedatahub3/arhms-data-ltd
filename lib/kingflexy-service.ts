@@ -1,4 +1,5 @@
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 
 // KingFlexyGH Fulfillment Service — mirrors lib/codecraft-service.ts architecture
 
@@ -20,6 +21,7 @@ interface FulfillmentResponse {
     error?: string
     apiResponse?: any
     isRateLimited?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -72,23 +74,23 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[KingFlexy] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!KINGFLEXY_API_KEY) {
-        return { success: false, error: 'KingFlexy API key not configured' }
+        return { success: false, error: 'KingFlexy API key not configured', failureKind: 'refused' }
     }
 
     try {
         // ── Extract numeric GB volume from size string ──────────────────────
         const sizeMatch = dataSize.match(/[\d.]+/)
         if (!sizeMatch) {
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
 
         const gigVolume = Number(sizeMatch[0])
         if (isNaN(gigVolume) || gigVolume <= 0) {
-            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}` }
+            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}`, failureKind: 'refused' }
         }
 
         // ── Phone Normalization ─────────────────────────────────────────────
@@ -137,7 +139,7 @@ export async function fulfillOrder(
 
                 if (response.status === 429) {
                     console.warn(`[KingFlexy] Rate limited (HTTP 429). Order ${orderId} kept pending.`)
-                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true }
+                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true, failureKind: 'refused' }
                 }
 
                 break
@@ -159,7 +161,7 @@ export async function fulfillOrder(
 
         if (!response) {
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to KingFlexy' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to KingFlexy', failureKind: 'unknown' }
         }
 
         // ── Parse JSON ─────────────────────────────────────────────────────
@@ -170,7 +172,7 @@ export async function fulfillOrder(
         } catch (e) {
             console.error(`[KingFlexy] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})`, failureKind: 'unknown' }
         }
 
         console.log(`[KingFlexy] API response:`, { status: response.status, success: data?.success })
@@ -204,16 +206,19 @@ export async function fulfillOrder(
         if (response.status >= 500) {
             recordFailure()
         }
+        // We send orderId as KingFlexy's idempotency reference (a repeat is the 409
+        // above), so a JSON rejection below 500 is a definite no.
         return {
             success: false,
             error: errMsg,
             apiResponse: sanitizeForLog(data),
+            failureKind: response.status >= 500 ? 'unknown' : 'refused',
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[KingFlexy] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 

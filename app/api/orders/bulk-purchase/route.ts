@@ -8,6 +8,11 @@ import { waitUntil } from '@vercel/functions'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { checkFraudSignals, logSuspiciousActivity } from '@/lib/security'
+import {
+    loadFulfillmentConfig, fulfillWithFallback, ordersStamp, optionalStampKeys, failureReason,
+    type FulfillmentConfig,
+} from '@/lib/supplier-router'
+import { updateOrderWithColumnFallback } from '@/lib/order-update-fallback'
 
 // Lazy-init so a missing env var or exhausted Redis limit does not crash the module
 let bulkRateLimit: Ratelimit | null = null
@@ -276,9 +281,11 @@ export async function POST(request: NextRequest) {
 
             // Use waitUntil so the lambda stays alive after returning the response
             waitUntil((async () => {
+                // One settings read for the whole batch, not one per line item.
+                const config = await loadFulfillmentConfig(createServerClient())
                 const allResults = await Promise.allSettled(
                     (createdOrders as any[]).map((order) =>
-                        processOrderNotifications(order, { email: userEmail, name: userName })
+                        processOrderNotifications(order, { email: userEmail, name: userName }, config)
                     )
                 )
 
@@ -325,20 +332,26 @@ export async function POST(request: NextRequest) {
  */
 async function processOrderNotifications(
     order: { id: string; reference_code: string; network: string; phone_number: string; size: string },
-    user: { email: string; name: string }
+    user: { email: string; name: string },
+    config: FulfillmentConfig
 ): Promise<FulfillmentOutcome> {
     // No "order received" SMS — beneficiaries only hear from us on delivery.
     // On a bulk run this also stops one text per line item landing at once.
-    return triggerFulfillment(order, user)
+    return triggerFulfillment(order, user, config)
 }
 
 /**
  * Trigger fulfillment for a single order and return an outcome object.
  * Does NOT send any admin emails — caller aggregates outcomes.
+ *
+ * Goes through lib/supplier-router like every other order path. This used to call
+ * Dakazina directly whatever supplier the admin had switched on, and never stamped
+ * fulfillment_method or a reference, so no status sync could ever complete it.
  */
 async function triggerFulfillment(
     order: { id: string; reference_code: string; network: string; phone_number: string; size: string },
-    user: { email: string; name: string }
+    user: { email: string; name: string },
+    config: FulfillmentConfig
 ): Promise<FulfillmentOutcome> {
     const base: Omit<FulfillmentOutcome, 'failed' | 'type' | 'reason'> = {
         referenceCode: order.reference_code,
@@ -346,79 +359,74 @@ async function triggerFulfillment(
     }
 
     try {
-        const { fulfillOrder } = await import('@/lib/fulfillment-service')
         const { syncShopOrderStatus } = await import('@/lib/shop-service')
         const supabase = createServerClient()
-
-        const { data: settingsData } = await supabase
-            .from('admin_settings')
-            .select('key, value')
-            .in('key', ['auto_fulfillment_enabled', 'fulfillment_settings'])
-
-        const settingsMap = (settingsData || []).reduce((acc: any, curr: any) => {
-            acc[curr.key] = curr.value
-            return acc
-        }, {})
-
-        // Check global fulfillment switch
-        if (String(settingsMap.auto_fulfillment_enabled) === 'false') {
-            return { ...base, failed: true, type: 'skipped', reason: 'Global auto-fulfillment is disabled' }
-        }
-
-        // Check per-network fulfillment switch
-        let fulfillmentSettings = { networks: {} as Record<string, boolean> }
-        try {
-            if (settingsMap.fulfillment_settings) {
-                fulfillmentSettings = typeof settingsMap.fulfillment_settings === 'string'
-                    ? JSON.parse(settingsMap.fulfillment_settings)
-                    : settingsMap.fulfillment_settings
-            }
-        } catch { /* ignore parse errors */ }
-
-        if (fulfillmentSettings.networks[order.network] === false) {
-            return { ...base, failed: true, type: 'skipped', reason: `Auto-fulfillment is disabled for network: ${order.network}` }
-        }
 
         // Avoid double-fulfilling
         const { data: existingTracking } = await supabase
             .from('mtn_fulfillment_tracking').select('status').eq('order_id', order.id).single()
         if (existingTracking) return { ...base, failed: false, type: 'success' }
 
-        // Call fulfillment API
-        const result = await fulfillOrder(order.network, order.phone_number, order.size, order.id)
+        const outcome = await fulfillWithFallback({
+            db: supabase,
+            network: order.network,
+            phone: order.phone_number,
+            size: order.size,
+            orderId: order.id,
+            match: { column: 'id', value: order.id },
+            mode: 'live',
+            config,
+        })
 
-        if (result.success) {
+        if (outcome.status === 'disabled') {
+            return { ...base, failed: true, type: 'skipped', reason: 'Global auto-fulfillment is disabled' }
+        }
+        if (outcome.status === 'no_supplier') {
+            return { ...base, failed: true, type: 'skipped', reason: `No active supplier configured for network: ${order.network}` }
+        }
+        if (outcome.status === 'conflict') {
+            return { ...base, failed: true, type: 'skipped', reason: `Multiple suppliers are active for ${order.network} — order kept pending` }
+        }
+
+        if (outcome.status === 'placed') {
+            const result = outcome.result
             await (supabase.from('mtn_fulfillment_tracking') as any).insert({
                 order_id: order.id,
                 status: 'processing',
-                api_response: result.apiResponse || { reference: result.reference, network: order.network },
+                api_response: { ...(result.apiResponse || {}), reference: outcome.reference, supplier: outcome.supplier.id, network: order.network },
             })
-            await (supabase.from('orders') as any)
-                .update({ status: 'processing', updated_at: new Date().toISOString() })
-                .eq('id', order.id)
+            const ordersUpdate: Record<string, any> = {
+                status: 'processing',
+                updated_at: new Date().toISOString(),
+                ...ordersStamp(outcome.supplier, outcome.reference),
+            }
+            await updateOrderWithColumnFallback(
+                supabase, 'orders', { column: 'id', value: order.id },
+                ordersUpdate, optionalStampKeys(ordersUpdate), '[BulkFulfillment]'
+            )
 
             // Sync status to healing wrapper so shop owners see it
-            await syncShopOrderStatus(order.id, 'processing').catch(err => 
+            await syncShopOrderStatus(order.id, 'processing').catch(err =>
                 console.error(`[BulkFulfillment] syncShopOrderStatus failed for ${order.id}:`, err)
             )
 
             return { ...base, failed: false, type: 'success' }
-        } else {
-            await (supabase.from('mtn_fulfillment_tracking') as any).insert({
-                order_id: order.id,
-                status: 'failed',
-                api_response: { error: result.error, network: order.network, ...result.apiResponse },
-            })
-            return {
-                ...base,
-                failed: true,
-                type: 'error',
-                reason: `Auto-fulfillment API error: ${result.error || 'Unknown error'}`
-            }
+        }
+
+        const result = outcome.result
+        await (supabase.from('mtn_fulfillment_tracking') as any).insert({
+            order_id: order.id,
+            status: 'failed',
+            api_response: { error: result.error, supplier: outcome.supplier.id, network: order.network, attempts: outcome.attempts, ...result.apiResponse },
+        })
+        return {
+            ...base,
+            failed: true,
+            type: 'error',
+            reason: `Auto-fulfillment API error — ${failureReason(outcome)}`
         }
     } catch (error: any) {
         console.error(`[BulkFulfillment] Error processing order ${order.id}:`, error)
         return { ...base, failed: true, type: 'error', reason: `Exception: ${error?.message || 'Unknown'}` }
     }
 }
-
