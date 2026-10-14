@@ -13,6 +13,8 @@ import {
     SMS_MESSAGE_MIN,
     SMS_MESSAGE_MAX,
 } from '@/lib/sms/customer-sms'
+import { checkMessageContent } from '@/lib/sms/sms-rules'
+import { sendPushToAdmins } from '@/lib/web-push'
 
 // Sends are paid for, so this is a guard against a runaway client loop rather
 // than a cost control. Lazy-init so a missing Redis env var does not crash the
@@ -84,6 +86,21 @@ export async function POST(request: Request) {
                 { error: `Message must be between ${SMS_MESSAGE_MIN} and ${SMS_MESSAGE_MAX} characters` },
                 { status: 400 }
             )
+        }
+
+        // Fake network/MoMo alerts ("credited with 1 GB", "Payment made for GHS …")
+        // are refused before any credits move, and admins are told who tried.
+        const contentCheck = checkMessageContent(message)
+        if (!contentCheck.ok) {
+            const who = shop?.shop_name || authUser.email || authUser.id
+            console.warn(`[CustomerSmsSend] Blocked spoofed alert (${contentCheck.matched}) from account ${account.id} (${who}): ${message.slice(0, 160)}`)
+            await sendPushToAdmins({
+                title: 'Blocked fake MTN/MoMo SMS',
+                body: `${who} tried to send ${contentCheck.matched}: "${message.slice(0, 90)}"`,
+                url: '/admin/sms-senders',
+                tag: `sms-spoof-${account.id}`,
+            }).catch(() => {})
+            return NextResponse.json({ error: contentCheck.error, blocked: true }, { status: 400 })
         }
 
         // Idempotency: a retried send with the same reference gets the original

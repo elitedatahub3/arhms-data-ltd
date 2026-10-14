@@ -132,27 +132,80 @@ export function validateSenderId(name: string): SenderIdCheck {
         return { ok: false, error: 'Sender ID must contain at least one letter — the networks reject all-number names' }
     }
 
-    const upper = sender.toUpperCase()
+    const blocked = findBlockedSenderWord(sender)
+    if (blocked) {
+        return {
+            ok: false,
+            error: `Sender ID cannot contain "${blocked}" — the networks reject names that look like a telco or a data service. Use your business name instead.`,
+        }
+    }
+
+    return { ok: true }
+}
+
+/** The telco/data word a sender name carries, or null if it carries none. */
+export function findBlockedSenderWord(name: string): string | null {
+    const upper = (name ?? '').trim().toUpperCase()
     const squashed = upper.replace(/\s+/g, '')
-
     for (const word of BLOCKED_SUBSTRINGS) {
-        if (squashed.includes(word)) {
-            return {
-                ok: false,
-                error: `Sender ID cannot contain "${word}" — the networks reject names that look like a telco or a data service. Use your business name instead.`,
-            }
-        }
+        if (squashed.includes(word)) return word
     }
-
+    const words = upper.split(/[^A-Z0-9]+/)
     for (const word of BLOCKED_WORDS) {
-        if (upper.split(/[^A-Z0-9]+/).includes(word)) {
+        if (words.includes(word)) return word
+    }
+    return null
+}
+
+// ============================================================
+// MESSAGE CONTENT
+// ============================================================
+
+/**
+ * Wording that only a network or Mobile Money ever sends. A shop SMS carrying
+ * it is a fake alert — "Your Account has been credited with 1 GB" or "Payment
+ * made for GHS 20.00 … Transaction ID: …" — used to convince a buyer they were
+ * paid or delivered to when they were not. Each pattern is specific to an
+ * alert's own phrasing, so ordinary promos ("Buy 1GB MTN data for GHS 5,
+ * valid 30 days") still pass.
+ */
+const CEDI = String.raw`(?:gh\s*(?:s|c|₵|¢)|₵|¢|cedis?)`
+const SPOOFED_ALERT_PATTERNS: { label: string; re: RegExp }[] = [
+    { label: 'an account-credited alert', re: /\b(?:account|wallet|line|number)\s+has\s+been\s+credited\b/i },
+    { label: 'a data/money credit alert', re: new RegExp(String.raw`\bcredited\s+with\s+(?:${CEDI}\s*)?[\d.,]+\s*(?:gb|mb|${CEDI})?`, 'i') },
+    { label: 'a Mobile Money payment alert', re: new RegExp(String.raw`\bpayment\s+(?:made|received|sent)\s+(?:for|of)\s+${CEDI}`, 'i') },
+    { label: 'a Mobile Money receipt', re: new RegExp(String.raw`\b(?:you\s+have\s+)?received\s+${CEDI}\s*[\d.,]+\s+from\b`, 'i') },
+    { label: 'a balance notice', re: new RegExp(String.raw`\b(?:current|available|new)\s+balance\s*(?:is|:)?\s*${CEDI}`, 'i') },
+    { label: 'a transaction ID', re: /\b(?:financial\s+)?transaction\s+id\s*[:#.]?\s*\d{6,}/i },
+    { label: 'a Mobile Money charge line', re: new RegExp(String.raw`\b(?:fee|tax)\s+charged\s*:?\s*${CEDI}`, 'i') },
+    { label: 'a Mobile Money cash alert', re: /\bcash\s*[- ]?(?:in|out)\s+(?:received|of|made|successful)\b/i },
+    { label: 'a link to the MoMo app', re: /mtnmymomo|momo\s*app/i },
+]
+
+export interface MessageContentCheck {
+    ok: boolean
+    error?: string
+    /** Which kind of alert it imitated, for logs. */
+    matched?: string
+}
+
+/**
+ * Refuses messages written to look like a network or Mobile Money alert.
+ * Runs in the compose box (so the owner sees why) and in the send route (so
+ * the rule holds whatever the client does).
+ */
+export function checkMessageContent(message: string): MessageContentCheck {
+    // Zero-width characters are the usual way to slip a phrase past a filter.
+    const text = (message ?? '').replace(/[​-‍⁠﻿]/g, '').replace(/\s+/g, ' ')
+    for (const { label, re } of SPOOFED_ALERT_PATTERNS) {
+        if (re.test(text)) {
             return {
                 ok: false,
-                error: `Sender ID cannot contain "${word}" — the networks reject names that look like a telco. Use your business name instead.`,
+                matched: label,
+                error: `This message looks like ${label} from MTN or Mobile Money. Customer SMS cannot imitate network or Mobile Money alerts — write it as a message from your shop.`,
             }
         }
     }
-
     return { ok: true }
 }
 

@@ -11,7 +11,7 @@
 
 import { sendSMS, normalizeGhanaPhone, getActiveSmsProvider } from '@/lib/sms-service'
 import { sendKingFlexyBulkSMS, isKingFlexySmsConfigured, KF_INLINE_RECIPIENTS } from '@/lib/kingflexy-sms-service'
-import { SUB_AGENTS_GROUP_ID } from '@/lib/sms/sms-rules'
+import { SUB_AGENTS_GROUP_ID, findBlockedSenderWord } from '@/lib/sms/sms-rules'
 import { fetchAllRows } from '@/lib/supabase-pagination'
 
 export {
@@ -117,11 +117,15 @@ export async function getAllowedSenders(db: any, accountId: string): Promise<{ s
         .eq('status', 'approved')
 
     const pool = await getPoolSenders(db)
-    const ownSenders = (own || []).map((row: any) => ({
-        sender: row.sender as string,
-        type: 'own' as const,
-        isDefault: !!row.is_default,
-    }))
+    // The name rule is checked when a sender is requested, but an approved row can
+    // predate it or be set by hand; never send under a telco-looking name.
+    const ownSenders = (own || [])
+        .filter((row: any) => !findBlockedSenderWord(String(row.sender)))
+        .map((row: any) => ({
+            sender: row.sender as string,
+            type: 'own' as const,
+            isDefault: !!row.is_default,
+        }))
 
     const ownNames = new Set(ownSenders.map(s => s.sender.toLowerCase()))
     const poolSenders = pool
