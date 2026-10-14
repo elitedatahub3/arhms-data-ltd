@@ -35,6 +35,9 @@ const BATCH = 25
  */
 const RESCUE_WINDOW_HOURS = 24
 
+/** Prefixes fulfillment_note once an admin has been alerted about a too-old order. */
+const NEVER_SENT_MARKER = '[NEVER-SENT]'
+
 export async function GET(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
     if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -146,30 +149,53 @@ export async function GET(request: NextRequest) {
         // they carry no provider and no leg row and nothing else ever looks at them.
         const rescueFloor = new Date(Date.now() - RESCUE_WINDOW_HOURS * 3600 * 1000).toISOString()
 
-        const { data: undispatched } = await supabase
+        // Too old to send unasked: surface each one ONCE and leave the call to a
+        // human — see RESCUE_WINDOW_HOURS. The marker on fulfillment_note is what
+        // makes it once; without it every run re-alerted every one of them. Queried
+        // apart from the rescue below so these can never fill its batch either.
+        const { data: tooOld } = await supabase
             .from('airtime_orders')
-            .select('id, reference_code, network, beneficiary_phone, airtime_amount, type, created_at')
+            .select('id, reference_code, network, beneficiary_phone, airtime_amount, fulfillment_note')
             .eq('status', 'pending')
             .is('provider', null)
             .neq('type', 'mashup')
+            .lt('created_at', rescueFloor)
+            .or(`fulfillment_note.is.null,fulfillment_note.not.like.${NEVER_SENT_MARKER}*`)
+            .order('created_at', { ascending: true })
+            .limit(BATCH)
+
+        for (const order of (tooOld || [])) {
+            results.checked++
+            results.flagged++
+            await sendPushToAdmins({
+                title: '⚠️ Paid airtime order was never sent',
+                body: `${order.reference_code}: ${order.network} GHS ${Number(order.airtime_amount).toFixed(2)} → ${order.beneficiary_phone} was charged but never dispatched, and is now over ${RESCUE_WINDOW_HOURS}h old. Fulfil it by hand.`,
+                url: '/admin/airtime',
+            }).catch(() => {})
+
+            const note = `${NEVER_SENT_MARKER} charged but never dispatched; over ${RESCUE_WINDOW_HOURS}h old so not sent automatically. Fulfil by hand or refund.`
+            await supabase
+                .from('airtime_orders')
+                .update({
+                    fulfillment_note: order.fulfillment_note ? `${note} | ${order.fulfillment_note}` : note,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq('id', order.id)
+        }
+
+        const { data: undispatched } = await supabase
+            .from('airtime_orders')
+            .select('id, reference_code')
+            .eq('status', 'pending')
+            .is('provider', null)
+            .neq('type', 'mashup')
+            .gte('created_at', rescueFloor)
             .lt('created_at', staleCutoff)
             .order('created_at', { ascending: true })
             .limit(BATCH)
 
         for (const order of (undispatched || [])) {
             results.checked++
-
-            if (order.created_at < rescueFloor) {
-                // Too old to send unasked. Surface it once and leave the call to a
-                // human — see RESCUE_WINDOW_HOURS.
-                results.flagged++
-                await sendPushToAdmins({
-                    title: '⚠️ Paid airtime order was never sent',
-                    body: `${order.reference_code}: ${order.network} GHS ${Number(order.airtime_amount).toFixed(2)} → ${order.beneficiary_phone} was charged but never dispatched, and is now over ${RESCUE_WINDOW_HOURS}h old. Fulfil it by hand.`,
-                    url: '/admin/airtime',
-                }).catch(() => {})
-                continue
-            }
 
             // triggerAirtimeFulfillment is the only safe way to send one: it claims
             // the leg with an insert-before-call, so this racing the admin's own
