@@ -142,7 +142,7 @@ export async function reconcileBundlePortalOrders(opts: { runBudgetMs?: number; 
 
     // Most actionable first: errors[0] is what the admin push notification shows.
     if (missing.length > 0) {
-        errors.push(`${missing.length} of ${backlog.size} BundlePortal orders are not in their history at all — check they were really placed (e.g. ${missing[0].id})`)
+        errors.push(`${missing.length} of ${backlog.size} BundlePortal orders are not in their transaction history (read back to ${scan.oldestSeenAt ?? 'n/a'}) — check them on the BundlePortal dashboard (e.g. ${missing[0].id})`)
     }
     if (staleInFlight.length > 0) {
         const oldest = staleInFlight.reduce((a, b) => (Date.parse(a.order.created_at) <= Date.parse(b.order.created_at) ? a : b))

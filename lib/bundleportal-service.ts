@@ -339,6 +339,7 @@ export type ScanStopReason =
     | 'end_of_history'
     | 'reached_cutoff'
     | 'page_limit'
+    | 'offset_ignored'
     | 'time_budget'
     | 'fetch_failed'
     | 'circuit_open'
@@ -391,6 +392,8 @@ export async function fetchRecentOrderStatuses(opts: {
     let stopReason: ScanStopReason = 'page_limit'
     let pagesRead = 0
     let oldestSeenMs = Infinity
+    let offset = 0
+    let prevFirstKey: string | null = null
 
     try {
         for (let page = 0; page < maxPages; page++) {
@@ -399,18 +402,27 @@ export async function fetchRecentOrderStatuses(opts: {
 
             const { status, ok, data, rawText } = await callApi(
                 'get_transactions',
-                { limit: pageSize, offset: page * pageSize },
+                { limit: pageSize, offset },
                 Math.max(2_000, deadline - Date.now())
             )
             if (!ok || data?.success !== true) {
-                console.error(`[BundlePortal] get_transactions failed (HTTP ${status}) on page ${page}:`, data?.message || rawText.slice(0, 300))
+                console.error(`[BundlePortal] get_transactions failed (HTTP ${status}) at offset ${offset}:`, data?.message || rawText.slice(0, 300))
                 stopReason = 'fetch_failed'
                 break
             }
             pagesRead++
 
             const rows: any[] = Array.isArray(data?.data?.transactions) ? data.data.transactions : []
+            if (page === 0) {
+                console.log(`[BundlePortal] get_transactions page shape: rows=${rows.length} count=${data?.data?.count} limit=${data?.data?.limit} (asked ${pageSize})`)
+            }
             if (rows.length === 0) { stopReason = 'end_of_history'; break }
+
+            // If the server ignores offset, every page is the same page — stop
+            // rather than burn the budget re-reading it.
+            const firstKey = `${rows[0]?.order_id}|${rows[0]?.created_at}`
+            if (firstKey === prevFirstKey) { stopReason = 'offset_ignored'; break }
+            prevFirstKey = firstKey
 
             for (const row of rows) {
                 const createdMs = Date.parse(String(row?.created_at ?? ''))
@@ -423,9 +435,16 @@ export async function fetchRecentOrderStatuses(opts: {
             }
 
             if (statuses.size === wanted.size) { stopReason = 'all_found'; break }
-            // A short page means we reached the end of the history.
-            if (rows.length < pageSize) { stopReason = 'end_of_history'; break }
             if (Number.isFinite(cutoffMs) && oldestSeenMs < cutoffMs) { stopReason = 'reached_cutoff'; break }
+
+            // Advance by what actually came back, NOT by the limit we asked for: the
+            // server caps page size below 100, so a short page is NOT the end of the
+            // history. Treating it as the end meant only ever reading page one.
+            offset += rows.length
+            // `count` only settles it when it is plainly a grand total; if it merely
+            // equals this page's length, keep going — an empty page ends the scan.
+            const total = Number(data?.data?.count)
+            if (Number.isFinite(total) && total > rows.length && offset >= total) { stopReason = 'end_of_history'; break }
         }
         recordSuccess()
     } catch (err: any) {
