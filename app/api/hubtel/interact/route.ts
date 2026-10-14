@@ -651,6 +651,12 @@ export async function POST(req: Request) {
                     return respond(SessionId, "release", "Sorry, that item is unavailable right now. Please dial again.");
                 }
 
+                // Started now so it runs alongside the order save below rather than
+                // adding its own wait to Hubtel's window.
+                const knownPayerPromise = payerNetwork === 'MTN'
+                    ? isKnownMomoPayer(payerMsisdn)
+                    : Promise.resolve(true);
+
                 const reference = buildUssdReference(orderType);
                 sessionData.paystackReference = reference;
                 sessionData.payerMsisdn = payerMsisdn;
@@ -721,17 +727,30 @@ export async function POST(req: Request) {
                 // ── MTN: hang up FIRST, charge after ─────────────────────────────
                 // A handset cannot show a pushed MoMo prompt while it is still inside
                 // a USSD session. Charging before we release made MTN park the prompt
-                // in pending approvals instead of popping it up. MTN never answers
-                // send_otp, so nothing needs the session open: release now, wait for
-                // the network to tear the session down, then charge so the PIN prompt
-                // lands on an idle phone. With no Hubtel window to answer any more,
-                // the charge gets the web budget instead of the 6s USSD one.
-                if (payerNetwork === 'MTN') {
+                // in pending approvals instead of popping it up. So release now, wait
+                // for the network to tear the session down, then charge so the PIN
+                // prompt lands on an idle phone. With no Hubtel window to answer any
+                // more, the charge gets the web budget instead of the 6s USSD one.
+                //
+                // Only for numbers that have paid us before. Paystack treats a number
+                // it has never charged as a new customer and can answer send_otp even
+                // on MTN — and with the session already gone the customer got the
+                // SMS with nowhere to type it, so the first dial never produced a
+                // prompt. A first-time MTN payer falls through to the in-session
+                // charge below, where the OTP screen exists.
+                const knownPayer = await knownPayerPromise;
+                if (payerNetwork === 'MTN' && knownPayer) {
                     waitUntil((async () => {
                         await new Promise(resolve => setTimeout(resolve, USSD_PROMPT_DELAY_MS));
                         const result = await startCharge(WEB_CHARGE_TIMEOUT_MS);
                         if (result.outcome === 'failed') {
                             console.error('[Hubtel Interact] Background MTN charge refused:', result.message, 'ref:', reference);
+                            endSession(SessionId);
+                        } else if (result.outcome === 'otp') {
+                            // Nothing can collect the code now. Logged so we can see how
+                            // often a returning payer is still asked before building a
+                            // "dial again to enter your OTP" resume.
+                            console.error('[Hubtel Interact] Background MTN charge wanted OTP — session already released, ref:', reference, 'payer:', payerMsisdn);
                             endSession(SessionId);
                         }
                     })());
@@ -742,8 +761,8 @@ export async function POST(req: Request) {
                     );
                 }
 
-                // Telecel / AirtelTigo may answer send_otp, and the code has to be
-                // typed into THIS session — so they keep the in-session charge.
+                // Telecel / AirtelTigo — and first-time MTN payers — may answer
+                // send_otp, and the code has to be typed into THIS session.
                 const charge = await startCharge();
 
                 switch (charge.outcome) {
@@ -782,7 +801,16 @@ export async function POST(req: Request) {
                         // purpose: a charge whose fate we do not know may still take
                         // the customer's money, and telling them it failed is how we
                         // end up owing a delivery nobody is expecting.
-                        return respond(SessionId, 'release', approvalInstruction(payerNetwork));
+                        //
+                        // A first-time MTN payer's prompt went out while the session
+                        // was still open, so MTN may have parked it in approvals.
+                        return respond(
+                            SessionId,
+                            'release',
+                            payerNetwork === 'MTN'
+                                ? 'Enter your MoMo PIN on the prompt to pay. No prompt? Approve it in MoMo > My Approvals. You will get an SMS when done.'
+                                : approvalInstruction(payerNetwork)
+                        );
                 }
             }
 
@@ -883,6 +911,30 @@ function endSession(sessionId: string): void {
         const { error } = await getSupabaseAdmin().from('hubtel_sessions').delete().eq('session_id', sessionId);
         if (error) console.error('[Hubtel Interact] Session delete error:', error);
     })());
+}
+
+/**
+ * Whether this number has ever completed a payment with us — the proxy for
+ * "Paystack already knows it and will not ask for an OTP".
+ *
+ * Never rejects. A slow or failed read answers true, which keeps today's
+ * hang-up-first MTN flow: a DB blip must not change how a payment is taken.
+ */
+async function isKnownMomoPayer(msisdn: string): Promise<boolean> {
+    try {
+        const promise = getSupabaseAdmin()
+            .from('hubtel_payment_logs')
+            .select('id')
+            .eq('payer_msisdn', msisdn)
+            .eq('status', 'success')
+            .limit(1);
+        const { data, error } = await withTimeout(promise, 1500, 'Known payer timeout');
+        if (error) throw error;
+        return (data?.length ?? 0) > 0;
+    } catch (err: any) {
+        console.error('[Hubtel Interact] Known payer lookup failed, assuming known:', err?.message);
+        return true;
+    }
 }
 
 async function getHouseCode(): Promise<string | null> {
