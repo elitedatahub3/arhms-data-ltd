@@ -2,7 +2,11 @@ import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { fulfillOrder } from '@/lib/fulfillment-service'
+import {
+    loadFulfillmentConfig, resolveRoute, fulfillWithFallback, ordersStamp, shopOrdersStamp,
+    optionalStampKeys, describeAttempts, failureReason,
+} from '@/lib/supplier-router'
+import { updateOrderWithColumnFallback } from '@/lib/order-update-fallback'
 import { syncShopOrderStatus } from '@/lib/shop-service'
 
 // Create a service role client to bypass RLS for administrative fulfillment
@@ -53,29 +57,10 @@ export async function POST(request: Request) {
         const body = await request.json()
         const { orderIds } = body
 
-        // Fetch settings to check if global auto-fulfillment and networks are enabled
-        const { data: settingsData } = await supabaseAdmin
-            .from('admin_settings')
-            .select('key, value')
-            .in('key', ['auto_fulfillment_enabled', 'fulfillment_settings'])
-
-        const settingsMap = (settingsData || []).reduce((acc: any, curr: any) => {
-            acc[curr.key] = curr.value
-            return acc
-        }, {})
-
-        // Parse all supplier network settings from fulfillment_settings
-        const dbFulfillmentSettings = typeof settingsMap.fulfillment_settings === 'string'
-            ? JSON.parse(settingsMap.fulfillment_settings)
-            : settingsMap.fulfillment_settings || {}
-        const networkSettings = dbFulfillmentSettings.networks || {}
-        const codecraftNetworkSettings = dbFulfillmentSettings.codecraft_networks || {}
-        const kingflexyNetworkSettings = dbFulfillmentSettings.kingflexy_networks || {}
-        const eazydataNetworkSettings = dbFulfillmentSettings.eazydata_networks || {}
-        const agentportalNetworkSettings = dbFulfillmentSettings.agentportal_networks || {}
-        const netpulseNetworkSettings = dbFulfillmentSettings.netpulse_networks || {}
-        const hendylinksNetworkSettings = dbFulfillmentSettings.hendylinks_networks || {}
-        const bundleportalNetworkSettings = dbFulfillmentSettings.bundleportal_networks || {}
+        // Routing (primary + fallback per network) — read once for the whole run.
+        // globalEnabled is forced on: an admin pressing re-fulfil IS the manual
+        // override, and this route never honoured the global auto switch.
+        const config = { ...(await loadFulfillmentConfig(supabaseAdmin)), globalEnabled: true }
 
         // Construct query to find pending orders
         let query = supabaseAdmin
@@ -105,13 +90,6 @@ export async function POST(request: Request) {
         let remaining = 0
 
         const { sendAdminNewOrderAlert } = await import('@/lib/email-service')
-        const { fulfillOrder: ccFulfillOrder } = await import('@/lib/codecraft-service')
-        const { fulfillOrder: kfFulfillOrder } = await import('@/lib/kingflexy-service')
-        const { fulfillOrder: edFulfillOrder } = await import('@/lib/eazydata-service')
-        const { fulfillOrder: apFulfillOrder } = await import('@/lib/agentportal-service')
-        const { fulfillOrder: npFulfillOrder } = await import('@/lib/netpulse-service')
-        const { fulfillOrder: hlFulfillOrder } = await import('@/lib/hendylinks-service')
-        const { fulfillOrder: bpFulfillOrder } = await import('@/lib/bundleportal-service')
 
         // Process each pending order safely
         for (const order of pendingOrders) {
@@ -124,25 +102,19 @@ export async function POST(request: Request) {
                 break
             }
 
-            const isDataKazinaEnabled = networkSettings[order.network] === true
-            const isCodeCraftEnabled = codecraftNetworkSettings[order.network] === true
-            const isKingFlexyEnabled = kingflexyNetworkSettings[order.network] === true
-            const isEazyDataEnabled = eazydataNetworkSettings[order.network] === true
-            const isAgentPortalEnabled = agentportalNetworkSettings[order.network] === true
-            const isNetPulseEnabled = netpulseNetworkSettings[order.network] === true
-            const isHendyLinksEnabled = hendylinksNetworkSettings[order.network] === true
-            const isBundlePortalEnabled = bundleportalNetworkSettings[order.network] === true
+            // Checked before taking the lock so a misconfigured network does not churn
+            // every order through processing and back. The router re-checks the same config.
+            const route = resolveRoute(config.settings, order.network)
 
             // No supplier enabled → skip
-            if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && !isHendyLinksEnabled && !isBundlePortalEnabled) {
+            if (route.kind === 'none') {
                 console.log(`[ManualRefulfill] Skipping order ${order.id}: No active supplier for network ${order.network}.`)
                 skipped++
                 continue
             }
 
             // Multiple suppliers enabled → conflict guard, skip
-            const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled, isAgentPortalEnabled, isNetPulseEnabled, isHendyLinksEnabled, isBundlePortalEnabled].filter(Boolean).length
-            if (activeCount > 1) {
+            if (route.kind === 'conflict') {
                 console.error(`[ManualRefulfill] CONFLICT: Multiple suppliers active for ${order.network} on order ${order.id}. Skipping.`)
                 await sendAdminNewOrderAlert({
                     referenceCode: order.reference_code || order.id,
@@ -159,9 +131,6 @@ export async function POST(request: Request) {
                 skipped++
                 continue
             }
-
-            // Determine which supplier will handle this order
-            const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : isAgentPortalEnabled ? 'agentportal' : isNetPulseEnabled ? 'netpulse' : isHendyLinksEnabled ? 'hendylinks' : isBundlePortalEnabled ? 'bundleportal' : 'datakazina'
 
             // ATOMIC LOCK: Try to update this specific order from 'pending' to 'processing'
             // If another process/request already took it, this will return 0 rows
@@ -181,59 +150,47 @@ export async function POST(request: Request) {
             }
 
             // --- WE HAVE THE LOCK. NOW FULFILL ---
-            console.log(`[ManualRefulfill] Locked order ${order.id}. Beginning fulfillment via ${supplierLabel}.`)
+            console.log(`[ManualRefulfill] Locked order ${order.id}. Primary: ${route.primary.id}${route.fallback ? `, fallback: ${route.fallback.id}` : ''}.`)
 
-            // Stamp fulfilled_by on shop_orders before calling supplier
-            if (order.shop_order_id) {
-                await supabaseAdmin
-                    .from('shop_orders')
-                    .update({ fulfilled_by: supplierLabel })
-                    .eq('id', order.shop_order_id)
-            }
-
-            // webhookRef is set by the Dakazina path only (see lib/fulfillment-service).
-            let result: { success: boolean; reference?: string; transactionId?: string; webhookRef?: string; error?: string; apiResponse?: any; alreadySubmitted?: boolean }
-            if (isCodeCraftEnabled) {
-                result = await ccFulfillOrder(order.network, order.phone_number, order.size, order.id)
-            } else if (isKingFlexyEnabled) {
-                result = await kfFulfillOrder(order.network, order.phone_number, order.size, order.id)
-            } else if (isEazyDataEnabled) {
-                result = await edFulfillOrder(order.network, order.phone_number, order.size, order.id)
-            } else if (isAgentPortalEnabled) {
-                result = await apFulfillOrder(order.network, order.phone_number, order.size, order.id)
-            } else if (isNetPulseEnabled) {
-                result = await npFulfillOrder(order.network, order.phone_number, order.size, order.id)
-            } else if (isHendyLinksEnabled) {
-                // isRetry: HendyLinks accepts no idempotency key, so a request that
-                // timed out may already have created an order. This makes the service
-                // check their history before placing another.
-                result = await hlFulfillOrder(order.network, order.phone_number, order.size, order.id, { isRetry: true })
-            } else if (isBundlePortalEnabled) {
-                // order_id is BundlePortal's idempotency key. Storefront orders were first
-                // placed under shop_orders.id, so retry with that same id — a request that
-                // silently landed then comes back as a duplicate instead of a second bundle.
-                result = await bpFulfillOrder(order.network, order.phone_number, order.size, order.shop_order_id || order.id, { isRetry: true })
-            } else {
-                result = await fulfillOrder(order.network, order.phone_number, order.size, order.id)
-            }
+            const outcome = await fulfillWithFallback({
+                db: supabaseAdmin,
+                network: order.network,
+                phone: order.phone_number,
+                size: order.size,
+                orderId: order.id,
+                match: { column: 'id', value: order.id },
+                // HendyLinks checks its history first; BundlePortal reuses shop_orders.id.
+                mode: 'retry',
+                shopOrderId: order.shop_order_id,
+                config,
+                fallbackDeadline: startedAt + REFULFILL_TIME_BUDGET_MS,
+                // Stamp fulfilled_by on shop_orders before each supplier call
+                onBeforeAttempt: order.shop_order_id
+                    ? async (supplier) => {
+                        await supabaseAdmin.from('shop_orders').update({ fulfilled_by: supplier.id }).eq('id', order.shop_order_id)
+                    }
+                    : undefined,
+            })
 
             // An idempotency collision (alreadySubmitted) is not a fresh success, but
-            // the order already exists at the supplier — keep it in 'processing'
-            // (it was locked there above) rather than reverting to pending and
-            // looping forever. We just can't stamp a supplier reference for it.
-            const alreadySubmitted = !result.success && result.alreadySubmitted === true
-            if (result.success || alreadySubmitted) {
-                console.log(`[ManualRefulfill] ${alreadySubmitted ? 'ALREADY SUBMITTED — kept processing' : 'SUCCESS'} for order ${order.id} via ${supplierLabel}`)
+            // the order already exists at the supplier — the router reports it as
+            // placed, so it stays in 'processing' (locked above) rather than reverting
+            // to pending and looping forever.
+            if (outcome.status === 'placed') {
+                const supplierLabel = outcome.supplier.id
+                const alreadySubmitted = !outcome.result.success
+                console.log(`[ManualRefulfill] ${alreadySubmitted ? 'ALREADY SUBMITTED — kept processing' : 'SUCCESS'} for order ${order.id}: ${describeAttempts(outcome.attempts)}`)
 
                 // Track outcome
                 await supabaseAdmin.from('mtn_fulfillment_tracking').insert({
                     order_id: order.id,
                     status: alreadySubmitted ? 'processing' : 'success',
                     api_response: {
-                        ...result.apiResponse,
+                        ...outcome.result.apiResponse,
                         note: alreadySubmitted
                             ? `Manual Admin Refill: order already submitted at ${supplierLabel} (idempotency) — kept processing`
-                            : `Manual Admin Refill Success via ${supplierLabel}`
+                            : `Manual Admin Refill Success via ${supplierLabel}`,
+                        ...(outcome.fellBack ? { fallback: describeAttempts(outcome.attempts) } : {}),
                     }
                 })
 
@@ -241,62 +198,25 @@ export async function POST(request: Request) {
                 // per-supplier status-sync crons (which filter on these) can later move
                 // this order from processing → completed/failed. Without this, a direct
                 // (non-shop) order refulfilled here stays stuck in 'processing' forever.
-                // Reference columns are unconstrained → stamp them first so they always
-                // apply, even on a DB where the eazydata fulfillment_method migration
-                // hasn't run yet.
-                const refUpdate: Record<string, any> = {}
-                if (result.transactionId) {
-                    if (isCodeCraftEnabled) refUpdate.codecraft_reference = result.transactionId
-                    else if (isKingFlexyEnabled) refUpdate.kingflexy_reference = result.transactionId
-                    else if (isEazyDataEnabled) refUpdate.eazydata_reference = result.transactionId
-                    else if (isAgentPortalEnabled) refUpdate.agentportal_reference = result.transactionId
-                    else if (isNetPulseEnabled) refUpdate.netpulse_reference = result.transactionId
-                    else if (isHendyLinksEnabled) refUpdate.hendylinks_reference = result.transactionId
-                    else if (isBundlePortalEnabled) refUpdate.bundleportal_reference = result.transactionId
-                    else refUpdate.dakazina_reference = result.transactionId
-                }
-                // Dakazina may return no transaction_code at all, and its webhook matches
-                // on order_code — so stamp that even when transactionId is absent, and
-                // prefer it when both exist. Only the Dakazina path ever sets webhookRef.
-                if (result.webhookRef) refUpdate.dakazina_reference = result.webhookRef
-                if (Object.keys(refUpdate).length > 0) {
-                    await supabaseAdmin.from('orders').update(refUpdate).eq('id', order.id)
-                }
-                // fulfillment_method is guarded by orders_fulfillment_method_check
-                // (requires migration 20260713_add_eazydata_fulfillment_method.sql).
-                await supabaseAdmin.from('orders').update({ fulfillment_method: supplierLabel }).eq('id', order.id)
+                // The reference sheds first, then fulfillment_method (guarded by
+                // orders_fulfillment_method_check), if the DB is behind the code.
+                const ordersUpdate = ordersStamp(outcome.supplier, outcome.reference)
+                await updateOrderWithColumnFallback(
+                    supabaseAdmin, 'orders', { column: 'id', value: order.id },
+                    ordersUpdate, optionalStampKeys(ordersUpdate), '[ManualRefulfill]'
+                )
 
                 // Update shop_orders to processing + stamp supplier reference
                 if (order.shop_order_id) {
                     const shopOrderUpdate: Record<string, any> = {
                         status: 'processing',
                         updated_at: new Date().toISOString(),
+                        ...shopOrdersStamp(outcome.supplier, outcome.reference),
                     }
-                    if (isCodeCraftEnabled && result.transactionId) {
-                        shopOrderUpdate.codecraft_reference_id = result.transactionId
-                    }
-                    if (isKingFlexyEnabled && result.transactionId) {
-                        shopOrderUpdate.kingflexy_reference = result.transactionId
-                    }
-                    if (isEazyDataEnabled && result.transactionId) {
-                        shopOrderUpdate.eazydata_reference = result.transactionId
-                    }
-                    if (isAgentPortalEnabled && result.transactionId) {
-                        shopOrderUpdate.agentportal_reference = result.transactionId
-                    }
-                    if (isNetPulseEnabled && result.transactionId) {
-                        shopOrderUpdate.netpulse_reference = result.transactionId
-                    }
-                    if (isHendyLinksEnabled && result.transactionId) {
-                        shopOrderUpdate.hendylinks_reference = result.transactionId
-                    }
-                    if (isBundlePortalEnabled && result.transactionId) {
-                        shopOrderUpdate.bundleportal_reference = result.transactionId
-                    }
-                    await supabaseAdmin
-                        .from('shop_orders')
-                        .update(shopOrderUpdate)
-                        .eq('id', order.shop_order_id)
+                    await updateOrderWithColumnFallback(
+                        supabaseAdmin, 'shop_orders', { column: 'id', value: order.shop_order_id },
+                        shopOrderUpdate, optionalStampKeys(shopOrderUpdate), '[ManualRefulfill]'
+                    )
                 }
 
                 // Sync status to the healing wrapper so shop owners see the transition to processing
@@ -306,13 +226,16 @@ export async function POST(request: Request) {
 
                 fulfilled++
             } else {
-                console.error(`[ManualRefulfill] FAILED for order ${order.id} via ${supplierLabel}: ${result.error}`)
+                const reason = outcome.status === 'failed' ? failureReason(outcome) : `no supplier (${outcome.status})`
+                console.error(`[ManualRefulfill] FAILED for order ${order.id}: ${reason}`)
 
                 // Track failure
                 await supabaseAdmin.from('mtn_fulfillment_tracking').insert({
                     order_id: order.id,
                     status: 'failed',
-                    api_response: { ...result.apiResponse, note: `Manual Admin Refill Failed via ${supplierLabel}`, error: result.error }
+                    api_response: outcome.status === 'failed'
+                        ? { ...outcome.result.apiResponse, note: `Manual Admin Refill Failed — ${reason}`, error: outcome.result.error, attempts: outcome.attempts }
+                        : { note: `Manual Admin Refill Failed — ${reason}` }
                 })
 
                 // Revert status to pending so it can be attempted again

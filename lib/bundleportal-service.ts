@@ -1,4 +1,5 @@
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 import { normaliseSupplierStatus } from '@/lib/order-status-display'
 
 // BundlePortal Fulfillment Service — mirrors lib/hendylinks-service.ts architecture.
@@ -49,6 +50,7 @@ interface FulfillmentResponse {
     // True when BundlePortal answered `duplicate: true` — the order was already
     // placed by an earlier attempt and this call did not create a new one.
     alreadySubmitted?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -189,29 +191,29 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[BundlePortal] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!BUNDLEPORTAL_API_KEY) {
-        return { success: false, error: 'BundlePortal API key not configured' }
+        return { success: false, error: 'BundlePortal API key not configured', failureKind: 'refused' }
     }
 
     try {
         const resolvedNetwork = resolveNetwork(network)
         if (!resolvedNetwork) {
-            return { success: false, error: `Unsupported network: ${network}` }
+            return { success: false, error: `Unsupported network: ${network}`, failureKind: 'refused' }
         }
 
         const gigVolume = parseGigabytes(dataSize)
         if (gigVolume === null) {
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
 
         const orderRef = toOrderRef(orderId)
         if (!orderRef) {
             // Without our own order_id there is no idempotency and no way to match
             // the webhook back to this order. Refuse rather than place blind.
-            return { success: false, error: `Order id not usable as a BundlePortal order_id: ${orderId}` }
+            return { success: false, error: `Order id not usable as a BundlePortal order_id: ${orderId}`, failureKind: 'refused' }
         }
 
         const requestBody = {
@@ -257,7 +259,7 @@ export async function fulfillOrder(
 
         if (!result) {
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to BundlePortal' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to BundlePortal', failureKind: 'unknown' }
         }
 
         const { status: httpStatus, ok, data, rawText } = result
@@ -265,7 +267,7 @@ export async function fulfillOrder(
         if (data === null) {
             console.error(`[BundlePortal] Non-JSON response (HTTP ${httpStatus}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${httpStatus})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${httpStatus})`, failureKind: 'unknown' }
         }
 
         const code: string | undefined = data?.code
@@ -298,7 +300,7 @@ export async function fulfillOrder(
 
         if (httpStatus === 429 || httpStatus === 503 || (code && RETRY_LATER_CODES.has(code))) {
             console.warn(`[BundlePortal] Order ${orderId}: retry later (HTTP ${httpStatus}${code ? ` ${code}` : ''}, retry-after ${result.retryAfter ?? data?.retry_after ?? '?'}). Kept pending.`)
-            return { success: false, error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`, isRateLimited: true, apiResponse: sanitizeForLog(data) }
+            return { success: false, error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`, isRateLimited: true, apiResponse: sanitizeForLog(data), failureKind: 'refused' }
         }
 
         if (httpStatus === 402) {
@@ -321,12 +323,17 @@ export async function fulfillOrder(
             success: false,
             error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`,
             apiResponse: sanitizeForLog(data),
+            // order_id is idempotent at BundlePortal (a repeat comes back as
+            // duplicate: true, a success), so an explicit rejection below 500 is a
+            // definite no even after a mid-flight error. The retry-later 429/503
+            // branch above is likewise a refusal to create anything yet.
+            failureKind: httpStatus >= 500 ? 'unknown' : 'refused',
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[BundlePortal] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 

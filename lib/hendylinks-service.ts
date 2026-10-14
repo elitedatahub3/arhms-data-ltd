@@ -1,4 +1,5 @@
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 import { normaliseSupplierStatus } from '@/lib/order-status-display'
 
 // HendyLinks Fulfillment Service — mirrors lib/netpulse-service.ts architecture.
@@ -48,6 +49,7 @@ interface FulfillmentResponse {
     // True when the order was recovered by reclaimRecentOrder rather than placed
     // by this call — the order already lives at the supplier.
     alreadySubmitted?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -277,22 +279,22 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[HendyLinks] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!HENDYLINKS_API_KEY) {
-        return { success: false, error: 'HendyLinks API key not configured' }
+        return { success: false, error: 'HendyLinks API key not configured', failureKind: 'refused' }
     }
 
     try {
         const resolvedNetwork = resolveNetwork(network)
         if (!resolvedNetwork) {
-            return { success: false, error: `Unsupported network: ${network}` }
+            return { success: false, error: `Unsupported network: ${network}`, failureKind: 'refused' }
         }
 
         const gigVolume = parseGigabytes(dataSize)
         if (gigVolume === null) {
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
 
         const normalizedPhone = normalizePhone(phoneNumber)
@@ -356,7 +358,8 @@ export async function fulfillOrder(
 
                 if (response.status === 429) {
                     console.warn(`[HendyLinks] Rate limited (HTTP 429). Order ${orderId} kept pending.`)
-                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true }
+                    // A 429 after an attempt that errored mid-flight can't vouch for that attempt.
+                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true, failureKind: lastError ? 'unknown' : 'refused' }
                 }
 
                 break
@@ -393,7 +396,7 @@ export async function fulfillOrder(
 
         if (!response) {
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to HendyLinks' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to HendyLinks', failureKind: 'unknown' }
         }
 
         // ── Parse JSON ─────────────────────────────────────────────────────
@@ -404,7 +407,7 @@ export async function fulfillOrder(
         } catch {
             console.error(`[HendyLinks] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})`, failureKind: 'unknown' }
         }
 
         console.log(`[HendyLinks] API response:`, { status: response.status, order_id: data?.order_id })
@@ -451,12 +454,16 @@ export async function fulfillOrder(
             success: false,
             error: `${errMsg} (HTTP ${response.status})`,
             apiResponse: sanitizeForLog(data),
+            // There is no idempotency key, so a rejection only proves THIS attempt
+            // failed. If an earlier attempt errored mid-flight it may still have landed
+            // (reclaimRecentOrder can miss it), so only a clean first answer is 'refused'.
+            failureKind: response.status >= 500 || lastError ? 'unknown' : 'refused',
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[HendyLinks] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 

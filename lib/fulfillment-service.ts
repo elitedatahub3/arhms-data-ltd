@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 
 // Universal Fulfillment Service with DataKazina API Integration
 
@@ -26,6 +27,7 @@ interface FulfillmentResponse {
     error?: string
     apiResponse?: any
     isRateLimited?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -192,8 +194,9 @@ export async function fulfillOrder(
     dataSize: string,
     orderId: string
 ): Promise<FulfillmentResponse> {
-    if (!checkCircuit()) return { success: false, error: 'Service temporarily unavailable' }
-    if (!DATAKAZINA_API_KEY) return { success: false, error: 'API key not configured' }
+    // Every early return before the POST below is 'refused': nothing was sent.
+    if (!checkCircuit()) return { success: false, error: 'Service temporarily unavailable', failureKind: 'refused' }
+    if (!DATAKAZINA_API_KEY) return { success: false, error: 'API key not configured', failureKind: 'refused' }
 
     try {
         const mappings = await fetchAllBundleMappings()
@@ -201,13 +204,13 @@ export async function fulfillOrder(
 
         if (!networkId) {
             console.log(`[DataKazina] Skip: Unsupported network ${network}`)
-            return { success: false, error: `Unsupported network: ${network}` }
+            return { success: false, error: `Unsupported network: ${network}`, failureKind: 'refused' }
         }
 
         const networkMappings = mappings[networkId]
         if (!networkMappings) {
             console.log(`[DataKazina] Skip: No mappings found for network ${network} (ID: ${networkId})`)
-            return { success: false, error: `No packages found for network: ${network}` }
+            return { success: false, error: `No packages found for network: ${network}`, failureKind: 'refused' }
         }
 
         // --- SIZE NORMALIZATION ---
@@ -228,7 +231,8 @@ export async function fulfillOrder(
             console.log(`[DataKazina] Skip: Unsupported size "${dataSize}" for ${network}. Available: ${Object.keys(networkMappings).join(', ')}`)
             return {
                 success: false,
-                error: `Unsupported data size: ${dataSize} for ${network}.`
+                error: `Unsupported data size: ${dataSize} for ${network}.`,
+                failureKind: 'refused',
             }
         }
 
@@ -238,7 +242,7 @@ export async function fulfillOrder(
 
         if (!volumeValue || isNaN(Number(volumeValue))) {
             console.log(`[DataKazina] Skip: Could not extract numeric volume from "${dataSize}"`)
-            return { success: false, error: `Invalid data size format: ${dataSize}. Number expected.` }
+            return { success: false, error: `Invalid data size format: ${dataSize}. Number expected.`, failureKind: 'refused' }
         }
 
         const volumeNumber = Number(volumeValue)
@@ -282,7 +286,7 @@ export async function fulfillOrder(
                 if (response.status === 429) {
                     console.warn(`[DataKazina Fulfillment] Rate limited (HTTP 429). Queueing order...`);
                     // IMPORTANT: Do not retry here. Immediately return so the caller can queue it asynchronously.
-                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true };
+                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true, failureKind: lastError ? 'unknown' : 'refused' };
                 }
 
                 // If we get here and it's not a 429, we break out of the retry loop.
@@ -306,7 +310,7 @@ export async function fulfillOrder(
             // All attempts failed due to network errors
             console.error(`[DataKazina Fulfillment] All ${maxAttempts} fetch attempts failed.`);
             recordFailure();
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to supplier' };
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to supplier', failureKind: 'unknown' };
         }
 
         // Safety check: if the response is HTML (e.g. redirect/error page), handle gracefully
@@ -315,7 +319,7 @@ export async function fulfillOrder(
             const rawText = await response.text()
             console.error(`[DataKazina Fulfillment] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response (HTTP ${response.status})` }
+            return { success: false, error: `Supplier returned unexpected response (HTTP ${response.status})`, failureKind: 'unknown' }
         }
 
         const data = await response.json()
@@ -342,14 +346,24 @@ export async function fulfillOrder(
         if (response.status >= 500) {
             recordFailure()
         }
+        // A JSON answer below 500 that is not a success is Dakazina saying no. The
+        // exception is the "success: true, but the message says failed" false positive:
+        // they claimed success, so we cannot rule out that it went through — unless the
+        // message is the out-of-stock "not available", which never creates an order.
+        const notAvailable = String(data.message || '').toLowerCase().includes('not available')
+        // No idempotency key either: after an attempt that errored mid-flight, a
+        // rejection proves nothing about that earlier attempt, so it stays 'unknown'.
+        const failureKind: SupplierFailureKind =
+            response.status >= 500 || lastError || (isFalsePositive && !notAvailable) ? 'unknown' : 'refused'
         return {
             success: false,
             error: data.message || data.error || 'Fulfillment failed',
             apiResponse: sanitizeForLog(data),
+            failureKind,
         }
     } catch (error: any) {
         recordFailure()
-        return { success: false, error: error.message || 'Connection error' }
+        return { success: false, error: error.message || 'Connection error', failureKind: 'unknown' }
     }
 }
 
