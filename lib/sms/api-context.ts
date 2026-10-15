@@ -12,7 +12,7 @@ import {
 import { resolveSmsAccount, type SmsAccount } from '@/lib/sms/customer-sms'
 import { resolveSubAgentContext } from '@/lib/sub-agents'
 import { isCustomerSmsEnabled, smsBlockReason, SMS_DISABLED_MESSAGE } from '@/lib/sms/sms-purchase'
-import { getAccountMode, SMS_PLATFORM_SETTING_KEYS } from '@/lib/sms/platform'
+import { getAccountMode, isSmsBusinessApproved, SMS_API_NEEDS_BUSINESS, SMS_PLATFORM_SETTING_KEYS } from '@/lib/sms/platform'
 import type { SmsMode } from '@/lib/sms/sms-rules'
 
 export interface SmsApiContext {
@@ -86,6 +86,13 @@ export async function loadSmsApiContext(
     if (!account) {
         log(500, 'No SMS account')
         return apiError(500, 'Could not load your SMS account')
+    }
+
+    // Checked on every call, not only at key generation, so a business that is
+    // later rejected loses the API with it.
+    if (!(await isSmsBusinessApproved(db, account.id))) {
+        log(403, 'Business not approved')
+        return apiError(403, SMS_API_NEEDS_BUSINESS)
     }
 
     const mode = await getAccountMode(db, account.id)

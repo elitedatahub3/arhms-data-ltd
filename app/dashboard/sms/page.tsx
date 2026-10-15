@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import {
-    Send, History, Users, Coins, Building2, Code2, ChevronRight, MessageSquare, BadgeCheck, Gauge, Check,
+    Send, History, Users, Coins, Building2, Code2, ChevronRight, MessageSquare, BadgeCheck, Gauge, Check, Lock,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -17,6 +17,8 @@ const BUSINESS_BADGE: Record<string, { label: string; className: string }> = {
     rejected: { label: 'Action needed', className: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300' },
     draft: { label: 'Draft', className: 'bg-muted text-muted-foreground' },
 }
+
+const API_LOCKED_BADGE = { label: 'Needs approved business', className: 'bg-muted text-muted-foreground' }
 
 export default function SmsPlatformHome() {
     return (
@@ -91,6 +93,8 @@ function Activate({ info }: { info: SmsPlatformAccount }) {
 function Hub({ info }: { info: SmsPlatformAccount }) {
     const { account } = info
     const business = info.businessStatus ? BUSINESS_BADGE[info.businessStatus] : null
+    // The API is for approved businesses only; the server refuses keys otherwise.
+    const apiUnlocked = info.businessStatus === 'approved'
     const hasSender = info.allowedSenders.length > 0
     const limitText = info.dailyLimit > 0
         ? `${info.sentToday.toLocaleString()} / ${info.dailyLimit.toLocaleString()}`
@@ -109,7 +113,9 @@ function Hub({ info }: { info: SmsPlatformAccount }) {
         { href: '/dashboard/sms/contacts', icon: Users, title: 'Contacts', body: 'Manage your recipients and groups', badge: null },
         { href: '/dashboard/sms/credits', icon: Coins, title: 'Credits', body: 'Buy bundles & check your balance', badge: null },
         { href: '/dashboard/sms/business', icon: Building2, title: 'Business & Sender ID', body: 'Own sender name & business verification', badge: business },
-        { href: '/dashboard/sms/api', icon: Code2, title: 'API & Docs', body: 'Generate your SMS API key & view docs', badge: null },
+        apiUnlocked
+            ? { href: '/dashboard/sms/api', icon: Code2, title: 'API & Docs', body: 'Generate your SMS API key & view docs', badge: null }
+            : { href: '/dashboard/sms/business', icon: Lock, title: 'API & Docs', body: 'Unlocks once your business is approved', badge: API_LOCKED_BADGE },
     ]
 
     return (
