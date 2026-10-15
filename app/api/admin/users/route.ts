@@ -20,13 +20,30 @@ export async function GET(request: NextRequest) {
         const search = rawSearch ? rawSearch.trim().slice(0, 100) : null
         const role = searchParams.get('role')
 
-        const VALID_ROLES = ['customer', 'agent', 'sub-admin', 'admin', 'all']
+        // 'api' is not a role: it filters to accounts holding a developer API key
+        // (approved or awaiting approval), whatever their role.
+        const VALID_ROLES = ['customer', 'agent', 'dealer', 'sub-admin', 'admin', 'api', 'all']
         if (role && !VALID_ROLES.includes(role)) {
             return NextResponse.json({ error: 'Invalid role filter' }, { status: 400 })
         }
 
         // Service role client to bypass RLS
         const supabase = createServerClient()
+
+        // Every live key, keyed by user. Few enough rows to read whole; used both for
+        // the 'api' filter and to badge API users on any page of results.
+        const { data: keyRows } = await (supabase.from('api_keys') as any)
+            .select('user_id, status')
+            .in('status', ['active', 'pending'])
+        const apiStatusByUser = new Map<string, string>()
+        for (const k of ((keyRows as any[]) || [])) {
+            // One active key outranks a pending one for the badge.
+            if (apiStatusByUser.get(k.user_id) !== 'active') apiStatusByUser.set(k.user_id, k.status)
+        }
+
+        if (role === 'api' && apiStatusByUser.size === 0) {
+            return NextResponse.json({ users: [], totalCount: 0 })
+        }
 
         // Add timeout to prevent hanging queries
         const timeoutPromise = new Promise((_, reject) =>
@@ -51,7 +68,9 @@ export async function GET(request: NextRequest) {
                 )
             `, { count: 'exact' })
 
-        if (role && role !== 'all') {
+        if (role === 'api') {
+            query = query.in('id', Array.from(apiStatusByUser.keys()))
+        } else if (role && role !== 'all') {
             query = query.eq('role', role)
         }
 
@@ -74,7 +93,7 @@ export async function GET(request: NextRequest) {
         }
 
         return NextResponse.json({
-            users: users || [],
+            users: ((users as any[]) || []).map(u => ({ ...u, api_key_status: apiStatusByUser.get(u.id) ?? null })),
             totalCount: count || 0
         })
     } catch (error: any) {
