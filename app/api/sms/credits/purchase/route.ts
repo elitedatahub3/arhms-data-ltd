@@ -7,6 +7,7 @@ import {
     submitSmsPurchaseOtp,
     SMS_DISABLED_MESSAGE,
 } from '@/lib/sms/sms-purchase'
+import { bundleAudienceFor, bundleAudienceOf } from '@/lib/sms/platform'
 
 /**
  * Buys a credit bundle.
@@ -54,12 +55,21 @@ export async function POST(request: Request) {
         // credits for a pesewa.
         const { data: bundle } = await supabaseAdmin
             .from('sms_credit_bundles')
-            .select('id, name, credits, price, is_active')
+            // * rather than naming audience, which only exists once
+            // 20261016010000_sms_platform_bundles.sql has run.
+            .select('*')
             .eq('id', bundleId)
             .maybeSingle()
 
         if (!bundle || !(bundle as any).is_active) {
             return NextResponse.json({ error: 'That bundle is no longer available' }, { status: 400 })
+        }
+
+        // Each price list is sold only where it is shown: a shop bundle id
+        // posted from the SMS Platform (or the reverse) would buy credits at the
+        // other list's price.
+        if (bundleAudienceOf(bundle as any) !== bundleAudienceFor(body.portal)) {
+            return NextResponse.json({ error: 'That bundle is not available here' }, { status: 400 })
         }
 
         const credits = Number((bundle as any).credits)
