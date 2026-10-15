@@ -77,6 +77,12 @@ export async function calculateRCPrice(params: {
     maxShopMarkup?: number
     includePaystackFee?: boolean
     feePercent?: number
+    /**
+     * The buyer is an API user (users.is_api_user, or any v2 API caller). When the
+     * type has an admin-set api_price it replaces the role price — see
+     * lib/api-pricing.ts.
+     */
+    apiUser?: boolean
 }): Promise<RCPriceBreakdown> {
     const {
         type,
@@ -85,21 +91,31 @@ export async function calculateRCPrice(params: {
         shopMarkup = 0,
         maxShopMarkup = 0,
         includePaystackFee = false,
-        feePercent = 1.95
+        feePercent = 1.95,
+        apiUser = false,
     } = params
 
-    // 1. Resolve role-based base price
-    let unitPrice = getBasePrice(type, userRole)
+    const apiPrice = apiUser && Number(type.api_price) > 0 ? Number(type.api_price) : null
+
+    // 1. Resolve the base price: the API price for an API user, else the role price
+    let unitPrice = apiPrice ?? getBasePrice(type, userRole)
 
     // 2. Check for a matching bulk tier — replaces base price entirely
     const tiers = Array.isArray(type.bulk_pricing) ? type.bulk_pricing : []
-    const matchedTier = findMatchingTier(tiers, quantity)
-    const isBulk = matchedTier !== null
+    let matchedTier = findMatchingTier(tiers, quantity)
 
     if (matchedTier) {
         // Floor the tier price at cost — never sell below cost
-        unitPrice = Math.max(matchedTier.unit_price, type.cost_price)
+        const tierPrice = Math.max(matchedTier.unit_price, type.cost_price)
+        // Against an API price the tier applies only when it is cheaper, so an API
+        // user buying in volume keeps the volume discount but never pays more.
+        if (apiPrice !== null && tierPrice >= apiPrice) {
+            matchedTier = null
+        } else {
+            unitPrice = tierPrice
+        }
     }
+    const isBulk = matchedTier !== null
 
     // 3. Absolute security guard: price must never drop below supplier cost
     if (unitPrice < type.cost_price) {

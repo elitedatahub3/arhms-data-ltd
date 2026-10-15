@@ -20,6 +20,8 @@ import { toast } from 'sonner'
 interface BulkTier { min_qty: number; max_qty: number; unit_price: number }
 interface RCType {
     id: string; name: string; customer_price: number; agent_price: number; dealer_price?: number; is_active: boolean
+    // Set only for API users (users.is_api_user) — what they are charged.
+    api_price?: number | null
     bulk_pricing?: BulkTier[]
     stock?: { available: number; reserved: number; sold: number }
 }
@@ -203,16 +205,19 @@ function ResultsCheckerContent() {
     const role = dbUser?.role || 'customer'
     const isDealer = role === 'dealer'
 
-    // 1. Base role price
+    // 1. Base price: the API price for an API user (only sent to them), else role price
+    const apiPrice = Number(selectedType?.api_price) > 0 ? Number(selectedType!.api_price) : null
     const baseUnitPrice = selectedType
-        ? isAgent ? selectedType.agent_price
+        ? apiPrice ?? (isAgent ? selectedType.agent_price
         : isDealer && (selectedType as any).dealer_price > 0 ? (selectedType as any).dealer_price
-        : selectedType.customer_price
+        : selectedType.customer_price)
         : 0
 
-    // 2. JSONB bulk tier match
+    // 2. JSONB bulk tier match. Against an API price a tier applies only when it is
+    // cheaper — mirrors calculateRCPrice in lib/vouchers/pricing.ts.
     const tiers: BulkTier[] = Array.isArray(selectedType?.bulk_pricing) ? selectedType!.bulk_pricing : []
-    const matchedTier = tiers.find(t => quantity >= t.min_qty && quantity <= t.max_qty) ?? null
+    const tierMatch = tiers.find(t => quantity >= t.min_qty && quantity <= t.max_qty) ?? null
+    const matchedTier = tierMatch && (apiPrice === null || tierMatch.unit_price < apiPrice) ? tierMatch : null
     const isBulk = matchedTier !== null
 
     // 3. Effective unit price
@@ -416,7 +421,7 @@ function ResultsCheckerContent() {
                                     {types.map((t) => {
                                         const isSelected = selectedTypeId === t.id
                                         const outOfStock = !t.stock || t.stock.available === 0
-                                        const displayPrice = isAgent ? t.agent_price : (isDealer && (t as any).dealer_price > 0 ? (t as any).dealer_price : t.customer_price)
+                                        const displayPrice = Number(t.api_price) > 0 ? Number(t.api_price) : isAgent ? t.agent_price : (isDealer && (t as any).dealer_price > 0 ? (t as any).dealer_price : t.customer_price)
                                         return (
                                             <button
                                                 key={t.id}

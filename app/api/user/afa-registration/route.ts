@@ -2,7 +2,8 @@
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { validateAfaFormData } from '@/lib/afa-validation'
-import { resolveAfaCostPrice } from '@/lib/afa-pricing'
+import { resolveAfaCostPrice, resolveAfaApiPrice } from '@/lib/afa-pricing'
+import { isApiUserRow } from '@/lib/api-pricing'
 
 export async function POST(request: NextRequest) {
     try {
@@ -56,7 +57,8 @@ export async function POST(request: NextRequest) {
         // ── 2B: Fetch user role ────────────────────────────────────
         const { data: userRow } = await (supabaseUserClient
             .from('users')
-            .select('role')
+            // '*' so a database without is_api_user still works (lib/api-pricing.ts).
+            .select('*')
             .eq('id', userId)
             .single() as any)
 
@@ -77,7 +79,10 @@ export async function POST(request: NextRequest) {
             }
         )
 
-        const priceResult = await resolveAfaCostPrice(supabaseAdmin, userRole)
+        // API users pay the admin-set API price when one is set.
+        const priceResult = isApiUserRow(userRow)
+            ? await resolveAfaApiPrice(supabaseAdmin, userRole)
+            : await resolveAfaCostPrice(supabaseAdmin, userRole)
         if (!priceResult.ok) {
             return NextResponse.json({ error: priceResult.error }, { status: 500 })
         }

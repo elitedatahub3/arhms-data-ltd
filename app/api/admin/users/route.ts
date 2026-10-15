@@ -20,8 +20,8 @@ export async function GET(request: NextRequest) {
         const search = rawSearch ? rawSearch.trim().slice(0, 100) : null
         const role = searchParams.get('role')
 
-        // 'api' is not a role: it filters to accounts holding a developer API key
-        // (approved or awaiting approval), whatever their role.
+        // 'api' is not a role: it filters to accounts an admin has switched on as API
+        // users (users.is_api_user), whatever their role.
         const VALID_ROLES = ['customer', 'agent', 'dealer', 'sub-admin', 'admin', 'api', 'all']
         if (role && !VALID_ROLES.includes(role)) {
             return NextResponse.json({ error: 'Invalid role filter' }, { status: 400 })
@@ -30,19 +30,15 @@ export async function GET(request: NextRequest) {
         // Service role client to bypass RLS
         const supabase = createServerClient()
 
-        // Every live key, keyed by user. Few enough rows to read whole; used both for
-        // the 'api' filter and to badge API users on any page of results.
+        // Every live key, keyed by user. Few enough rows to read whole; lets the card
+        // flag someone who requested a key but is not yet an API user.
         const { data: keyRows } = await (supabase.from('api_keys') as any)
             .select('user_id, status')
             .in('status', ['active', 'pending'])
         const apiStatusByUser = new Map<string, string>()
         for (const k of ((keyRows as any[]) || [])) {
-            // One active key outranks a pending one for the badge.
+            // One active key outranks a pending one.
             if (apiStatusByUser.get(k.user_id) !== 'active') apiStatusByUser.set(k.user_id, k.status)
-        }
-
-        if (role === 'api' && apiStatusByUser.size === 0) {
-            return NextResponse.json({ users: [], totalCount: 0 })
         }
 
         // Add timeout to prevent hanging queries
@@ -52,24 +48,17 @@ export async function GET(request: NextRequest) {
 
         let query = supabase
             .from('users')
+            // '*' rather than a column list so is_api_user comes back when the
+            // migration has run, without breaking this page when it has not.
             .select(`
-                id,
-                email,
-                first_name,
-                last_name,
-                phone_number,
-                role,
-                status,
-                agent_expires_at,
-                created_at,
-                updated_at,
+                *,
                 wallets (
                     balance
                 )
             `, { count: 'exact' })
 
         if (role === 'api') {
-            query = query.in('id', Array.from(apiStatusByUser.keys()))
+            query = query.eq('is_api_user', true)
         } else if (role && role !== 'all') {
             query = query.eq('role', role)
         }

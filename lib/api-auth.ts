@@ -176,7 +176,9 @@ export async function validateApiKey(
 
     const { data: userData } = await supabase
         .from('users')
-        .select('role, status')
+        // '*' rather than naming is_api_user, so auth keeps working on a database
+        // migration 20261015010000 has not reached yet.
+        .select('*')
         .eq('id', keyRow.user_id)
         .single()
 
@@ -187,9 +189,18 @@ export async function validateApiKey(
 
     if (userStatus !== 'active') return apiError(403, 'Your account is suspended or inactive')
 
-    // Standard keys work for every active account, whatever its role — the
-    // stored api_allowed_roles setting is no longer consulted. Approval of the
-    // key itself (status 'active') is the gate. Commission keys stay role-gated,
+    // Standard keys need the account switched on as an API user by an admin, on
+    // top of the key's own approval. Admins pass regardless. A missing column
+    // (migration not run) means the gate is not live yet, so it is skipped.
+    if (keyKind === 'standard'
+        && userRole !== 'admin' && userRole !== 'sub-admin'
+        && 'is_api_user' in (userData as any)
+        && (userData as any).is_api_user !== true) {
+        return apiError(403, 'Your account is not enabled for API access. Contact support to become an API user.')
+    }
+
+    // The stored api_allowed_roles setting is no longer consulted for standard
+    // keys. Commission keys stay role-gated,
     // but dealers are always allowed: api_commission_allowed_roles predates
     // dealers, has no admin UI, and a dealer can be issued and approved a
     // commission key that this check would then refuse on every call.

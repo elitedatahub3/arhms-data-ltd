@@ -133,6 +133,7 @@ export default function DataPackagesPage() {
     // A sub-agent pays their upline's sub_price, not the platform price. null
     // until the fetch lands (or for non-subs, who never need it).
     const [subPrices, setSubPrices] = useState<Record<string, number> | null>(null)
+    const [isApiUser, setIsApiUser] = useState(false)
     const pricingReady = subAgentCheckDone && (!isSubAgent || subPrices !== null)
     const [walletBalance, setWalletBalance] = useState(0)
     const [hideMashup, setHideMashup] = useState(false)
@@ -220,6 +221,17 @@ export default function DataPackagesPage() {
         fetchOrdersToday()
         fetchMashupSetting()
     }, [dbUser])
+
+    // API users (switched on by an admin) pay the admin-set API price. Read with '*'
+    // and outside the auth context's profile query, so a database without the
+    // is_api_user column cannot break login — it just reads as false.
+    useEffect(() => {
+        if (!dbUser?.id) return
+        let active = true
+        ;(supabase.from('users') as any).select('*').eq('id', dbUser.id).maybeSingle()
+            .then(({ data }: any) => { if (active) setIsApiUser(data?.is_api_user === true) })
+        return () => { active = false }
+    }, [dbUser?.id])
 
     useEffect(() => {
         if (!isSubAgent) return
@@ -439,6 +451,10 @@ export default function DataPackagesPage() {
     const getEffectivePrice = (pkg: DataPackage) => {
         if (isSubAgent && subPrices?.[pkg.id]) {
             return subPrices[pkg.id]
+        }
+        // Mirrors resolveDataPrice in lib/data-order-pricing.ts.
+        if (isApiUser && Number((pkg as any).api_price) > 0) {
+            return Number((pkg as any).api_price)
         }
         if (dbUser?.role === 'dealer' && (pkg as any).dealer_price > 0) {
             return (pkg as any).dealer_price
