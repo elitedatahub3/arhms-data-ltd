@@ -68,7 +68,14 @@ interface Bundle {
     price: number | string
     sort_order: number | string
     is_active: boolean
+    /** shop = Customer SMS price list; platform = SMS Platform price list. */
+    audience?: 'shop' | 'platform'
 }
+
+const BUNDLE_LISTS = [
+    { audience: 'shop' as const, title: 'Customer SMS bundles', description: 'Sold to shops and sub-agents in Customer SMS. 1 credit = 1 SMS segment to 1 recipient.' },
+    { audience: 'platform' as const, title: 'SMS Platform bundles', description: 'Sold on the SMS Platform (/dashboard/sms), at its own prices.' },
+]
 
 const STATUS_TABS: { value: SenderStatus; label: string }[] = [
     { value: 'pending', label: 'Pending' },
@@ -630,40 +637,45 @@ function SmsSettings() {
                 </CardContent>
             </Card>
 
-            <Card>
-                <CardHeader>
-                    <div className="flex items-center justify-between gap-2">
-                        <div>
-                            <CardTitle className="text-base">Credit bundles</CardTitle>
-                            <CardDescription>1 credit = 1 SMS segment to 1 recipient.</CardDescription>
-                        </div>
-                        <Button size="sm" variant="outline" className="gap-1"
-                            onClick={() => setBundles((bs) => [...bs, { name: '', credits: '', price: '', sort_order: bs.length + 1, is_active: true }])}>
-                            <Plus className="w-4 h-4" /> Add
-                        </Button>
-                    </div>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                    <div className="hidden sm:grid grid-cols-[1fr_110px_110px_90px_110px_40px] gap-2 text-xs text-muted-foreground px-1">
-                        <span>Name</span><span>Credits</span><span>Price (GHS)</span><span>Order</span><span>GHS / SMS</span><span />
-                    </div>
-                    {bundles.map((b, i) => {
-                        const perSms = Number(b.credits) > 0 ? Number(b.price) / Number(b.credits) : 0
-                        return (
-                            <div key={b.id ?? `new-${i}`} className="grid grid-cols-2 sm:grid-cols-[1fr_110px_110px_90px_110px_40px] gap-2 items-center rounded-xl border p-2 sm:border-0 sm:p-0">
-                                <Input value={b.name} onChange={(e) => setBundle(i, { name: e.target.value })} placeholder="Starter" className="col-span-2 sm:col-span-1" />
-                                <Input type="number" min={1} value={b.credits} onChange={(e) => setBundle(i, { credits: e.target.value })} placeholder="100" />
-                                <Input type="number" min={0} step="0.01" value={b.price} onChange={(e) => setBundle(i, { price: e.target.value })} placeholder="5.00" />
-                                <Input type="number" value={b.sort_order} onChange={(e) => setBundle(i, { sort_order: e.target.value })} />
-                                <span className="text-sm text-muted-foreground">{perSms ? perSms.toFixed(3) : '—'}</span>
-                                <Button size="icon" variant="ghost" onClick={() => removeBundle(i)} aria-label="Remove bundle"><Trash2 className="w-4 h-4" /></Button>
+            {BUNDLE_LISTS.map((list) => {
+                const rows = bundles.map((b, i) => ({ b, i })).filter(({ b }) => (b.audience ?? 'shop') === list.audience)
+                return (
+                    <Card key={list.audience}>
+                        <CardHeader>
+                            <div className="flex items-center justify-between gap-2">
+                                <div>
+                                    <CardTitle className="text-base">{list.title}</CardTitle>
+                                    <CardDescription>{list.description}</CardDescription>
+                                </div>
+                                <Button size="sm" variant="outline" className="gap-1"
+                                    onClick={() => setBundles((bs) => [...bs, { name: '', credits: '', price: '', sort_order: rows.length + 1, is_active: true, audience: list.audience }])}>
+                                    <Plus className="w-4 h-4" /> Add
+                                </Button>
                             </div>
-                        )
-                    })}
-                    {!bundles.length && <p className="text-sm text-muted-foreground text-center py-4">No bundles on sale.</p>}
-                    <p className="text-[11px] text-muted-foreground">Removed bundles are hidden from shops, not deleted, so past purchases keep their history.</p>
-                </CardContent>
-            </Card>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                            <div className="hidden sm:grid grid-cols-[1fr_110px_110px_90px_110px_40px] gap-2 text-xs text-muted-foreground px-1">
+                                <span>Name</span><span>Credits</span><span>Price (GHS)</span><span>Order</span><span>GHS / SMS</span><span />
+                            </div>
+                            {rows.map(({ b, i }) => {
+                                const perSms = Number(b.credits) > 0 ? Number(b.price) / Number(b.credits) : 0
+                                return (
+                                    <div key={b.id ?? `new-${i}`} className="grid grid-cols-2 sm:grid-cols-[1fr_110px_110px_90px_110px_40px] gap-2 items-center rounded-xl border p-2 sm:border-0 sm:p-0">
+                                        <Input value={b.name} onChange={(e) => setBundle(i, { name: e.target.value })} placeholder="Starter" className="col-span-2 sm:col-span-1" />
+                                        <Input type="number" min={1} value={b.credits} onChange={(e) => setBundle(i, { credits: e.target.value })} placeholder="100" />
+                                        <Input type="number" min={0} step="0.01" value={b.price} onChange={(e) => setBundle(i, { price: e.target.value })} placeholder="5.00" />
+                                        <Input type="number" value={b.sort_order} onChange={(e) => setBundle(i, { sort_order: e.target.value })} />
+                                        <span className="text-sm text-muted-foreground">{perSms ? perSms.toFixed(3) : '—'}</span>
+                                        <Button size="icon" variant="ghost" onClick={() => removeBundle(i)} aria-label="Remove bundle"><Trash2 className="w-4 h-4" /></Button>
+                                    </div>
+                                )
+                            })}
+                            {!rows.length && <p className="text-sm text-muted-foreground text-center py-4">No bundles on sale{list.audience === 'platform' ? ' — the SMS Platform shows "no bundles" until you add some.' : '.'}</p>}
+                            <p className="text-[11px] text-muted-foreground">Removed bundles are hidden, not deleted, so past purchases keep their history.</p>
+                        </CardContent>
+                    </Card>
+                )
+            })}
 
             <Button onClick={save} disabled={saving} className="gap-2 bg-emerald-600 hover:bg-emerald-700">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save settings

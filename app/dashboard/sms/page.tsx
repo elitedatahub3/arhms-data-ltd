@@ -21,14 +21,19 @@ const BUSINESS_BADGE: Record<string, { label: string; className: string }> = {
 const API_LOCKED_BADGE = { label: 'Needs approved business', className: 'bg-muted text-muted-foreground' }
 
 export default function SmsPlatformHome() {
+    // Lives in the shop overview, so that is where "back" goes — the sub-agent
+    // portal has its own copy of it.
+    const { info } = useSmsPlatform()
+    const shopHref = info?.isSub ? '/dashboard/sub/shop' : '/dashboard/shop'
+
     return (
         <>
             <SmsPageHeader
                 title="SMS Platform"
                 description="Send bulk SMS under your own sender name — to customers, members or anyone."
                 icon={MessageSquare}
-                backHref="/dashboard"
-                backLabel="Dashboard"
+                backHref={shopHref}
+                backLabel="Shop overview"
             />
             <SmsActiveGate allowLocked>
                 {(info) => info.account.status === 'locked' ? <Activate info={info} /> : <Hub info={info} />}

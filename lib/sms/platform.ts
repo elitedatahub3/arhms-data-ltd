@@ -120,3 +120,49 @@ export async function countSentToday(db: any, accountId: string): Promise<number
     }
     return count ?? 0
 }
+
+// ============================================================
+// CREDIT BUNDLES
+// ============================================================
+
+/** Customer SMS (shop and sub portals) and the SMS Platform keep separate price lists. */
+export type BundleAudience = 'shop' | 'platform'
+
+export function bundleAudienceFor(portal: string | null | undefined): BundleAudience {
+    return portal === 'platform' ? 'platform' : 'shop'
+}
+
+/**
+ * Active bundles for one price list.
+ *
+ * Before 20261016010000_sms_platform_bundles.sql adds the audience column,
+ * every bundle is a shop bundle: Customer SMS keeps its list and the SMS
+ * Platform has none, rather than both erroring.
+ */
+export async function fetchBundles(db: any, audience: BundleAudience): Promise<{ id: string; name: string; credits: number; price: number }[]> {
+    const { data, error } = await db
+        .from('sms_credit_bundles')
+        .select('id, name, credits, price')
+        .eq('is_active', true)
+        .eq('audience', audience)
+        .order('sort_order', { ascending: true })
+
+    if (!error) return data || []
+    if (error.code !== '42703') {
+        console.error('[SmsPlatform] bundle query failed:', error.message)
+        return []
+    }
+    if (audience === 'platform') return []
+
+    const { data: all } = await db
+        .from('sms_credit_bundles')
+        .select('id, name, credits, price')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+    return all || []
+}
+
+/** Which price list a bundle row belongs to; rows from before the column are shop bundles. */
+export function bundleAudienceOf(row: { audience?: string | null } | null | undefined): BundleAudience {
+    return row?.audience === 'platform' ? 'platform' : 'shop'
+}

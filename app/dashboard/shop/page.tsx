@@ -14,7 +14,7 @@ import {
     Store, Wallet, TrendingUp, ShoppingCart, ArrowRight,
     Settings, Tag, Banknote, Clock, CheckCircle2, XCircle,
     AlertCircle, ExternalLink, Copy, Check, Lightbulb, Filter, RefreshCcw, Crown,
-    MessageCircle, X, Smartphone
+    MessageCircle, X, Smartphone, Send
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -537,6 +537,22 @@ export default function ShopOverviewPage() {
                     </div>
                 )
             })()}
+
+            {/* --- SMS PLATFORM --- */}
+            {shop.approval_status === 'approved' && (
+                <Link href="/dashboard/sms" className="block">
+                    <div className="flex items-center gap-4 p-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-sm transition-opacity hover:opacity-95">
+                        <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+                            <Send className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="font-black text-sm">SMS Platform</p>
+                            <p className="text-xs text-emerald-50/90 mt-0.5">Bulk SMS under your own sender name — contact groups, delivery reports and an SMS API.</p>
+                        </div>
+                        <ArrowRight className="w-4 h-4 flex-shrink-0" />
+                    </div>
+                </Link>
+            )}
 
             {/* --- ORDER SMS NUDGE --- */}
             <OrderSmsBanner href="/dashboard/shop/sms?tab=orders" />

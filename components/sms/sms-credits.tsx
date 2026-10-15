@@ -38,7 +38,7 @@ export function SmsCredits({ credits, onPurchased, deBranded = false, portal }: 
     useEffect(() => {
         (async () => {
             try {
-                const res = await fetch('/api/sms/credits', { cache: 'no-store' })
+                const res = await fetch(portal ? `/api/sms/credits?portal=${portal}` : '/api/sms/credits', { cache: 'no-store' })
                 const data = await res.json()
                 if (data?.success) setBundles(data.bundles || [])
                 else toast.error(data?.error || 'Could not load bundles')
@@ -48,15 +48,15 @@ export function SmsCredits({ credits, onPurchased, deBranded = false, portal }: 
                 setLoading(false)
             }
         })()
-    }, [])
+    }, [portal])
 
     // Captured when the purchase starts, so a balance that was already above
     // zero does not read as "settled" on the first poll.
     const isSettled = useCallback(async () => {
-        const res = await fetch('/api/sms/credits', { cache: 'no-store' })
+        const res = await fetch(portal ? `/api/sms/credits?portal=${portal}` : '/api/sms/credits', { cache: 'no-store' })
         const data = await res.json()
         return Number(data?.credits) > credits
-    }, [credits])
+    }, [credits, portal])
 
     const handleSettled = useCallback(() => {
         toast.success(`${selected?.credits?.toLocaleString() ?? ''} SMS credits added`)

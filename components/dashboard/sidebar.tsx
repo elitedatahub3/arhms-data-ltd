@@ -70,7 +70,6 @@ const userNavItems = [
     { href: '/dashboard/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/dashboard/profile', label: 'Profile', icon: User },
     { href: '/dashboard/install', label: 'Download App', icon: Download },
-    { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
     { href: '/dashboard/developer-api', label: 'Developer API', icon: Code2 },
     { href: '/dashboard/commission-wallet', label: 'Commission Wallet', icon: Percent },
 ]
