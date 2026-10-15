@@ -139,6 +139,8 @@ interface AirtimeSettings {
     storefront_mashup_enabled: string
     airtime_auto_fulfillment_enabled: string
     airtime_auto_mtn: string; airtime_auto_telecel: string; airtime_auto_at: string
+    // Developer API fee, charged to every API caller. Blank = use the role fee.
+    airtime_fee_mtn_api?: string; airtime_fee_telecel_api?: string; airtime_fee_at_api?: string
 }
 
 // ─── Status Action Modal ───────────────────────────────────────────────────────
@@ -799,6 +801,7 @@ export default function AdminAirtimePage() {
                                             {NETWORKS.map(net => {
                                                 const custKey = `airtime_fee_${net.toLowerCase()}_customer` as keyof AirtimeSettings
                                                 const agentKey = `airtime_fee_${net.toLowerCase()}_agent` as keyof AirtimeSettings
+                                                const apiKey = `airtime_fee_${net.toLowerCase()}_api` as keyof AirtimeSettings
                                                 const enabledKey = `airtime_enabled_${net.toLowerCase()}` as keyof AirtimeSettings
                                                 const isEnabled = settings[enabledKey] !== 'false'
 
@@ -868,6 +871,22 @@ export default function AdminAirtimePage() {
                                                                 </div>
                                                                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">Preferred pricing for verified resellers</p>
                                                             </div>
+                                                        </div>
+
+                                                        <div className="mt-6 space-y-2">
+                                                            <Label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">API Fee (all API users)</Label>
+                                                            <div className="relative group/input">
+                                                                <Input
+                                                                    type="number"
+                                                                    value={settings[apiKey] ?? ''}
+                                                                    onChange={e => setSettings(s => ({ ...s, [apiKey]: e.target.value }))}
+                                                                    placeholder="Blank = use customer/agent fee"
+                                                                    className="rounded-2xl h-12 pr-12 bg-slate-50 border-none font-black text-lg group-hover/input:bg-white transition-all shadow-inner"
+                                                                    min="0" max="99" step="0.1"
+                                                                />
+                                                                <span className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">%</span>
+                                                            </div>
+                                                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">Charged on every developer API top-up, whatever the caller&apos;s role</p>
                                                         </div>
                                                     </div>
                                                 )

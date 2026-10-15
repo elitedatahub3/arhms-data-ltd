@@ -51,6 +51,8 @@ interface PackageFormData {
     price: number
     agent_price: number
     dealer_price: number
+    // Developer API price, every API caller. Blank (string) = role price.
+    api_price: string
     cost_price: number
     description: string
     is_available: boolean
@@ -63,6 +65,7 @@ const defaultFormData: PackageFormData = {
     price: 0,
     agent_price: 0,
     dealer_price: 0,
+    api_price: '',
     cost_price: 0,
     description: '',
     is_available: true,
@@ -114,6 +117,7 @@ export default function AdminPackagesPage() {
             price: pkg.price,
             agent_price: (pkg as any).agent_price || 0,
             dealer_price: (pkg as any).dealer_price || 0,
+            api_price: (pkg as any).api_price > 0 ? String((pkg as any).api_price) : '',
             cost_price: (pkg as any).cost_price || 0,
             description: pkg.description || '',
             is_available: pkg.is_available,
@@ -131,7 +135,9 @@ export default function AdminPackagesPage() {
         setIsSaving(true)
         try {
             const method = editingPackage ? 'PUT' : 'POST'
-            const body = editingPackage ? { ...formData, id: editingPackage.id } : formData
+            // Blank API price is stored as NULL so API callers fall back to role pricing.
+            const payload = { ...formData, api_price: Number(formData.api_price) > 0 ? Number(formData.api_price) : null }
+            const body = editingPackage ? { ...payload, id: editingPackage.id } : payload
 
             const res = await fetch('/api/admin/packages', {
                 method,
@@ -339,6 +345,11 @@ export default function AdminPackagesPage() {
                                                             Dealer: {formatCurrency((pkg as any).dealer_price)}
                                                         </p>
                                                     )}
+                                                    {(pkg as any).api_price > 0 && (
+                                                        <p className="text-sm font-medium text-sky-600">
+                                                            API: {formatCurrency((pkg as any).api_price)}
+                                                        </p>
+                                                    )}
                                                 </div>
                                             </div>
                                             <Switch
@@ -453,6 +464,16 @@ export default function AdminPackagesPage() {
                                     placeholder="0.00"
                                 />
                                 <p className="text-[10px] text-muted-foreground">Optional: Set specifically for dealers</p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>API Price (GHS)</Label>
+                                <Input
+                                    type="number"
+                                    value={formData.api_price}
+                                    onChange={(e) => setFormData(prev => ({ ...prev, api_price: e.target.value }))}
+                                    placeholder="Blank = role price"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Optional: Charged to every developer API user</p>
                             </div>
                             <div className="space-y-2">
                                 <Label>Cost Price (GHS)</Label>

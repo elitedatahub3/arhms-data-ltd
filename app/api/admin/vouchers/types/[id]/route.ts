@@ -27,6 +27,17 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     if (body.agent_price !== undefined) updates.agent_price = parseFloat(body.agent_price)
     if (body.dealer_price !== undefined) updates.dealer_price = parseFloat(body.dealer_price) || 0
     if (body.cost_price !== undefined) updates.cost_price = parseFloat(body.cost_price)
+    // Developer API price. Blank clears it, so API callers fall back to role pricing.
+    if (body.api_price !== undefined) {
+        const raw = body.api_price
+        if (raw === null || raw === '') {
+            updates.api_price = null
+        } else if (!(Number(raw) >= 0)) {
+            return NextResponse.json({ error: 'api price must be a valid number' }, { status: 400 })
+        } else {
+            updates.api_price = Number(raw) > 0 ? parseFloat(raw) : null
+        }
+    }
     if (body.display_order !== undefined) updates.display_order = parseInt(body.display_order)
     if (body.is_active !== undefined) updates.is_active = body.is_active
 
@@ -63,6 +74,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         return NextResponse.json({ error: 'Agent price cannot be below cost price' }, { status: 400 })
     if (dp !== undefined && dp > 0 && cost !== undefined && dp < cost)
         return NextResponse.json({ error: 'Dealer price cannot be below cost price' }, { status: 400 })
+    if (updates.api_price != null && cost !== undefined && updates.api_price < cost)
+        return NextResponse.json({ error: 'API price cannot be below cost price' }, { status: 400 })
 
     const { data, error } = await (supabase as any)
         .from('results_checker_types')

@@ -18,6 +18,7 @@ export interface RCType {
     customer_price: number
     agent_price: number
     dealer_price?: number
+    api_price?: number | null   // v2 API only — lib/api-pricing.ts
     cost_price: number          // NEVER expose to client
     is_active: boolean
     display_order: number

@@ -3,15 +3,15 @@ import {
     validateApiKey, isApiError, apiSuccessV2, apiError,
     logApiRequest, getClientIp, enforceRateLimit,
 } from '@/lib/api-auth'
-import { resolveAfaCostPrice } from '@/lib/afa-pricing'
+import { resolveAfaApiPrice } from '@/lib/afa-pricing'
 import { VALID_ID_TYPES, VALID_REGIONS, MIN_AFA_AGE, ID_FORMAT_PATTERNS } from '@/lib/afa-validation'
 
 /**
  * What an AFA registration costs this caller, and what a valid application looks like.
  *
  * The register endpoint never accepts a price from the request, so this is the only
- * way for a partner to know what they will be charged — the same role-tiered figure
- * the dashboard resolves. It also returns the allowlists, so an integrator builds
+ * way for a partner to know what they will be charged — the admin-set API price, or
+ * the role-tiered dashboard figure when none is set. It also returns the allowlists, so an integrator builds
  * their form against the live values rather than hardcoding regions that will later
  * 400 on them.
  */
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     const { userId, apiKeyId, userRole, supabase } = auth
 
-    const price = await resolveAfaCostPrice(supabase, userRole)
+    const price = await resolveAfaApiPrice(supabase, userRole)
 
     if (!price.ok) {
         logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'GET', statusCode: 503, responseTimeMs: Date.now() - startTime, ip, errorMessage: 'AFA pricing not configured' })
