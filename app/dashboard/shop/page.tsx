@@ -20,6 +20,8 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import SubAgentInviteCard from '@/components/shop/sub-agent-invite-card'
 import { OrderSmsBanner } from '@/components/sms/order-sms-banner'
+import { ShopQuickShare } from '@/components/dashboard/ShopQuickShare'
+import { shopUrl as buildShopUrl } from '@/lib/shop-url'
 
 interface ShopProfile {
     id: string
@@ -248,7 +250,7 @@ export default function ShopOverviewPage() {
         }
     }, [dbUser, isAdmin, isSubAdmin, filter])
 
-    const shopUrl = shop ? `${process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')}/shop/${shop.shop_slug}` : ''
+    const shopUrl = shop ? buildShopUrl(shop.shop_slug) : ''
 
     const copyLink = async () => {
         await navigator.clipboard.writeText(shopUrl)
@@ -474,6 +476,15 @@ export default function ShopOverviewPage() {
                     )}
                 </div>
             </div>
+
+            {/* --- SHARE: QR code, link, WhatsApp, growth tips --- */}
+            {shopIsLive && (
+                <ShopQuickShare
+                    shopSlug={shop.shop_slug}
+                    shopName={shop.shop_name}
+                    smsHref={isSubAgent ? '/dashboard/sub/sms' : '/dashboard/shop/sms'}
+                />
+            )}
 
             {/* --- NEXT STEP GUIDANCE BANNER --- */}
             {!shopIsLive && shop.approval_status === 'approved' && (() => {
