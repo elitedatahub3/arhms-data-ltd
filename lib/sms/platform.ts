@@ -88,6 +88,18 @@ export async function getSmsBusiness(db: any, accountId: string): Promise<SmsBus
     }
 }
 
+/**
+ * The SMS API is for verified businesses only: a key can be generated, and an
+ * existing key used, only while the account's business registration is approved.
+ * Shops are not exempt — an approved shop is not a verified SMS business.
+ */
+export const SMS_API_NEEDS_BUSINESS =
+    'The SMS API is available once your business is approved. Submit it under Business & Sender ID.'
+
+export async function isSmsBusinessApproved(db: any, accountId: string): Promise<boolean> {
+    return (await getSmsBusiness(db, accountId))?.status === 'approved'
+}
+
 /** Start of the current UTC day — Ghana is UTC+0 all year, so this is local midnight. */
 export function startOfTodayIso(): string {
     const now = new Date()

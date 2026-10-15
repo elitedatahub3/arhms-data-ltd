@@ -1,12 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Code2, Copy, KeyRound, Loader2, RefreshCw, Trash2, AlertTriangle, Check } from 'lucide-react'
+import Link from 'next/link'
+import { Code2, Copy, KeyRound, Loader2, RefreshCw, Trash2, AlertTriangle, Check, Lock, Building2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { SmsActiveGate, SmsPageHeader } from '@/components/sms/platform/sms-platform-shell'
+import { SmsActiveGate, SmsPageHeader, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
 
 interface KeyRow {
     kind: string
@@ -37,14 +38,41 @@ export default function SmsApiPage() {
         <>
             <SmsPageHeader title="API & Docs" description="Send SMS from your own website, app or server." icon={Code2} />
             <SmsActiveGate>
-                {() => (
+                {(info) => (
                     <div className="space-y-5">
-                        <KeyCard />
+                        {info.businessStatus === 'approved' ? <KeyCard /> : <BusinessRequired status={info.businessStatus} />}
                         <Docs />
                     </div>
                 )}
             </SmsActiveGate>
         </>
+    )
+}
+
+// Docs stay readable so a developer can build ahead; only the key waits for approval.
+function BusinessRequired({ status }: { status: SmsPlatformAccount['businessStatus'] }) {
+    const body = status === 'pending'
+        ? 'Your business is in review. Your API key unlocks here as soon as it is approved.'
+        : status === 'rejected'
+            ? 'Your business registration needs changes. Fix it and resubmit to unlock the API.'
+            : 'Register and verify your business to get an SMS API key.'
+    return (
+        <Card className="border-amber-200 dark:border-amber-900">
+            <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2"><Lock className="w-4 h-4 text-amber-600" /> API key locked</CardTitle>
+                <CardDescription>The SMS API is available once your business is approved.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">{body}</p>
+                {status !== 'pending' && (
+                    <Link href="/dashboard/sms/business">
+                        <Button className="gap-2 bg-emerald-600 hover:bg-emerald-700">
+                            <Building2 className="w-4 h-4" /> {status === 'rejected' ? 'Fix business details' : 'Verify your business'}
+                        </Button>
+                    </Link>
+                )}
+            </CardContent>
+        </Card>
     )
 }
 
