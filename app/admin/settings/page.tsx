@@ -34,6 +34,8 @@ export default function AdminSettingsPage() {
     const [afaPriceCustomer, setAfaPriceCustomer] = useState('15')
     const [afaPriceAgent, setAfaPriceAgent] = useState('15')
     const [afaPriceDealer, setAfaPriceDealer] = useState('15')
+    // Developer API price, every API caller. Blank = their role fee.
+    const [afaPriceApi, setAfaPriceApi] = useState('')
     const [storefrontAfaEnabled, setStorefrontAfaEnabled] = useState(false)
     const [dealerPromoEnabled, setDealerPromoEnabled] = useState(false)
     const [landingRcOnlyEnabled, setLandingRcOnlyEnabled] = useState(false)
@@ -123,6 +125,7 @@ export default function AdminSettingsPage() {
             setAfaPriceCustomer(settingsMap.afa_price_customer || '15')
             setAfaPriceAgent(settingsMap.afa_price_agent || '15')
             setAfaPriceDealer(settingsMap.afa_price_dealer || '15')
+            setAfaPriceApi(settingsMap.afa_price_api || '')
             setStorefrontAfaEnabled(settingsMap.storefront_afa_enabled === 'true')
             setUssdEnabled(settingsMap.ussd_enabled === 'true')
             setUssdDialCode(settingsMap.ussd_dial_code || '')
@@ -205,6 +208,7 @@ export default function AdminSettingsPage() {
                 { key: 'afa_price_customer', value: afaPriceCustomer },
                 { key: 'afa_price_agent', value: afaPriceAgent },
                 { key: 'afa_price_dealer', value: afaPriceDealer },
+                { key: 'afa_price_api', value: afaPriceApi },
                 { key: 'storefront_afa_enabled', value: String(storefrontAfaEnabled) },
                 { key: 'dealer_promo_enabled', value: String(dealerPromoEnabled) },
                 { key: 'landing_rc_only_enabled', value: String(landingRcOnlyEnabled) },
@@ -699,6 +703,18 @@ export default function AdminSettingsPage() {
                                     min="0"
                                 />
                                 <p className="text-xs text-muted-foreground">Fee charged to dealers for AFA application</p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>API Application Fee (GHS)</Label>
+                                <Input
+                                    type="number"
+                                    value={afaPriceApi}
+                                    onChange={(e) => setAfaPriceApi(e.target.value)}
+                                    placeholder="Blank = use the role fee above"
+                                    step="0.01"
+                                    min="0"
+                                />
+                                <p className="text-xs text-muted-foreground">Fee charged to every developer API user, whatever their role</p>
                             </div>
                             <div className="flex items-center justify-between p-4 border rounded-lg">
                                 <div className="space-y-0.5">

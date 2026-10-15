@@ -434,7 +434,9 @@ export default function DocsClient() {
                     </h1>
                     <p className="mt-3 max-w-2xl text-sm leading-relaxed opacity-90 sm:text-base">
                         Sell data bundles, airtime, result checkers, AFA registrations and utility bills from your
-                        own app — charged to your ARHMSGH wallet at your agent pricing.
+                        own app — charged to your ARHMSGH wallet at API pricing. The catalogue endpoints
+                        (<code className="font-mono">/api/v2/packages</code>, <code className="font-mono">/api/v2/results-checker/types</code>,{' '}
+                        <code className="font-mono">/api/v2/afa/pricing</code>) return the exact price you will be charged.
                     </p>
 
                     <div className="mt-6 grid max-w-2xl gap-3">
@@ -527,7 +529,7 @@ export default function DocsClient() {
                             <p className="font-bold text-foreground">Getting a key</p>
                             <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
                                 {[
-                                    'Log in and open Dashboard → Developer API. An agent plan is required — customer accounts cannot use the API.',
+                                    'Log in and open Dashboard → Developer API. Any active account can request a key — customer, agent or dealer.',
                                     'Generate a Standard or Commission Services key.',
                                     'Copy it immediately. It is shown once and stored only as a hash — it cannot be shown again.',
                                     'New keys wait for admin approval. Until then, requests return 403 "API key pending admin approval".',

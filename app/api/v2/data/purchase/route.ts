@@ -9,6 +9,7 @@ import { fulfillApiDataOrder } from '@/lib/api-data-fulfillment'
 import {
     dataNetworkError, normaliseRecipient, findPackageForSize, isDuplicateReferenceError,
 } from '@/lib/api-v2-networks'
+import { loadApiPricingContext, resolveApiDataPrice } from '@/lib/api-pricing'
 
 /**
  * Single data bundle purchase. Same flow as v1, with the network names corrected to
@@ -87,7 +88,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { data: packages } = await (supabase.from('data_packages') as any)
-        .select('id, network, size, price, agent_price, cost_price, is_available')
+        .select('*')
         .eq('network', network)
         .eq('is_available', true)
 
@@ -101,16 +102,9 @@ export async function POST(request: NextRequest) {
     // recipient takes the fulfillment-time path instead. See
     // app/api/orders/purchase/route.ts for the full reasoning.
 
-    const { data: userExpiry } = await supabase
-        .from('users')
-        .select('agent_expires_at')
-        .eq('id', userId)
-        .single()
-
-    const agentExpired = (userExpiry as any)?.agent_expires_at
-        && new Date((userExpiry as any).agent_expires_at) < new Date()
-    const isActiveAgent = userRole === 'agent' && !agentExpired
-    const priceToCharge = isActiveAgent && pkg.agent_price > 0 ? pkg.agent_price : pkg.price
+    // Admin-set API price, else the caller's role price — see lib/api-pricing.ts.
+    const pricing = await loadApiPricingContext(supabase, userId, userRole)
+    const priceToCharge = resolveApiDataPrice(pkg, pricing)
 
     const { data: deductResult, error: deductError } = await (supabase as any).rpc('deduct_wallet_balance', {
         p_user_id: userId,

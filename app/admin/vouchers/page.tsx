@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
 interface BulkTier { min_qty: number; max_qty: number; unit_price: number }
-interface RCType { id: string; name: string; customer_price: number; agent_price: number; dealer_price: number; cost_price: number; is_active: boolean; display_order: number; created_at: string; bulk_pricing?: BulkTier[]; stock?: { available: number; reserved: number; sold: number } }
+interface RCType { id: string; name: string; customer_price: number; agent_price: number; dealer_price: number; api_price?: number | null; cost_price: number; is_active: boolean; display_order: number; created_at: string; bulk_pricing?: BulkTier[]; stock?: { available: number; reserved: number; sold: number } }
 interface RCOrder { id: string; reference_code: string; customer_name: string; customer_email: string; customer_phone: string; type_name: string; quantity: number; unit_price: number; total_paid: number; status: string; payment_status: string; created_at: string; fulfilled_at: string | null }
 interface Stats { revenue: number; cost: number; profit: number; totalOrders: number; completedOrders: number; pendingOrders: number; stockSummary: Array<{ id: string; name: string; available: number; sold: number; lowStock: boolean; is_active: boolean }> }
 
@@ -41,7 +41,7 @@ export default function VouchersAdminPage() {
     const [orderTypeId, setOrderTypeId] = useState('all')
     const [typeModal, setTypeModal] = useState(false)
     const [editingType, setEditingType] = useState<RCType | null>(null)
-    const [typeForm, setTypeForm] = useState({ name: '', customer_price: '', agent_price: '', dealer_price: '', cost_price: '', display_order: '0' })
+    const [typeForm, setTypeForm] = useState({ name: '', customer_price: '', agent_price: '', dealer_price: '', api_price: '', cost_price: '', display_order: '0' })
     const [bulkTiers, setBulkTiers] = useState<BulkTier[]>([])
     const [typeSaving, setTypeSaving] = useState(false)
     const [uploadTypeId, setUploadTypeId] = useState('')
@@ -103,14 +103,14 @@ export default function VouchersAdminPage() {
 
     const openAddType = () => {
         setEditingType(null)
-        setTypeForm({ name: '', customer_price: '', agent_price: '', dealer_price: '', cost_price: '', display_order: '0' })
+        setTypeForm({ name: '', customer_price: '', agent_price: '', dealer_price: '', api_price: '', cost_price: '', display_order: '0' })
         setBulkTiers([])
         setTypeModal(true)
     }
     const num = (v: number | undefined | null) => (v === undefined || v === null ? '' : String(v))
     const openEditType = (t: RCType) => {
         setEditingType(t)
-        setTypeForm({ name: t.name, customer_price: num(t.customer_price), agent_price: num(t.agent_price), dealer_price: num(t.dealer_price ?? 0), cost_price: num(t.cost_price), display_order: num(t.display_order ?? 0) })
+        setTypeForm({ name: t.name, customer_price: num(t.customer_price), agent_price: num(t.agent_price), dealer_price: num(t.dealer_price ?? 0), api_price: num(t.api_price), cost_price: num(t.cost_price), display_order: num(t.display_order ?? 0) })
         setBulkTiers(Array.isArray(t.bulk_pricing) ? t.bulk_pricing : [])
         setTypeModal(true)
     }
@@ -119,7 +119,7 @@ export default function VouchersAdminPage() {
         if (!typeForm.name || !typeForm.customer_price || !typeForm.agent_price || !typeForm.cost_price) {
             toast.error('Name, customer price, agent price, and cost price are required'); return
         }
-        const badField = (['customer_price', 'agent_price', 'dealer_price', 'cost_price', 'display_order'] as const)
+        const badField = (['customer_price', 'agent_price', 'dealer_price', 'api_price', 'cost_price', 'display_order'] as const)
             .find(f => typeForm[f] !== '' && !Number.isFinite(Number(typeForm[f])))
         if (badField) {
             toast.error(`${badField.replace(/_/g, ' ')} must be a valid number`); return
@@ -360,6 +360,9 @@ export default function VouchersAdminPage() {
                                                         <span>Customer: <b className="text-foreground">{formatCurrency(t.customer_price)}</b></span>
                                                         <span>Agent: <b className="text-foreground">{formatCurrency(t.agent_price)}</b></span>
                                                         <span>Dealer: <b className="text-foreground">{formatCurrency(t.dealer_price || 0)}</b></span>
+                                                        {Number(t.api_price) > 0 && (
+                                                            <span>API: <b className="text-foreground">{formatCurrency(Number(t.api_price))}</b></span>
+                                                        )}
                                                         <span>Cost: <b className="text-foreground">{formatCurrency(t.cost_price)}</b></span>
                                                         {Array.isArray(t.bulk_pricing) && t.bulk_pricing.length > 0 && (
                                                             <span className="text-amber-600 dark:text-amber-400 font-semibold">
@@ -624,6 +627,11 @@ export default function VouchersAdminPage() {
                             <div className="space-y-1.5">
                                 <Label>Dealer Price</Label>
                                 <Input type="number" step="0.01" placeholder="0.00" value={typeForm.dealer_price} onChange={e => setTypeForm(f => ({ ...f, dealer_price: e.target.value }))} />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label>API Price</Label>
+                                <Input type="number" step="0.01" placeholder="Blank = role price" value={typeForm.api_price} onChange={e => setTypeForm(f => ({ ...f, api_price: e.target.value }))} />
+                                <p className="text-[11px] text-muted-foreground">Charged to every developer API user</p>
                             </div>
                             <div className="space-y-1.5">
                                 <Label>Cost Price <span className="text-red-500">*</span></Label>

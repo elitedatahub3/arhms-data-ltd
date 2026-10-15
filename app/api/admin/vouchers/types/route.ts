@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
         if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
         const body = await request.json()
-        const { name, customer_price, agent_price, dealer_price, cost_price, display_order, bulk_pricing } = body
+        const { name, customer_price, agent_price, dealer_price, api_price, cost_price, display_order, bulk_pricing } = body
 
         if (!name || !customer_price || !agent_price || !cost_price) {
             return NextResponse.json({ error: 'Name, customer_price, agent_price, and cost_price are required' }, { status: 400 })
@@ -72,9 +72,11 @@ export async function POST(request: NextRequest) {
         const ap = parseFloat(agent_price)
         const dp = dealer_price ? parseFloat(dealer_price) : 0
         const cost = parseFloat(cost_price)
+        // Developer API price; blank = API callers pay their role price.
+        const apiPrice = Number(api_price) > 0 ? parseFloat(api_price) : null
 
         // Server-side pricing sanity check
-        if (cp < cost || ap < cost || (dp > 0 && dp < cost)) {
+        if (cp < cost || ap < cost || (dp > 0 && dp < cost) || (apiPrice !== null && apiPrice < cost)) {
             return NextResponse.json({ error: 'Selling prices cannot be below cost price' }, { status: 400 })
         }
 
@@ -90,6 +92,7 @@ export async function POST(request: NextRequest) {
                 customer_price: cp,
                 agent_price: ap,
                 dealer_price: dp,
+                api_price: apiPrice,
                 cost_price: cost,
                 display_order: display_order || 0,
                 is_active: true,

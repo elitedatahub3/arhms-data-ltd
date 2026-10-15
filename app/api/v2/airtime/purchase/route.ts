@@ -9,6 +9,7 @@ import { sendPushToAdmins } from '@/lib/web-push'
 import { triggerAirtimeFulfillment } from '@/lib/airtime-fulfillment-dispatcher'
 import { MIN_DELIVERABLE_AIRTIME_GHS } from '@/lib/kingflexy-airtime-service'
 import { isAirtimeNetwork, isDuplicateReferenceError } from '@/lib/api-v2-networks'
+import { airtimeApiFeeKey, parseApiFeeRate } from '@/lib/api-pricing'
 
 /**
  * Airtime top-up over the STANDARD key.
@@ -102,16 +103,18 @@ export async function POST(request: NextRequest) {
         }
     }
 
-    // Same fee band the dashboard uses, so an agent is charged over the API exactly
-    // what they are charged in the app.
+    // Without an admin-set API fee, the same fee band the dashboard uses, so an agent
+    // is charged over the API exactly what they are charged in the app.
     const feeBand: 'agent' | 'customer' = userRole === 'agent' ? 'agent' : 'customer'
 
     const networkKey = NETWORK_KEY_MAP[network]
+    const apiFeeKey = airtimeApiFeeKey(networkKey)
     const { data: settingsRows } = await (supabase.from('admin_settings') as any)
         .select('key, value')
         .in('key', [
             `airtime_enabled_${networkKey}`,
             `airtime_fee_${networkKey}_${feeBand}`,
+            apiFeeKey,
             'airtime_min_amount',
             'airtime_max_amount',
         ])
@@ -134,8 +137,10 @@ export async function POST(request: NextRequest) {
         return apiError(400, `Maximum airtime amount is GHS ${maxAmount.toFixed(2)}`)
     }
 
-    // Fee is always resolved server-side, never taken from the request.
-    const feeRate = parseFloat(settings[`airtime_fee_${networkKey}_${feeBand}`] || '5')
+    // Fee is always resolved server-side, never taken from the request. The API fee,
+    // when set, applies to every caller whatever their role — lib/api-pricing.ts.
+    const feeRate = parseApiFeeRate(settings[apiFeeKey])
+        ?? parseFloat(settings[`airtime_fee_${networkKey}_${feeBand}`] || '5')
 
     let airtimeAmount: number
     let feeAmount: number

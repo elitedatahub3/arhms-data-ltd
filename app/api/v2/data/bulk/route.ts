@@ -7,6 +7,7 @@ import { generateReferenceCode } from '@/lib/utils'
 import {
     dataNetworkError, normaliseRecipient, findPackageForSize, isDuplicateReferenceError,
 } from '@/lib/api-v2-networks'
+import { loadApiPricingContext, resolveApiDataPrice } from '@/lib/api-pricing'
 
 /**
  * Batch purchase. Atomic in the sense the docs promise: every order is validated and
@@ -90,20 +91,12 @@ export async function POST(request: NextRequest) {
     }
 
     const { data: allPackages } = await (supabase.from('data_packages') as any)
-        .select('id, network, size, price, agent_price, cost_price')
+        .select('*')
         .eq('is_available', true)
 
     const packages = ((allPackages as any[]) || [])
 
-    const { data: userExpiry } = await supabase
-        .from('users')
-        .select('agent_expires_at')
-        .eq('id', userId)
-        .single()
-
-    const agentExpired = (userExpiry as any)?.agent_expires_at
-        && new Date((userExpiry as any).agent_expires_at) < new Date()
-    const isActiveAgent = userRole === 'agent' && !agentExpired
+    const pricing = await loadApiPricingContext(supabase, userId, userRole)
 
     const resolved: Array<{ pkg: any; price: number; phone: string; clientRef?: string }> = []
     let totalCost = 0
@@ -116,7 +109,7 @@ export async function POST(request: NextRequest) {
         if (!pkg) {
             return apiError(404, `Order at index ${i}: no available package for ${o.network} ${o.volume_gb}`)
         }
-        const price = isActiveAgent && pkg.agent_price > 0 ? pkg.agent_price : pkg.price
+        const price = resolveApiDataPrice(pkg, pricing)
         resolved.push({ pkg, price, phone: phones[i], clientRef: o.reference })
         totalCost += price
     }
