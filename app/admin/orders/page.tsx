@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, Fragment, useMemo } from 'react'
-import { supabase } from '@/lib/supabase'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getOrderDisplayStatus } from '@/lib/order-status-display'
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
@@ -111,27 +110,8 @@ export default function AdminOrdersPage() {
             setLoading(false)
         }
         loadInitialData()
-
-        // Realtime Subscription
-        const channel = supabase
-            .channel('admin-orders-changes')
-            .on(
-                'postgres_changes',
-                {
-                    event: '*',
-                    schema: 'public',
-                    table: 'orders'
-                },
-                () => {
-                    // Realtime Subscription removed full re-fetch to save CPU
-                    // The user can now refresh manually or reliance on selective updates
-                }
-            )
-            .subscribe()
-
-        return () => {
-            supabase.removeChannel(channel)
-        }
+        // No realtime channel here: the old one had an empty handler, yet still
+        // streamed every orders row change to the tab, costing Supabase egress for nothing.
     }, [])
 
     // Reset batches when network or date filter changes

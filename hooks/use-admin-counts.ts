@@ -176,53 +176,24 @@ export function useAdminCounts() {
 
         fetchAllCounts()
 
-        // Realtime Subscriptions
-        const ordersChannel = supabase.channel('admin-counts-orders')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-                fetchOrdersCount()
-                fetchMashupOrdersCount()
-            })
-            .subscribe()
-
-        const shopsChannel = supabase.channel('admin-counts-shops')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'shop_profiles' }, fetchShopsCount)
-            .subscribe()
-
-        const withdrawalsChannel = supabase.channel('admin-counts-withdrawals')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'shop_wallet_transactions' }, fetchWithdrawalsCount)
-            .subscribe()
-
-        const afaChannel = supabase.channel('admin-counts-afa')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'afa_orders' }, fetchAfaCount)
-            .subscribe()
-
-        const airtimeChannel = supabase.channel('admin-counts-airtime')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'airtime_orders' }, fetchAirtimeCount)
-            .subscribe()
-
-        const complaintsChannel = supabase.channel('admin-counts-complaints')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, fetchComplaintsCount)
-            .subscribe()
-
-        const usersChannel = supabase.channel('admin-counts-users')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, fetchExpiringAgentsCount)
-            .subscribe()
-
-        const debtsChannel = supabase.channel('admin-counts-debts')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_settlements' }, fetchPendingDebtsCount)
-            .subscribe()
+        // Polled, not realtime. These were eight unfiltered postgres_changes
+        // channels (orders, users, ...): every write to those tables shipped the
+        // FULL row to every open admin tab — twice, since the sidebar and the admin
+        // home both mount this hook — only to re-run a head count. That stream was
+        // a large share of the Supabase egress quota. Head counts return no rows,
+        // so a poll costs next to nothing, and only while the tab is visible.
+        const POLL_MS = 60_000
+        const tick = () => {
+            if (document.visibilityState === 'visible') fetchAllCounts()
+        }
+        const timer = setInterval(tick, POLL_MS)
+        document.addEventListener('visibilitychange', tick)
 
         return () => {
-            supabase.removeChannel(ordersChannel)
-            supabase.removeChannel(shopsChannel)
-            supabase.removeChannel(withdrawalsChannel)
-            supabase.removeChannel(afaChannel)
-            supabase.removeChannel(airtimeChannel)
-            supabase.removeChannel(complaintsChannel)
-            supabase.removeChannel(usersChannel)
-            supabase.removeChannel(debtsChannel)
+            clearInterval(timer)
+            document.removeEventListener('visibilitychange', tick)
         }
-    }, [isAdmin, fetchAllCounts, fetchOrdersCount, fetchShopsCount, fetchWithdrawalsCount, fetchAfaCount, fetchAirtimeCount, fetchComplaintsCount, fetchExpiringAgentsCount, fetchPendingDebtsCount, fetchMashupOrdersCount])
+    }, [isAdmin, fetchAllCounts])
 
     return { counts, refresh: fetchAllCounts }
 }
