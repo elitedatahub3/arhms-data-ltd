@@ -8,12 +8,18 @@
  * therefore always built on the apex host.
  */
 export function webhookBaseUrl(): string {
-    const raw = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
+    return apexBaseUrl() ?? 'https://arhmsgh.com'
+}
+
+/** NEXT_PUBLIC_APP_URL with any leading www. stripped, or null when unset/invalid. */
+export function apexBaseUrl(): string | null {
+    const raw = process.env.NEXT_PUBLIC_APP_URL
+    if (!raw) return null
     try {
         const url = new URL(raw)
         url.hostname = url.hostname.replace(/^www\./, '')
         return url.origin
     } catch {
-        return 'https://arhmsgh.com'
+        return null
     }
 }
