@@ -12,12 +12,16 @@
 --      re-pricing after an admin cost change, so a shop at cost + 25 would be
 --      silently cut to cost + 10 the first time a package price moved.
 --
--- The function below is 20260825_sub_aware_price_cascade.sql verbatim except
--- for the clamp, plus SET search_path = public: 20260422_security_hardening
--- pinned it, and the 20260825 CREATE OR REPLACE dropped the pin.
+-- The function below is 20260825_sub_aware_price_cascade.sql verbatim except:
+--   * the clamp is 1000, not 10;
+--   * Stage 1 prices dealer-owned shops off dealer_price. It only knew
+--     agent_price, so a dealer at cost + 2 was re-priced to CUSTOMER price + 2 —
+--     overcharging their buyers and banking them profit they never set. Same
+--     ladder as ownerCostPrice() in lib/shop-price-limits.ts;
+--   * SET search_path = public: 20260422_security_hardening pinned it, and the
+--     20260825 CREATE OR REPLACE dropped the pin.
 --
--- Run BEFORE deploying the matching code. The existing trigger keeps pointing
--- at this function by name, so it needs no change.
+-- Run BEFORE deploying the matching code.
 -- ════════════════════════════════════════════════════════════════════════════
 
 ALTER TABLE public.shop_pricing DROP CONSTRAINT IF EXISTS check_profit_margin_range;
@@ -36,7 +40,9 @@ BEGIN
     END IF;
 
     -- Trigger Guard (Loops, No Operation)
-    IF NEW.price IS NOT DISTINCT FROM OLD.price AND NEW.agent_price IS NOT DISTINCT FROM OLD.agent_price THEN
+    IF NEW.price IS NOT DISTINCT FROM OLD.price
+       AND NEW.agent_price IS NOT DISTINCT FROM OLD.agent_price
+       AND NEW.dealer_price IS NOT DISTINCT FROM OLD.dealer_price THEN
         RETURN NEW;
     END IF;
 
@@ -57,16 +63,19 @@ BEGIN
                 sp.shop_id,
                 sp.package_id,
                 CASE
+                    WHEN u.role = 'dealer' AND OLD.dealer_price > 0 THEN OLD.dealer_price
                     WHEN u.role = 'agent' AND OLD.agent_price IS NOT NULL THEN OLD.agent_price
                     ELSE OLD.price
                 END AS old_cost,
                 sp.selling_price AS old_selling,
                 CASE
+                    WHEN u.role = 'dealer' AND NEW.dealer_price > 0 THEN NEW.dealer_price
                     WHEN u.role = 'agent' AND NEW.agent_price IS NOT NULL THEN NEW.agent_price
                     ELSE NEW.price
                 END AS new_cost,
                 (
                     CASE
+                        WHEN u.role = 'dealer' AND NEW.dealer_price > 0 THEN NEW.dealer_price
                         WHEN u.role = 'agent' AND NEW.agent_price IS NOT NULL THEN NEW.agent_price
                         ELSE NEW.price
                     END
@@ -171,3 +180,12 @@ BEGIN
     END;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- Dealer shops re-price off dealer_price, so a dealer_price change has to fire
+-- the cascade too — before this, raising it could leave a dealer's shelf price
+-- at or under their new cost, and those orders fail only after payment.
+DROP TRIGGER IF EXISTS trg_auto_update_shop_pricing ON public.data_packages;
+CREATE TRIGGER trg_auto_update_shop_pricing
+AFTER UPDATE OF price, agent_price, dealer_price ON public.data_packages
+FOR EACH ROW
+EXECUTE FUNCTION auto_update_shop_pricing_on_platform_cost();

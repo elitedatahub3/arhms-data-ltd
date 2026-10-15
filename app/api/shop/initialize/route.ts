@@ -22,6 +22,7 @@ import {
 } from '@/lib/paystack-momo-checkout'
 import { checkMtnRegistration, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 import { saveShopMeta, getShopMeta, deleteShopMeta } from '@/lib/shop-meta-store'
+import { ownerCostPrice } from '@/lib/shop-price-limits'
 
 // Redis client for distributed idempotency across all serverless instances.
 // In-memory Maps were removed — they reset on every Vercel cold start.
@@ -221,27 +222,17 @@ export async function POST(request: NextRequest) {
 
             sellingPrice = parseFloat(shopPrice.selling_price)
             const ownerRole = shop.owner?.role || 'customer'
-            const ownerIsAgentTier = ['agent', 'dealer'].includes(ownerRole)
 
-            // Use the correct cost price based on the owner's role tier
-            let tierPrice = 0
-            if (ownerRole === 'dealer' && parseFloat(pkg.dealer_price) > 0) {
-                tierPrice = parseFloat(pkg.dealer_price)
-            } else if (ownerRole === 'agent' && parseFloat(pkg.agent_price) > 0) {
-                tierPrice = parseFloat(pkg.agent_price)
-            }
-            const hasTierPrice = ownerIsAgentTier && tierPrice > 0
-            costPrice = hasTierPrice ? tierPrice : (parseFloat(pkg.price) || 0)
-            profit = hasTierPrice ? sellingPrice - costPrice : sellingPrice
+            // Same cost ladder lib/shop-order-processor.ts settles with.
+            costPrice = ownerCostPrice(pkg, ownerRole)
+            profit = Math.round((sellingPrice - costPrice) * 100) / 100
 
             if (sellingPrice <= 0) {
                 return NextResponse.json({ error: 'Invalid pricing configuration' }, { status: 400 })
             }
-            // Only enforce profit margin when a known cost price exists
-            if (!ownerIsAgentTier && profit <= 0) {
-                return NextResponse.json({ error: 'Invalid pricing configuration' }, { status: 400 })
-            }
-            if (hasTierPrice && profit < 0) {
+            // Refuse before the prompt goes out: settlement rejects profit ≤ 0, and
+            // by then the customer has already paid.
+            if (profit <= 0) {
                 return NextResponse.json({ error: 'Invalid pricing configuration' }, { status: 400 })
             }
 

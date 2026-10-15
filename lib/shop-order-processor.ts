@@ -7,6 +7,7 @@ import {
 import { creditShopProfit } from './shop-service'
 import { resolveSubAgentContext } from './sub-agents'
 import { resolveChainCosts, splitChainProfit } from './pricing/chain-cost'
+import { ownerCostPrice } from './shop-price-limits'
 import { shopFeeSettingKeys, resolveShopFeePercent } from './gateway-fees'
 import { sendPushToUser } from './web-push'
 import type { PaymentProvider } from './payment-provider'
@@ -238,20 +239,9 @@ async function settleShopOrder(
                 : Math.round(dbSellingPrice * (paystackFeePercent / 100) * 100) / 100
             expectedTotalPesewas = Math.round((dbSellingPrice + paystackFee) * 100)
             
-            const isDealerOwner = ownerRole === 'dealer' && parseFloat(pkg?.dealer_price) > 0
-            const isAgentOwner = ownerRole === 'agent' && parseFloat(pkg?.agent_price) > 0
-            
             verifiedSellingPrice = dbSellingPrice
-            
-            if (isDealerOwner) {
-                verifiedCostPrice = parseFloat(pkg?.dealer_price)
-            } else if (isAgentOwner) {
-                verifiedCostPrice = parseFloat(pkg?.agent_price)
-            } else {
-                verifiedCostPrice = parseFloat(pkg?.price) || 0
-            }
-            
-            verifiedProfit = dbSellingPrice - verifiedCostPrice
+            verifiedCostPrice = ownerCostPrice(pkg, ownerRole)
+            verifiedProfit = Math.round((dbSellingPrice - verifiedCostPrice) * 100) / 100
             adminCostAtTime = parseFloat(pkg?.cost_price) || 0
 
             // ── SUB-AGENT SPLIT ──────────────────────────────────────────────
