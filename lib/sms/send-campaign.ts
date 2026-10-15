@@ -29,6 +29,7 @@ import {
 } from '@/lib/sms/customer-sms'
 import { checkMessageContent, type SmsMode } from '@/lib/sms/sms-rules'
 import { dailyLimitFor, countSentToday } from '@/lib/sms/platform'
+import { sendPushToAdmins } from '@/lib/web-push'
 
 export const MAX_RECIPIENTS = 10000
 const DEFAULT_INLINE_MAX = 100
@@ -98,6 +99,21 @@ export async function sendCampaign(input: SendCampaignInput): Promise<SendCampai
     }
 
     const content = checkMessageContent(message, mode)
+    if (content.spoofedAlert) {
+        // Fake network/MoMo alerts are refused before any credits move, and
+        // admins are told who tried.
+        const { data: shop } = shopId
+            ? await db.from('shop_profiles').select('shop_name').eq('id', shopId).maybeSingle()
+            : { data: null }
+        const who = (shop as any)?.shop_name || `account ${account.id}`
+        console.warn(`[SmsSend] Blocked spoofed alert (${content.spoofedAlert}) via ${source} from ${who}: ${message.slice(0, 160)}`)
+        await sendPushToAdmins({
+            title: 'Blocked fake MTN/MoMo SMS',
+            body: `${who} tried to send ${content.spoofedAlert}: "${message.slice(0, 90)}"`,
+            url: '/admin/sms-senders',
+            tag: `sms-spoof-${account.id}`,
+        }).catch(() => {})
+    }
     if (!content.ok) {
         return fail(400, content.error!, { needsBusinessMode: !!content.needsBusinessMode })
     }
