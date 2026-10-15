@@ -102,6 +102,34 @@ const PAGE_SIZE = 10
 const FETCH_CHUNK = 500
 const MAX_ORDERS_LOADED = 5000
 
+// Supplier error codes worth a plain-English label on the order card.
+const FALLBACK_REASONS: Record<string, string> = {
+    not_allowlisted: 'number not approved',
+}
+
+/**
+ * The trail lib/supplier-router stores is describeAttempts() verbatim, which carries
+ * the supplier's whole customer-facing message ("0257… is not approved for MTN
+ * purchases. Nothing was charged. …"). On the card, keep supplier, outcome and a
+ * short reason: "BundlePortal refused: number not approved → Dakazina ✓". The full
+ * text stays in the tooltip.
+ */
+function shortFallbackTrail(trail: string): string {
+    return trail.split(' → ').map(step => {
+        // Names can contain spaces ("Eazy Data"); errors are cut at 200 chars, which
+        // can drop the closing parenthesis.
+        const m = step.match(/^(.+?) (refused|unknown) \(([\s\S]*)$/)
+        if (!m) return step
+        const [, name, outcome] = m
+        const error = m[3].replace(/\)$/, '')
+        const code = error.match(/\(HTTP \d+ ([a-z_]+)\)$/)?.[1]
+        const reason = code
+            ? FALLBACK_REASONS[code] || code.replace(/_/g, ' ')
+            : error.replace(/\s*\(HTTP \d+\)$/, '').split('. ')[0].slice(0, 40)
+        return `${name} ${outcome}: ${reason}`
+    }).join(' → ')
+}
+
 export default function FulfillmentPage() {
     const { dbUser } = useAuth()
 
@@ -2192,7 +2220,7 @@ export default function FulfillmentPage() {
                                                         </Badge>
                                                         {fallbackTrail && (
                                                             <p className="text-[10px] text-sky-700 dark:text-sky-400 font-semibold mt-1 leading-tight" title={fallbackTrail}>
-                                                                Fallback: {fallbackTrail}
+                                                                Fallback: {shortFallbackTrail(fallbackTrail)}
                                                             </p>
                                                         )}
                                                     </div>
