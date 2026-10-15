@@ -2,6 +2,7 @@
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { MAX_SHOP_PROFIT_GHS } from '@/lib/shop-price-limits'
 
 export async function GET() {
     try {
@@ -64,7 +65,8 @@ export async function POST(req: Request) {
 
         const { data: userData } = await supabase.from('users').select('role').eq('id', shopProfile.owner_id).single()
         const userRole = userData?.role || 'customer'
-        const maxDataProfit = userRole === 'agent' ? 10 : 5
+        // Owners price freely above cost — the limit only catches typos.
+        const maxDataProfit = MAX_SHOP_PROFIT_GHS
 
         // Fetch Admin Settings to properly calculate Airtime caps (Bypassing RLS via Service Role)
         const adminDb = createServerClient()
@@ -102,7 +104,7 @@ export async function POST(req: Request) {
                     return NextResponse.json({ error: 'Profit must be more than 0' }, { status: 400 })
                 }
                 if (item.profit_margin > maxDataProfit) {
-                    return NextResponse.json({ error: `Profit cannot exceed GHS ${maxDataProfit.toFixed(2)}` }, { status: 400 })
+                    return NextResponse.json({ error: `A profit over GHS ${maxDataProfit.toFixed(2)} looks like a typo — check the price` }, { status: 400 })
                 }
                 
                 if (!item.package_id || !item.selling_price) {

@@ -10,6 +10,8 @@
  * The client never sends a price; it is always re-derived server-side.
  */
 
+import { MAX_SHOP_PROFIT_GHS } from '@/lib/shop-price-limits'
+
 export const AFA_PRICE_KEYS = [
     'afa_price_customer',
     'afa_price_agent',
@@ -87,9 +89,9 @@ export async function resolveAfaCostPrice(
 /**
  * Maximum markup a shop owner may add on top of their cost price.
  *
- * Same rule already enforced for data packages (/api/shop/pricing) and results
- * checker vouchers (/api/shop/rc-pricing) — agents get more headroom.
+ * Owners price freely above cost; this is only the typo guard shared with data
+ * packages (/api/shop/pricing) and results checker vouchers (/api/shop/rc-pricing).
  */
-export function maxShopAfaProfit(ownerRole: string | null | undefined): number {
-    return ownerRole === 'agent' ? 10 : 5
+export function maxShopAfaProfit(_ownerRole?: string | null): number {
+    return MAX_SHOP_PROFIT_GHS
 }

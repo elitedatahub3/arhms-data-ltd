@@ -2,6 +2,7 @@
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { createServerClient } from '@/lib/supabase'
 import { cookies } from 'next/headers'
+import { MAX_SHOP_PROFIT_GHS } from '@/lib/shop-price-limits'
 
 export async function POST(request: NextRequest) {
     try {
@@ -31,15 +32,8 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Shop not found or unauthorized' }, { status: 403 })
         }
 
-        // 3. Fetch caller's role for max profit enforcement
-        const { data: dbUser } = await supabase
-            .from('users')
-            .select('role')
-            .eq('id', user.id)
-            .single()
-
-        const ownerRole = (dbUser as any)?.role || 'customer'
-        const maxProfit = ownerRole === 'agent' ? 10 : 5
+        // 3. Owners price freely above cost — the limit only catches typos
+        const maxProfit = MAX_SHOP_PROFIT_GHS
 
         // 4. Use service-role client to fetch cost prices and upsert (bypasses RLS)
         const db = createServerClient() as any
@@ -86,7 +80,7 @@ export async function POST(request: NextRequest) {
                 }
                 if (profit > maxProfit) {
                     return NextResponse.json({
-                        error: `Profit cannot exceed GHS ${maxProfit.toFixed(2)} per voucher`
+                        error: `A profit over GHS ${maxProfit.toFixed(2)} per voucher looks like a typo — check the price`
                     }, { status: 400 })
                 }
             }
