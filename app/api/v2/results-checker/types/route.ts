@@ -4,14 +4,16 @@ import {
     logApiRequest, getClientIp, enforceRateLimit,
 } from '@/lib/api-auth'
 import { getBasePrice, type RCType, type BulkTier } from '@/lib/vouchers/pricing'
+import { hasApiPrice } from '@/lib/api-pricing'
 
 /**
  * Result checker types, priced for this caller, with live stock.
  *
  * The purchase endpoint takes a type_id and never a price, so this is the catalogue
  * a partner builds their picker from — the same role/bulk pricing the dashboard
- * shows. `cost_price` is deliberately not selected: it is what we pay the supplier
- * and has never left the server.
+ * shows. Rows are read with '*' so a missing api_price column cannot fail the query,
+ * but the response is built field by field: `cost_price` is what we pay the supplier
+ * and never leaves the server.
  *
  * Stock is real, not advisory. Vouchers are sold from inventory we already hold, so
  * a type with `available: 0` will fail the purchase rather than back-order.
@@ -34,7 +36,7 @@ export async function GET(request: NextRequest) {
     const { userId, apiKeyId, userRole, supabase } = auth
 
     const { data: types } = await (supabase.from('results_checker_types') as any)
-        .select('id, name, customer_price, agent_price, dealer_price, bulk_pricing, is_active, display_order')
+        .select('*')
         .eq('is_active', true)
         .order('display_order', { ascending: true })
 
@@ -51,10 +53,15 @@ export async function GET(request: NextRequest) {
             // is immaterial here — but a bulk tier IS floored at cost during checkout,
             // which is why the advertised tier price is the raw tier value and the
             // purchase response returns the unit price actually charged.
+            //
+            // An admin-set API price replaces the role price for every caller; a bulk
+            // tier still applies at checkout when it is cheaper.
             return {
                 type_id:    type.id,
                 name:       type.name,
-                unit_price: getBasePrice({ ...type, cost_price: 0 } as RCType, userRole),
+                unit_price: hasApiPrice(type.api_price)
+                    ? Number(type.api_price)
+                    : getBasePrice({ ...type, cost_price: 0 } as RCType, userRole),
                 currency:   'GHS',
                 bulk_tiers: tiers.map(t => ({
                     min_qty:    t.min_qty,

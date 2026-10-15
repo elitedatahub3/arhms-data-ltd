@@ -4,14 +4,15 @@ import {
     logApiRequest, getClientIp, enforceRateLimit,
 } from '@/lib/api-auth'
 import { DATA_NETWORKS } from '@/lib/api-v2-networks'
+import { loadApiPricingContext, resolveApiDataPrice } from '@/lib/api-pricing'
 
 /**
  * Discovery endpoint: what can be bought, and at what price for THIS caller.
  *
  * v1 had no equivalent, so an integrator's only way to learn a valid
- * network/size pair was to guess and read the 404. Prices are role-resolved here for
- * the same reason /data/purchase resolves them server-side — an agent and a customer
- * pay different amounts for the same package.
+ * network/size pair was to guess and read the 404. Prices are resolved exactly as
+ * /data/purchase charges them — the admin-set API price, else the caller's role
+ * price (see lib/api-pricing.ts).
  */
 const ENDPOINT = '/api/v2/packages'
 
@@ -39,7 +40,7 @@ export async function GET(request: NextRequest) {
     }
 
     let query = (supabase.from('data_packages') as any)
-        .select('id, network, size, price, agent_price')
+        .select('*')
         .eq('is_available', true)
         .order('network', { ascending: true })
 
@@ -52,17 +53,7 @@ export async function GET(request: NextRequest) {
         return apiError(500, 'Failed to load packages')
     }
 
-    // Same rule as /data/purchase: agent pricing only while the agent subscription
-    // is live, so a lapsed agent is quoted what they will actually be charged.
-    const { data: userExpiry } = await supabase
-        .from('users')
-        .select('agent_expires_at')
-        .eq('id', userId)
-        .single()
-
-    const agentExpired = (userExpiry as any)?.agent_expires_at
-        && new Date((userExpiry as any).agent_expires_at) < new Date()
-    const isActiveAgent = userRole === 'agent' && !agentExpired
+    const pricing = await loadApiPricingContext(supabase, userId, userRole)
 
     const parseVolume = (size: string): number | null => {
         const match = String(size).match(/([\d.]+)/)
@@ -76,7 +67,7 @@ export async function GET(request: NextRequest) {
         network:   p.network,
         size:      p.size,
         volume_gb: parseVolume(p.size),
-        price:     isActiveAgent && p.agent_price > 0 ? p.agent_price : p.price,
+        price:     resolveApiDataPrice(p, pricing),
         currency:  'GHS',
     }))
 

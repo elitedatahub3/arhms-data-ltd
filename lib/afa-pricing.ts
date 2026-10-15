@@ -84,6 +84,29 @@ export async function resolveAfaCostPrice(
     return { ok: true, price, key }
 }
 
+/** admin_settings key for the flat price every v2 API caller pays, whatever their role. */
+export const AFA_API_PRICE_KEY = 'afa_price_api'
+
+/**
+ * Resolves the AFA price for a v2 API caller: the admin-set API price when there is
+ * one, otherwise the caller's ordinary role price. See lib/api-pricing.ts.
+ */
+export async function resolveAfaApiPrice(
+    db: any,
+    role: string | null | undefined
+): Promise<AfaPriceResult> {
+    const { data } = await db
+        .from('admin_settings')
+        .select('value')
+        .eq('key', AFA_API_PRICE_KEY)
+        .maybeSingle()
+
+    const price = parseFloat((data as any)?.value ?? '')
+    if (price > 0) return { ok: true, price, key: AFA_API_PRICE_KEY }
+
+    return resolveAfaCostPrice(db, role)
+}
+
 /**
  * Maximum markup a shop owner may add on top of their cost price.
  *
