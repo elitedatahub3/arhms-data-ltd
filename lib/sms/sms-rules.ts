@@ -160,6 +160,24 @@ export function validateSenderId(name: string): SenderIdCheck {
     return { ok: true }
 }
 
+/**
+ * The blocked word a sender name carries, or null if it carries none. The same
+ * rule validateSenderId applies at request time, re-run at send time against
+ * names that predate it or were set by hand.
+ */
+export function findBlockedSenderWord(name: string): string | null {
+    const upper = (name ?? '').trim().toUpperCase()
+    const squashed = upper.replace(/\s+/g, '')
+    for (const word of BLOCKED_SUBSTRINGS) {
+        if (squashed.includes(word)) return word
+    }
+    const words = upper.split(/[^A-Z0-9]+/)
+    for (const word of BLOCKED_WORDS) {
+        if (words.includes(word)) return word
+    }
+    return null
+}
+
 // ============================================================
 // RECIPIENTS
 // ============================================================
@@ -220,11 +238,43 @@ function findFraud(text: string): string | null {
     return null
 }
 
+/**
+ * Wording that only a network or Mobile Money ever sends. A message carrying it
+ * is a fake alert — "Your Account has been credited with 1 GB" or "Payment made
+ * for GHS 20.00 … Transaction ID: …" — used to convince a buyer they were paid
+ * or delivered to when they were not. Each pattern is specific to an alert's own
+ * phrasing, so ordinary promos ("Buy 1GB MTN data for GHS 5, valid 30 days")
+ * still pass. Refused in every mode, like the scam scripts above.
+ */
+const CEDI = String.raw`(?:gh\s*(?:s|c|₵|¢)|₵|¢|cedis?)`
+const SPOOFED_ALERT_PATTERNS: { label: string; re: RegExp }[] = [
+    { label: 'an account-credited alert', re: /\b(?:account|wallet|line|number)\s+has\s+been\s+credited\b/i },
+    { label: 'a data/money credit alert', re: new RegExp(String.raw`\bcredited\s+with\s+(?:${CEDI}\s*)?[\d.,]+\s*(?:gb|mb|${CEDI})?`, 'i') },
+    { label: 'a Mobile Money payment alert', re: new RegExp(String.raw`\bpayment\s+(?:made|received|sent)\s+(?:for|of)\s+${CEDI}`, 'i') },
+    { label: 'a Mobile Money receipt', re: new RegExp(String.raw`\b(?:you\s+have\s+)?received\s+${CEDI}\s*[\d.,]+\s+from\b`, 'i') },
+    { label: 'a balance notice', re: new RegExp(String.raw`\b(?:current|available|new)\s+balance\s*(?:is|:)?\s*${CEDI}`, 'i') },
+    { label: 'a transaction ID', re: /\b(?:financial\s+)?transaction\s+id\s*[:#.]?\s*\d{6,}/i },
+    { label: 'a Mobile Money charge line', re: new RegExp(String.raw`\b(?:fee|tax)\s+charged\s*:?\s*${CEDI}`, 'i') },
+    { label: 'a Mobile Money cash alert', re: /\bcash\s*[- ]?(?:in|out)\s+(?:received|of|made|successful)\b/i },
+    { label: 'a link to the MoMo app', re: /mtnmymomo|momo\s*app/i },
+]
+
+function findSpoofedAlert(text: string): string | null {
+    // Zero-width characters are the usual way to slip a phrase past a filter.
+    const normalised = text.replace(/[​-‍⁠﻿]/g, '').replace(/\s+/g, ' ')
+    for (const { label, re } of SPOOFED_ALERT_PATTERNS) {
+        if (re.test(normalised)) return label
+    }
+    return null
+}
+
 export interface ContentCheck {
     ok: boolean
     error?: string
     /** Set when the only problem is a link, so the UI can point at Business Mode. */
     needsBusinessMode?: boolean
+    /** Which network/MoMo alert the message imitated, for logs and the admin alert. */
+    spoofedAlert?: string
 }
 
 /**
@@ -235,6 +285,15 @@ export interface ContentCheck {
  */
 export function checkMessageContent(message: string, mode: SmsMode): ContentCheck {
     const text = message ?? ''
+
+    const spoofed = findSpoofedAlert(text)
+    if (spoofed) {
+        return {
+            ok: false,
+            spoofedAlert: spoofed,
+            error: `This message looks like ${spoofed} from MTN or Mobile Money. SMS cannot imitate network or Mobile Money alerts — write it as a message from your business.`,
+        }
+    }
 
     const fraud = findFraud(text)
     if (fraud) {
