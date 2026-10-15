@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteClient } from '@/lib/supabase-server'
 import { calculateRCPrice, getRCTypeById } from '@/lib/vouchers/pricing'
+import { isApiUserRow } from '@/lib/api-pricing'
 import { initiatePayment, MOOLRE_PAYMENT_CHANNEL_MAP } from '@/lib/moolre-payment-service'
 import { initiatePayment as hubtelInitiatePayment, HUBTEL_CHANNEL_MAP, toHubtelMsisdn } from '@/lib/hubtel-payment-service'
 import { checkHubtelPromptLimit, recordHubtelPrompt } from '@/lib/hubtel-prompt-limit'
@@ -27,16 +28,19 @@ export async function POST(request: NextRequest) {
         const { data: { session } } = await supabase.auth.getSession()
         let userId = null
         let userRole = 'customer'
+        let apiUser = false
 
         if (session) {
             userId = session.user.id
             const { data: userProfile } = await supabase
                 .from('users')
-                .select('role')
+                // '*' so a database without is_api_user still works (lib/api-pricing.ts).
+                .select('*')
                 .eq('id', userId)
                 .single()
             if (userProfile) {
                 userRole = (userProfile as any).role || 'customer'
+                apiUser = isApiUserRow(userProfile)
             }
         }
 
@@ -78,6 +82,7 @@ export async function POST(request: NextRequest) {
             type,
             quantity,
             userRole,
+            apiUser,
             includePaystackFee: gateway === 'paystack' || gateway === 'paystack_momo' || gateway === 'payswitch',
         })
 

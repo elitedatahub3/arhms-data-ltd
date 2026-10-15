@@ -37,7 +37,8 @@ import {
     Calendar,
     Mail,
     Download,
-    KeyRound
+    KeyRound,
+    Code2
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Label } from '@/components/ui/label'
@@ -183,6 +184,30 @@ export default function AdminUsersPage() {
             toast.error(error.message || 'Failed to update user status')
         } finally {
             setLoading(false)
+        }
+    }
+
+    // API user is a switch, not a role: the user keeps their role, can use the
+    // developer API, and pays API prices — see lib/api-pricing.ts.
+    const handleApiUserChange = async (userId: string, enabled: boolean) => {
+        const prompt = enabled
+            ? 'Make this user an API user? They will be able to use the developer API and will pay API prices.'
+            : 'Remove API user? Their API key will stop working and they will pay their normal role prices.'
+        if (!confirm(prompt)) return
+        try {
+            const response = await fetch('/api/admin/users/api-user', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, enabled })
+            })
+            const result = await response.json()
+            if (!response.ok) throw new Error(result.error || 'Failed to update API user')
+
+            setUsers(prev => Array.isArray(prev) ? prev.map(u => u.id === userId ? { ...u, is_api_user: enabled } : u) : [])
+            toast.success(enabled ? 'User is now an API user' : 'API user removed')
+        } catch (error: any) {
+            console.error('API user change error:', error)
+            toast.error(error.message || 'Failed to update API user')
         }
     }
 
@@ -395,13 +420,13 @@ export default function AdminUsersPage() {
                                                     <Badge className="text-white" style={{ backgroundColor: roleConfig[user.role as UserRole]?.color || '#0056B3' }}>
                                                         {user.role.toUpperCase()}
                                                     </Badge>
-                                                    {user.api_key_status && (
-                                                        <Badge
-                                                            variant="outline"
-                                                            className={user.api_key_status === 'active' ? 'border-sky-500 text-sky-600' : 'border-amber-500 text-amber-600'}
-                                                            title={user.api_key_status === 'active' ? 'Has an approved API key' : 'API key awaiting approval'}
-                                                        >
-                                                            {user.api_key_status === 'active' ? 'API' : 'API · PENDING'}
+                                                    {user.is_api_user ? (
+                                                        <Badge variant="outline" className="border-sky-500 text-sky-600" title="API user — pays API prices and can use the developer API">
+                                                            API
+                                                        </Badge>
+                                                    ) : user.api_key_status && (
+                                                        <Badge variant="outline" className="border-amber-500 text-amber-600" title="Requested an API key but is not an API user yet">
+                                                            KEY REQUESTED
                                                         </Badge>
                                                     )}
                                                     <div className={`h-2 w-2 rounded-full ${user.status === 'active' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
@@ -439,6 +464,10 @@ export default function AdminUsersPage() {
                                                         {user.role === 'dealer' ? 'Extend' : 'Make'} Dealer ({months} Month{months > 1 ? 's' : ''})
                                                     </DropdownMenuItem>
                                                 ))}
+                                                <DropdownMenuLabel className="text-xs text-muted-foreground pt-2">Developer API</DropdownMenuLabel>
+                                                <DropdownMenuItem onClick={() => handleApiUserChange(user.id, !user.is_api_user)} className={user.is_api_user ? 'text-orange-600' : 'text-sky-600'}>
+                                                    <Code2 className="w-4 h-4 mr-2" /> {user.is_api_user ? 'Remove API User' : 'Make API User'}
+                                                </DropdownMenuItem>
                                                 <div className="h-px bg-border my-1" />
                                                 <DropdownMenuItem onClick={() => handleResetPassword(user.id, `${user.first_name} ${user.last_name}`)} className="text-blue-600">
                                                     <KeyRound className="w-4 h-4 mr-2" /> Reset Password

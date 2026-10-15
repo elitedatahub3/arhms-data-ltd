@@ -1,16 +1,15 @@
 /**
- * Developer API (v2) pricing.
+ * API-user pricing.
  *
- * The admin can set an API price per product. When set, EVERY API caller pays it —
- * customer, agent and dealer alike; the caller's role is ignored. When it is not set
- * (NULL or 0), the caller pays their ordinary role price, the same tiers the
- * dashboard uses: dealer → agent → base.
+ * An admin switches an account on as an API user (users.is_api_user). Only API
+ * users can call the developer API, and they pay the admin-set API price for a
+ * product — customer, agent and dealer alike — both over the API and on the
+ * dashboard (data, results checker, AFA). When a product has no API price (NULL or
+ * 0), they pay their ordinary role price: dealer → agent → base.
  *
- * Only the /api/v2 routes read these columns. Dashboard and storefront pricing never
- * see them.
+ * Everyone else never sees these prices. Storefront and sub-agent pricing ignore
+ * them.
  */
-
-import { findMatchingTier, type BulkTier } from '@/lib/vouchers/pricing'
 
 export interface ApiPricingContext {
     userRole: string
@@ -49,6 +48,20 @@ export function hasApiPrice(value: unknown): boolean {
     return Number(value) > 0
 }
 
+/** True when a users row (read with '*') is switched on as an API user. */
+export function isApiUserRow(row: any): boolean {
+    return row?.is_api_user === true
+}
+
+/**
+ * Whether `userId` is an API user. Reads with '*' so a database without the
+ * is_api_user column answers false instead of failing the caller's request.
+ */
+export async function fetchIsApiUser(supabase: any, userId: string): Promise<boolean> {
+    const { data } = await supabase.from('users').select('*').eq('id', userId).maybeSingle()
+    return isApiUserRow(data)
+}
+
 /**
  * What an API caller pays for a data package.
  *
@@ -63,29 +76,8 @@ export function resolveApiDataPrice(pkg: any, ctx: ApiPricingContext): number {
     return pkg.price
 }
 
-/**
- * Fixed unit price for a results-checker API purchase, or null to fall back to the
- * ordinary role/bulk pricing.
- *
- * A bulk tier still applies when it is cheaper than the API price, so a partner
- * buying in volume keeps the volume discount. Tier prices are floored at cost, the
- * same as calculateRCPrice does.
- */
-export function resolveApiRcUnitPrice(
-    type: { api_price?: number | null; cost_price?: number; bulk_pricing?: BulkTier[] | null },
-    quantity: number
-): number | null {
-    if (!hasApiPrice(type.api_price)) return null
-    const apiPrice = Number(type.api_price)
-
-    const tiers = Array.isArray(type.bulk_pricing) ? type.bulk_pricing : []
-    const tier = findMatchingTier(tiers, quantity)
-    if (tier) {
-        const tierPrice = Math.max(tier.unit_price, type.cost_price ?? 0)
-        if (tierPrice < apiPrice) return tierPrice
-    }
-    return apiPrice
-}
+// Results checker: the API price is applied inside calculateRCPrice (apiUser), so
+// wallet, direct-pay and v2 purchases share one rule.
 
 /** admin_settings key holding the API airtime fee % for a network (mtn, telecel, at). */
 export function airtimeApiFeeKey(networkKey: string): string {

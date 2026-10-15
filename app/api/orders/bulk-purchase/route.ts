@@ -13,6 +13,7 @@ import {
     type FulfillmentConfig,
 } from '@/lib/supplier-router'
 import { updateOrderWithColumnFallback } from '@/lib/order-update-fallback'
+import { hasApiPrice, isApiUserRow } from '@/lib/api-pricing'
 
 // Lazy-init so a missing env var or exhausted Redis limit does not crash the module
 let bulkRateLimit: Ratelimit | null = null
@@ -120,7 +121,8 @@ export async function POST(request: NextRequest) {
         // === 1. Get user role ===
         const { data: userRoleData } = await supabase
             .from('users')
-            .select('role, email, first_name, last_name')
+            // '*' so a database without is_api_user still works (lib/api-pricing.ts).
+            .select('*')
             .eq('id', userId)
             .single()
 
@@ -150,9 +152,12 @@ export async function POST(request: NextRequest) {
             const pkg = pkgMap.get(order.packageId)
             if (!pkg) return { ...order, error: 'Package not found' }
 
-            const authoritativePrice = (isAgent && (pkg as any).agent_price > 0)
-                ? (pkg as any).agent_price
-                : (pkg as any).price
+            // API users pay the admin-set API price when set — lib/api-pricing.ts.
+            const authoritativePrice = (isApiUserRow(userRoleData) && hasApiPrice((pkg as any).api_price))
+                ? Number((pkg as any).api_price)
+                : (isAgent && (pkg as any).agent_price > 0)
+                    ? (pkg as any).agent_price
+                    : (pkg as any).price
 
             return {
                 ...order,
