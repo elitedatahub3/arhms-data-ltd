@@ -549,7 +549,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     }
                 } else if (data.status === 'failed') {
                     stop()
-                    setErrorMsg(data.message || 'Payment failed or cancelled.')
+                    setErrorMsg(data.message || 'Payment not completed — the prompt was declined, timed out, or the balance was too low. No money was taken; please try again.')
                 } else if (data.status === 'paid_issue') {
                     // Paid; the order is being finished server-side. Never "failed".
                     stop()

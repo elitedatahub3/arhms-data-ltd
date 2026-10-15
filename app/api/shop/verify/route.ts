@@ -20,6 +20,13 @@ import { clearPaystackMomoPending } from '@/lib/paystack-momo-checkout'
  * Rule: "failed" only ever comes from the gateway. Nothing missing or broken on
  * our side may tell a buyer whose money moved that their payment failed.
  */
+
+/** The gateway's reason, with what the buyer actually needs to know around it. */
+function failedMessage(reason: string): string {
+    const clean = reason.trim().replace(/[.\s]+$/, '').slice(0, 120)
+    return `Payment not completed: ${clean}. No money was taken — please try again.`
+}
+
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const ref = searchParams.get('ref')
@@ -82,7 +89,11 @@ export async function GET(request: NextRequest) {
             const verified = await verifyTransaction(ref)
             // 'abandoned' is not trusted as final here: Paystack can report it while a
             // MoMo prompt is still on the handset. The cron decides after the cutoff.
-            if (verified.outcome === 'failed' && verified.rawStatus !== 'abandoned') return respond('failed')
+            if (verified.outcome === 'failed' && verified.rawStatus !== 'abandoned') {
+                // Paystack's gateway_response ("Insufficient funds", "Declined by
+                // user", "Transaction timed out") is the only clue the buyer gets.
+                return respond('failed', verified.message ? { message: failedMessage(verified.message) } : {})
+            }
             if (verified.outcome !== 'paid') return respond('pending')
             paidAmountPesewas = verified.amountPesewas
         } else if (provider === 'moolre' || !provider) {
