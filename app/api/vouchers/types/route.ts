@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
+import { fetchIsApiUser } from '@/lib/api-pricing'
 
 // GET: Fetch active voucher types with stock counts — accessible to any authenticated user
 export async function GET() {
@@ -14,14 +15,18 @@ export async function GET() {
 
         const db = createServerClient() as any
 
-        // Fetch only active types
+        // Fetch only active types. '*' so a database without api_price still works;
+        // the response below is built without cost_price.
         const { data: types, error } = await db
             .from('results_checker_types')
-            .select('id, name, customer_price, agent_price, dealer_price, bulk_pricing, is_active, display_order')
+            .select('*')
             .eq('is_active', true)
             .order('display_order', { ascending: true })
 
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+        // The API price is shown only to API users — it is what they are charged.
+        const apiUser = await fetchIsApiUser(db, user.id)
 
         // Attach stock counts for each active type
         const typesWithStock = await Promise.all(
@@ -33,7 +38,14 @@ export async function GET() {
                     .eq('status', 'available')
 
                 return {
-                    ...type,
+                    id: type.id,
+                    name: type.name,
+                    customer_price: type.customer_price,
+                    agent_price: type.agent_price,
+                    dealer_price: type.dealer_price,
+                    api_price: apiUser && Number(type.api_price) > 0 ? Number(type.api_price) : null,
+                    is_active: type.is_active,
+                    display_order: type.display_order,
                     bulk_pricing: Array.isArray(type.bulk_pricing) ? type.bulk_pricing : [],
                     stock: { available: available || 0 }
                 }

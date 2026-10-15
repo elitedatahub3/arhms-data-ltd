@@ -7,7 +7,6 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { calculateRCPrice, getRCTypeById } from '@/lib/vouchers/pricing'
-import { resolveApiRcUnitPrice } from '@/lib/api-pricing'
 import { creditShopRcProfit } from '@/lib/shop-service'
 
 export interface RCVoucher {
@@ -54,8 +53,8 @@ export async function purchaseWithWallet(params: {
     /** API key that placed the order. Null for dashboard and sub-agent purchases. */
     apiKeyId?: string
     /**
-     * Charge the admin-set API price when the type has one (v2 API only). Falls
-     * back to role/bulk pricing when it does not — see lib/api-pricing.ts.
+     * The buyer is an API user: charge the admin-set API price when the type has
+     * one, else role/bulk pricing — see calculateRCPrice and lib/api-pricing.ts.
      */
     apiPricing?: boolean
 }): Promise<WalletPurchaseResult> {
@@ -77,7 +76,6 @@ export async function purchaseWithWallet(params: {
     // checked here.
     let breakdown: Awaited<ReturnType<typeof calculateRCPrice>>
     let shopMarkup = 0
-    const apiUnitPrice = apiPricing ? resolveApiRcUnitPrice(type, quantity) : null
 
     if (unitPriceOverride != null) {
         if (!(unitPriceOverride > 0) || unitPriceOverride < type.cost_price) {
@@ -94,23 +92,8 @@ export async function purchaseWithWallet(params: {
             total: subtotal,
         }
         shopMarkup = parseFloat(((unitPriceOverride - type.cost_price) * quantity).toFixed(2))
-    } else if (apiPricing && apiUnitPrice != null) {
-        // Platform price, not a Lead's: no shop markup to record or credit.
-        if (apiUnitPrice < type.cost_price) {
-            throw new Error('PRICING_ERROR_UNIT_BELOW_COST')
-        }
-        const subtotal = parseFloat((apiUnitPrice * quantity).toFixed(2))
-        breakdown = {
-            unitPrice: apiUnitPrice,
-            isBulk: apiUnitPrice !== Number(type.api_price),
-            matchedTier: null,
-            shopMarkup: 0,
-            subtotal,
-            paystackFee: 0,
-            total: subtotal,
-        }
     } else {
-        breakdown = await calculateRCPrice({ type, quantity, userRole })
+        breakdown = await calculateRCPrice({ type, quantity, userRole, apiUser: !!apiPricing })
     }
 
     // 2. Atomically deduct wallet balance via existing RPC

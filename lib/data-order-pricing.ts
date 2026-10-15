@@ -11,6 +11,7 @@ import {
     SUB_INACTIVE_ERROR,
     UPLINE_INELIGIBLE_ERROR,
 } from './sub-agents'
+import { hasApiPrice, isApiUserRow } from './api-pricing'
 
 export interface ResolvedDataPrice {
     price: number
@@ -45,7 +46,8 @@ export async function resolveDataPrice(
     // Get user role + sub-agent status for price calculation
     const { data: userRoleData } = await supabase
         .from('users')
-        .select('role, agent_expires_at, dealer_expires_at')
+        // '*' so a database without is_api_user (migration 20261015010000) still works.
+        .select('*')
         .eq('id', userId)
         .single()
 
@@ -96,8 +98,11 @@ export async function resolveDataPrice(
         }
     }
 
-    // Regular user: apply role-based pricing
-    const price = (isDealer && (pkg as any).dealer_price > 0)
+    // API users pay the admin-set API price when the package has one — see
+    // lib/api-pricing.ts. Otherwise, role-based pricing.
+    const price = (isApiUserRow(userRoleData) && hasApiPrice((pkg as any).api_price))
+        ? Number((pkg as any).api_price)
+        : (isDealer && (pkg as any).dealer_price > 0)
         ? (pkg as any).dealer_price
         : (isAgent && (pkg as any).agent_price > 0)
             ? (pkg as any).agent_price

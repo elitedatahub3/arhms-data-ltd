@@ -529,7 +529,7 @@ export default function DocsClient() {
                             <p className="font-bold text-foreground">Getting a key</p>
                             <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
                                 {[
-                                    'Log in and open Dashboard → Developer API. Any active account can request a key — customer, agent or dealer.',
+                                    'Log in and open Dashboard → Developer API. Any account can request a key — customer, agent or dealer — but it only works once an admin has enabled your account as an API user.',
                                     'Generate a Standard or Commission Services key.',
                                     'Copy it immediately. It is shown once and stored only as a hash — it cannot be shown again.',
                                     'New keys wait for admin approval. Until then, requests return 403 "API key pending admin approval".',
