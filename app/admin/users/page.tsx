@@ -348,6 +348,7 @@ export default function AdminUsersPage() {
                                 <SelectItem value="agent">Agent</SelectItem>
                                 <SelectItem value="dealer">Dealer</SelectItem>
                                 <SelectItem value="customer">Customer</SelectItem>
+                                <SelectItem value="api">API Users</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
@@ -394,6 +395,15 @@ export default function AdminUsersPage() {
                                                     <Badge className="text-white" style={{ backgroundColor: roleConfig[user.role as UserRole]?.color || '#0056B3' }}>
                                                         {user.role.toUpperCase()}
                                                     </Badge>
+                                                    {user.api_key_status && (
+                                                        <Badge
+                                                            variant="outline"
+                                                            className={user.api_key_status === 'active' ? 'border-sky-500 text-sky-600' : 'border-amber-500 text-amber-600'}
+                                                            title={user.api_key_status === 'active' ? 'Has an approved API key' : 'API key awaiting approval'}
+                                                        >
+                                                            {user.api_key_status === 'active' ? 'API' : 'API · PENDING'}
+                                                        </Badge>
+                                                    )}
                                                     <div className={`h-2 w-2 rounded-full ${user.status === 'active' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
                                                 </div>
                                             </div>
