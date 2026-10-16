@@ -44,6 +44,21 @@ let upstreamCalls = 0
 /** BundlePortal's verify_number — a second opinion that can only let a number through. */
 let bundlePortalMode: UpstreamMode = 'deny'
 let bundlePortalCalls = 0
+/** How long each stubbed server takes to answer. Honours the caller's timeoutMs like a real abort. */
+let upstreamDelayMs = 0
+let bundlePortalDelayMs = 0
+
+/** Wait `delayMs`, or reject at `timeoutMs` first — what AbortSignal.timeout does to fetch. */
+function answerAfter(delayMs: number, timeoutMs?: number): Promise<void> {
+    if (delayMs <= 0) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+        if (timeoutMs && timeoutMs < delayMs) {
+            setTimeout(() => reject(new Error('The operation was aborted due to timeout')), timeoutMs)
+        } else {
+            setTimeout(resolve, delayMs)
+        }
+    })
+}
 
 const REPO_ROOT = path.resolve(__dirname, '..')
 
@@ -51,8 +66,14 @@ const originalLoad = (Module as any)._load
 ;(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
     if (request === '@/lib/agentportal-service') {
         return {
-            verifyMtnWhitelist: async (msisdns: string[]) => {
+            verifyMtnWhitelist: async (msisdns: string[], options?: { timeoutMs?: number }) => {
                 upstreamCalls++
+                try {
+                    await answerAfter(upstreamDelayMs, options?.timeoutMs)
+                } catch (e: any) {
+                    // The real client catches the abort and reports a failure.
+                    return { success: false, allowed: new Set<string>(), error: e.message }
+                }
                 if (upstreamMode === 'fail') {
                     return { success: false, allowed: new Set<string>(), error: 'stubbed outage' }
                 }
@@ -65,8 +86,13 @@ const originalLoad = (Module as any)._load
     }
     if (request === '@/lib/bundleportal-service') {
         return {
-            verifyMtnNumbers: async (msisdns: string[]) => {
+            verifyMtnNumbers: async (msisdns: string[], _concurrency?: number, options?: { timeoutMs?: number }) => {
                 bundlePortalCalls++
+                try {
+                    await answerAfter(bundlePortalDelayMs, options?.timeoutMs)
+                } catch (e: any) {
+                    return { success: false, allowed: new Set<string>(), inFlight: new Set<string>(), failed: new Set(msisdns), error: e.message }
+                }
                 if (bundlePortalMode === 'fail') {
                     return { success: false, allowed: new Set<string>(), inFlight: new Set<string>(), failed: new Set(msisdns), error: 'stubbed outage' }
                 }
@@ -284,6 +310,48 @@ async function main() {
             failed++
         }
     }
+
+    // ── Per-server budgets (USSD) ────────────────────────────────────────────────
+    // Each server gets its own budget, and the first "registered" settles it. These
+    // use the strict path's real defaults, so they take a few seconds of wall time.
+    console.log('')
+    const timingCases: Array<{
+        name: string; ap: UpstreamMode; apDelay: number; bp: UpstreamMode; bpDelay: number
+        wantBlocked: boolean; wantReason?: string; maxMs: number; minMs?: number
+    }> = [
+        { name: 'Server 2 says yes after 3s, Server 1 says no at once -> allowed (was refused at 1.5s)',
+          ap: 'deny', apDelay: 0, bp: 'allow', bpDelay: 3000, wantBlocked: false, maxMs: 3600, minMs: 2900 },
+        { name: 'Server 2 says yes at once, Server 1 hangs 3s -> allowed without waiting',
+          ap: 'allow', apDelay: 3000, bp: 'allow', bpDelay: 0, wantBlocked: false, maxMs: 500 },
+        { name: 'Server 1 says yes at once, Server 2 hangs -> allowed without waiting',
+          ap: 'allow', apDelay: 0, bp: 'deny', bpDelay: 3000, wantBlocked: false, maxMs: 500 },
+        { name: 'Server 1 no at once, Server 2 no after 1s -> waits for both, REFUSED unregistered',
+          ap: 'deny', apDelay: 0, bp: 'deny', bpDelay: 1000, wantBlocked: true, wantReason: 'unregistered', maxMs: 1600, minMs: 900 },
+        { name: 'both servers past their budgets -> REFUSED unverifiable inside ~4s',
+          ap: 'allow', apDelay: 9000, bp: 'allow', bpDelay: 9000, wantBlocked: true, wantReason: 'unverifiable', maxMs: 4600, minMs: 3900 },
+    ]
+    for (const tc of timingCases) {
+        upstreamMode = tc.ap; upstreamDelayMs = tc.apDelay
+        bundlePortalMode = tc.bp; bundlePortalDelayMs = tc.bpDelay
+        const started = Date.now()
+        const r = await checkMtnRegistrationStrict(makeSupabase({}), MTN, 'MTN', { enabled: true })
+        const ms = Date.now() - started
+        const problems: string[] = []
+        if (r.blocked !== tc.wantBlocked) problems.push(`blocked=${r.blocked}, want ${tc.wantBlocked}`)
+        if (tc.wantReason && r.reason !== tc.wantReason) problems.push(`reason=${r.reason}, want ${tc.wantReason}`)
+        if (ms > tc.maxMs) problems.push(`took ${ms}ms, want <= ${tc.maxMs}ms`)
+        if (tc.minMs && ms < tc.minMs) problems.push(`took ${ms}ms, want >= ${tc.minMs}ms`)
+        if (problems.length === 0) {
+            console.log(`  PASS  ${tc.name} (${ms}ms)`)
+            passed++
+        } else {
+            console.log(`  FAIL  ${tc.name}`)
+            for (const p of problems) console.log(`          ${p}`)
+            failed++
+        }
+    }
+    upstreamDelayMs = 0
+    bundlePortalDelayMs = 0
 
     // The messages are read off a feature-phone screen and sent through Hubtel, which
     // throws on non-ASCII and truncates past ~160 chars.
