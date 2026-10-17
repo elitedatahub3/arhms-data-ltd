@@ -10,6 +10,7 @@
  */
 
 import type { SmsMode } from '@/lib/sms/sms-rules'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 
 export const SMS_PLATFORM_SETTING_KEYS = [
     'sms_daily_limit_platform',
@@ -165,4 +166,30 @@ export async function fetchBundles(db: any, audience: BundleAudience): Promise<{
 /** Which price list a bundle row belongs to; rows from before the column are shop bundles. */
 export function bundleAudienceOf(row: { audience?: string | null } | null | undefined): BundleAudience {
     return row?.audience === 'platform' ? 'platform' : 'shop'
+}
+
+/** Sends, recipients and credits over the last 30 days, for the SMS Platform hub. */
+export async function getStats30d(db: any, accountId: string): Promise<{ campaigns: number; recipients: number; creditsUsed: number }> {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    // Paged: a busy API integration can pass PostgREST's 1000-row page in a month.
+    const { data, error } = await fetchAllRows<{ recipients_count: number; credits_charged: number }>(() =>
+        db
+            .from('sms_campaigns')
+            .select('recipients_count, credits_charged')
+            .eq('account_id', accountId)
+            .gte('created_at', since)
+            .order('created_at', { ascending: false })
+    )
+    if (error) {
+        console.error('[SmsPlatform] 30-day stats failed:', error.message ?? error)
+        return { campaigns: 0, recipients: 0, creditsUsed: 0 }
+    }
+    return data.reduce(
+        (acc, row) => ({
+            campaigns: acc.campaigns + 1,
+            recipients: acc.recipients + (Number(row.recipients_count) || 0),
+            creditsUsed: acc.creditsUsed + (Number(row.credits_charged) || 0),
+        }),
+        { campaigns: 0, recipients: 0, creditsUsed: 0 }
+    )
 }

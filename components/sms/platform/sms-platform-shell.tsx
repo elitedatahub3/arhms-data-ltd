@@ -34,6 +34,7 @@ export interface SmsPlatformAccount {
     dailyLimit: number
     sentToday: number
     senderCap: number
+    stats30d?: { campaigns: number; recipients: number; creditsUsed: number }
     account: {
         status: 'locked' | 'active' | 'suspended'
         credits: number
@@ -102,8 +103,10 @@ export function SmsPlatformProvider({ children }: { children: ReactNode }) {
     )
 }
 
-export function SmsPageHeader({ title, description, icon: Icon, backHref = '/dashboard/sms', backLabel = 'SMS Platform', action }: {
+export function SmsPageHeader({ title, description, icon: Icon, backHref = '/dashboard/sms', backLabel = 'SMS Platform', action, badge }: {
     title: string
+    /** Small pill after the title, e.g. the account mode. */
+    badge?: ReactNode
     description: string
     icon: any
     backHref?: string
@@ -124,7 +127,7 @@ export function SmsPageHeader({ title, description, icon: Icon, backHref = '/das
                 )}
             </div>
             <div>
-                <h1 className="text-2xl font-black flex items-center gap-2"><Icon className="w-6 h-6 text-emerald-600" /> {title}</h1>
+                <h1 className="text-2xl font-black flex flex-wrap items-center gap-2"><Icon className="w-6 h-6 text-emerald-600" /> {title}{badge}</h1>
                 <p className="text-sm text-muted-foreground">{description}</p>
             </div>
         </div>
