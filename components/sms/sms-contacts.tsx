@@ -43,6 +43,7 @@ export interface SmsGroup {
     name: string
     memberCount: number
     system: boolean
+    createdAt?: string
 }
 
 const PAGE_SIZE = 100
@@ -61,7 +62,7 @@ export function formatGhanaPhone(phone: string) {
  * columns all turn up in real exports. Anything that is not obviously a number
  * is sent anyway and reported back as invalid by the server.
  */
-function parseContactsText(text: string): { phone: string; name: string | null }[] {
+export function parseContactsText(text: string): { phone: string; name: string | null }[] {
     const out: { phone: string; name: string | null }[] = []
     for (const rawLine of text.split(/\r?\n/)) {
         const line = rawLine.trim()

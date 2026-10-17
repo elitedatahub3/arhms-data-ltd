@@ -26,6 +26,7 @@ export async function GET() {
             id: g.id,
             name: g.name,
             memberCount: g.sms_group_members?.[0]?.count ?? 0,
+            createdAt: g.created_at,
             system: false,
         }))
 
@@ -53,7 +54,7 @@ export async function GET() {
 /**
  * Creates a group, or adds/removes contacts in one.
  *
- * body: { name } to create; { groupId, addContactIds?, removeContactIds? } to edit.
+ * body: { name } to create; { groupId, name?, addContactIds?, removeContactIds? } to edit or rename.
  */
 export async function POST(request: Request) {
     try {
@@ -79,6 +80,24 @@ export async function POST(request: Request) {
                 .maybeSingle()
 
             if (!group) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
+
+            // Rename, when a name comes with the edit.
+            if (typeof body.name === 'string') {
+                const newName = body.name.trim()
+                if (!newName) return NextResponse.json({ error: 'Give the group a name' }, { status: 400 })
+                if (newName.length > 60) return NextResponse.json({ error: 'Group name is too long' }, { status: 400 })
+                const { error: renameError } = await (supabaseAdmin.from('sms_groups') as any)
+                    .update({ name: newName })
+                    .eq('id', body.groupId)
+                    .eq('account_id', account.id)
+                if (renameError) {
+                    if ((renameError as any).code === '23505') {
+                        return NextResponse.json({ error: 'You already have a group with that name' }, { status: 409 })
+                    }
+                    console.error('[SmsGroups] rename failed:', renameError)
+                    return NextResponse.json({ error: 'Could not rename the group' }, { status: 500 })
+                }
+            }
 
             const addIds: string[] = Array.isArray(body.addContactIds) ? body.addContactIds : []
             const removeIds: string[] = Array.isArray(body.removeContactIds) ? body.removeContactIds : []
