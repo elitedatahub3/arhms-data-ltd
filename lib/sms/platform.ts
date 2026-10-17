@@ -193,3 +193,47 @@ export async function getStats30d(db: any, accountId: string): Promise<{ campaig
         { campaigns: 0, recipients: 0, creditsUsed: 0 }
     )
 }
+
+export interface CreditActivity {
+    kind: 'send' | 'purchase'
+    /** Signed: negative for credits spent, positive for credits bought. */
+    credits: number
+    label: string
+    at: string
+}
+
+/** The latest credit movements — sends and completed purchases — newest first. */
+export async function getRecentCreditActivity(db: any, accountId: string, limit = 8): Promise<CreditActivity[]> {
+    const [{ data: sends }, { data: buys }] = await Promise.all([
+        db.from('sms_campaigns')
+            .select('credits_charged, recipients_count, source, created_at')
+            .eq('account_id', accountId)
+            .order('created_at', { ascending: false })
+            .limit(limit),
+        db.from('sms_credit_purchases')
+            .select('credits, created_at')
+            .eq('account_id', accountId)
+            .eq('status', 'completed')
+            .order('created_at', { ascending: false })
+            .limit(limit),
+    ])
+
+    const SOURCE_LABEL: Record<string, string> = { dashboard: 'Campaign send', api: 'API send', order: 'Order confirmation' }
+
+    return [
+        ...((sends || []) as any[]).map((r) => ({
+            kind: 'send' as const,
+            credits: -(Number(r.credits_charged) || 0),
+            label: `${SOURCE_LABEL[r.source] ?? 'Campaign send'}${r.recipients_count > 1 ? ` · ${Number(r.recipients_count).toLocaleString()} recipients` : ''}`,
+            at: r.created_at,
+        })),
+        ...((buys || []) as any[]).map((r) => ({
+            kind: 'purchase' as const,
+            credits: Number(r.credits) || 0,
+            label: 'Credits purchased',
+            at: r.created_at,
+        })),
+    ]
+        .sort((a, b) => (a.at < b.at ? 1 : -1))
+        .slice(0, limit)
+}
