@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import {
     Send, History, Users, Coins, Building2, Code2, ChevronRight, MessageSquare, BadgeCheck, Gauge, Check, Lock, Wallet, Radio,
@@ -7,6 +8,7 @@ import {
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { SmsPaymentForm } from '@/components/sms/sms-payment-form'
 import { SmsActiveGate, SmsPageHeader, useSmsPlatform, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
@@ -33,10 +35,11 @@ export default function SmsPlatformHome() {
                 description="Send bulk SMS to any Ghana number — pay per message."
                 icon={MessageSquare}
                 badge={info && (
-                    <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-bold',
+                    <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold',
                         info.mode === 'business'
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                            ? 'bg-violet-600 text-white'
                             : 'bg-muted text-muted-foreground')}>
+                        {info.mode === 'business' && <BadgeCheck className="w-3 h-3" />}
                         {info.mode === 'business' ? 'Business' : 'Platform'}
                     </span>
                 )}
@@ -180,6 +183,8 @@ function Hub({ info }: { info: SmsPlatformAccount }) {
                 </div>
             </div>
 
+            {info.hasShop && <OrderConfirmationToggle info={info} />}
+
             <div className="grid grid-cols-3 gap-2">
                 {[
                     { label: 'Campaigns (30d)', value: stats.campaigns },
@@ -192,15 +197,6 @@ function Hub({ info }: { info: SmsPlatformAccount }) {
                     </CardContent></Card>
                 ))}
             </div>
-
-            {info.dailyLimit > 0 && (
-                <p className="flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
-                    <Gauge className="w-3 h-3" /> Today: {info.sentToday.toLocaleString()} of {info.dailyLimit.toLocaleString()} messages
-                    {info.mode !== 'business' && (
-                        <span>· <Link href="/dashboard/sms/business" className="text-emerald-700 hover:underline dark:text-emerald-400">register your business</Link> for a higher limit</span>
-                    )}
-                </p>
-            )}
 
             {!setupComplete && (
                 <Card className="border-emerald-200 dark:border-emerald-900">
@@ -243,6 +239,107 @@ function Hub({ info }: { info: SmsPlatformAccount }) {
                     </Link>
                 ))}
             </div>
+
+            <p className="flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+                <Gauge className="w-3 h-3" /> Limits:
+                <span className="font-semibold text-foreground">{(info.limits?.perSend ?? 10000).toLocaleString()}</span> recipients/send ·
+                {info.dailyLimit > 0
+                    ? <><span className="font-semibold text-foreground">{info.dailyLimit.toLocaleString()}</span> recipients/day · {info.sentToday.toLocaleString()} sent today</>
+                    : <span className="font-semibold text-foreground">no daily limit</span>}
+                {info.mode !== 'business' && info.dailyLimit > 0 && (
+                    <span>· <Link href="/dashboard/sms/business" className="text-emerald-700 hover:underline dark:text-emerald-400">register your business</Link> for more</span>
+                )}
+            </p>
+
+            <RecentActivity items={info.recentActivity ?? []} />
         </div>
+    )
+}
+
+/**
+ * The shop's storefront order confirmations, under its own sender ID. One
+ * switch drives both the data and the airtime toggles behind Customer SMS.
+ */
+function OrderConfirmationToggle({ info }: { info: SmsPlatformAccount }) {
+    const { reload } = useSmsPlatform()
+    const [saving, setSaving] = useState(false)
+    const on = !!(info.orderSms?.data || info.orderSms?.airtime)
+    const hasOwnSender = info.allowedSenders.some((x) => x.type === 'own')
+
+    const toggle = async (next: boolean) => {
+        if (next && !hasOwnSender) {
+            toast.error('Get a sender ID approved first')
+            return
+        }
+        setSaving(true)
+        try {
+            const res = await fetch('/api/sms/account', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: next, airtime: next }),
+            })
+            const data = await res.json()
+            if (!res.ok || !data?.success) { toast.error(data?.error || 'Could not save'); return }
+            toast.success(next ? 'Order confirmations will use your sender ID' : 'Order confirmations switched off')
+            reload()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <Card>
+            <CardContent className="flex items-start gap-3 p-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 dark:bg-emerald-950/40">
+                    <BadgeCheck className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold">Use my sender ID for order confirmations</p>
+                    <p className="text-xs text-muted-foreground">
+                        {hasOwnSender
+                            ? 'Your storefront data and airtime buyers get their confirmation from your approved sender ID, paid from these credits. When off, they get no confirmation SMS.'
+                            : 'Once your sender ID is approved, your storefront data and airtime buyers can get their confirmation from it.'}
+                    </p>
+                    {on && info.orderSms?.lastSkip && (
+                        <p className="mt-1 text-[11px] text-amber-600">Last one not sent: {info.orderSms.lastSkip}</p>
+                    )}
+                </div>
+                <Switch checked={on} disabled={saving || (!on && !hasOwnSender)} onCheckedChange={toggle} aria-label="Use my sender ID for order confirmations" />
+            </CardContent>
+        </Card>
+    )
+}
+
+function RecentActivity({ items }: { items: NonNullable<SmsPlatformAccount['recentActivity']> }) {
+    return (
+        <Card>
+            <CardHeader className="pb-2">
+                <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="text-base flex items-center gap-2"><History className="w-4 h-4 text-emerald-600" /> Recent Credit Activity</CardTitle>
+                    <Link href="/dashboard/sms/records" className="text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-400">View all →</Link>
+                </div>
+            </CardHeader>
+            <CardContent>
+                {items.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground">No credit activity yet.</p>
+                ) : (
+                    <div className="divide-y">
+                        {items.map((x, i) => (
+                            <div key={`${x.at}-${i}`} className="flex items-center justify-between gap-3 py-2.5">
+                                <div className="min-w-0">
+                                    <p className="truncate text-sm font-semibold">{x.label}</p>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        {new Date(x.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                                    </p>
+                                </div>
+                                <p className={cn('shrink-0 text-sm font-black', x.credits < 0 ? 'text-red-600' : 'text-emerald-600')}>
+                                    {x.credits > 0 ? '+' : ''}{x.credits.toLocaleString()}
+                                </p>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     )
 }

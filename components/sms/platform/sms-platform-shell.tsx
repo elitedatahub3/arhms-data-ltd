@@ -35,6 +35,9 @@ export interface SmsPlatformAccount {
     sentToday: number
     senderCap: number
     stats30d?: { campaigns: number; recipients: number; creditsUsed: number }
+    recentActivity?: { kind: 'send' | 'purchase'; credits: number; label: string; at: string }[]
+    limits?: { perSend: number }
+    orderSms?: { data: boolean; airtime: boolean; lastSkip?: string | null }
     account: {
         status: 'locked' | 'active' | 'suspended'
         credits: number

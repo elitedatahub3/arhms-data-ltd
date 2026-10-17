@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext, smsBlockReason, isCustomerSmsEnabled, SMS_DISABLED_MESSAGE } from '@/lib/sms/sms-purchase'
 import { getAllowedSenders } from '@/lib/sms/customer-sms'
-import { getSmsBusiness, countSentToday, dailyLimitFor, senderCapFor, getStats30d } from '@/lib/sms/platform'
+import { getSmsBusiness, countSentToday, dailyLimitFor, senderCapFor, getStats30d, getRecentCreditActivity } from '@/lib/sms/platform'
+import { MAX_RECIPIENTS } from '@/lib/sms/send-campaign'
 
 /**
  * Everything the Customer SMS home screen renders from, in one call.
@@ -46,10 +47,11 @@ export async function GET() {
             .eq('account_id', account.id)
             .eq('opted_out', false)
 
-        const [business, sentToday, stats30d] = await Promise.all([
+        const [business, sentToday, stats30d, recentActivity] = await Promise.all([
             getSmsBusiness(supabaseAdmin, account.id),
             countSentToday(supabaseAdmin, account.id),
             getStats30d(supabaseAdmin, account.id),
+            getRecentCreditActivity(supabaseAdmin, account.id),
         ])
 
         return NextResponse.json({
@@ -59,6 +61,8 @@ export async function GET() {
             dailyLimit: dailyLimitFor(ctx.mode, settingsMap),
             sentToday,
             stats30d,
+            recentActivity,
+            limits: { perSend: MAX_RECIPIENTS },
             senderCap: senderCapFor(ctx.mode, settingsMap),
             // The page hides the whole feature on this rather than selling
             // something that cannot be used.
