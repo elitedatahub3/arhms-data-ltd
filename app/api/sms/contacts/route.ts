@@ -142,8 +142,43 @@ export async function POST(request: Request) {
         }
 
         const added = (inserted || []).length
+
+        // { groupId }: put every number into that group, including ones that
+        // were already saved — the contact groups page adds numbers straight
+        // into a group.
+        let grouped = 0
+        if (body.groupId) {
+            const { data: group } = await supabaseAdmin
+                .from('sms_groups')
+                .select('id')
+                .eq('id', String(body.groupId))
+                .eq('account_id', account.id)
+                .maybeSingle()
+            if (!group) return NextResponse.json({ error: 'Group not found' }, { status: 404 })
+
+            const phones = [...seen.keys()]
+            const CHUNK = 200
+            for (let i = 0; i < phones.length; i += CHUNK) {
+                const { data: ids } = await supabaseAdmin
+                    .from('sms_contacts')
+                    .select('id')
+                    .eq('account_id', account.id)
+                    .in('phone', phones.slice(i, i + CHUNK))
+                const memberRows = (ids || []).map((c: any) => ({ group_id: (group as any).id, contact_id: c.id }))
+                if (!memberRows.length) continue
+                const { error: memberError } = await (supabaseAdmin.from('sms_group_members') as any)
+                    .upsert(memberRows, { onConflict: 'group_id,contact_id', ignoreDuplicates: true })
+                if (memberError) {
+                    console.error('[SmsContacts] group add failed:', memberError)
+                    return NextResponse.json({ error: 'Numbers saved, but they could not be added to the group' }, { status: 500 })
+                }
+                grouped += memberRows.length
+            }
+        }
+
         return NextResponse.json({
             success: true,
+            grouped,
             added,
             duplicates: seen.size - added,
             invalid,
