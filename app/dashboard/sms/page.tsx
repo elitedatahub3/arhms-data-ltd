@@ -6,11 +6,10 @@ import {
     Send, History, Users, Coins, Building2, Code2, ChevronRight, MessageSquare, BadgeCheck, Gauge, Check, Lock, Wallet, Radio,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { SmsPaymentForm } from '@/components/sms/sms-payment-form'
 import { SmsActiveGate, SmsPageHeader, useSmsPlatform, smsPlatformName, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
 
 const BUSINESS_BADGE: Record<string, { label: string; className: string }> = {
@@ -46,63 +45,10 @@ export default function SmsPlatformHome() {
                 backHref={shopHref}
                 backLabel="Shop overview"
             />
-            <SmsActiveGate allowLocked>
-                {(info) => info.account.status === 'locked' ? <Activate info={info} /> : <Hub info={info} />}
+            <SmsActiveGate>
+                {(info) => <Hub info={info} />}
             </SmsActiveGate>
         </>
-    )
-}
-
-function Activate({ info }: { info: SmsPlatformAccount }) {
-    const { reload } = useSmsPlatform()
-    const isActive = async () => (await reload())?.account.status === 'active'
-
-    return (
-        <div className="space-y-5">
-            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-700 to-teal-900 p-8 text-white">
-                <MessageSquare className="w-10 h-10 text-emerald-200 mb-4" />
-                <h2 className="text-2xl sm:text-3xl font-black">Bulk SMS for your business</h2>
-                <p className="text-emerald-50/90 mt-2 max-w-lg">
-                    Your own sender name, contact groups, delivery reports and an API for your website or app.
-                </p>
-                <div className="mt-6 flex items-baseline gap-2">
-                    <span className="text-4xl font-black">GHS {Number(info.unlockPrice).toFixed(2)}</span>
-                    <span className="text-emerald-100/80 text-sm">one-time activation</span>
-                </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-                {[
-                    { icon: BadgeCheck, title: 'Your own sender ID', body: 'Recipients see your brand name, not a random number.' },
-                    { icon: Users, title: 'Contact groups', body: 'Save lists once and message them in one tap.' },
-                    { icon: Coins, title: 'Pay per SMS', body: 'Buy credit bundles only when you need them.' },
-                    { icon: Code2, title: 'SMS API', body: 'Send OTPs and alerts from your own website or app.' },
-                ].map((f) => (
-                    <Card key={f.title}><CardContent className="pt-6 space-y-1.5">
-                        <f.icon className="w-5 h-5 text-emerald-600" />
-                        <p className="font-bold text-sm">{f.title}</p>
-                        <p className="text-xs text-muted-foreground">{f.body}</p>
-                    </CardContent></Card>
-                ))}
-            </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">Activate SMS</CardTitle>
-                    <CardDescription>After activating you&apos;ll request a sender ID, buy credits and start sending.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <SmsPaymentForm
-                        endpoint="/api/sms/unlock"
-                        extraBody={{ portal: 'platform' }}
-                        amount={info.unlockPrice}
-                        payLabel="Activate"
-                        isSettled={isActive}
-                        onSettled={() => { toast.success('SMS activated! Request your sender ID next.') }}
-                    />
-                </CardContent>
-            </Card>
-        </div>
     )
 }
 

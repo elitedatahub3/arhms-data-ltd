@@ -43,7 +43,11 @@ export interface SmsAccount {
 
 /**
  * The caller's SMS account, created on first sight so every later query has a
- * row to hang off. A brand new account is 'locked' until the unlock is paid.
+ * row to hang off.
+ *
+ * There is no unlock fee any more (dropped when the ARHMS SMS platform opened):
+ * a new account starts active, and an old 'locked' one is opened the first
+ * time its owner is seen. Only 'suspended' — an admin decision — still blocks.
  *
  * @param db A service-role client — sms_accounts is insert-only to the service
  *           role, since an account is an entitlement and not self-serve.
@@ -60,16 +64,27 @@ export async function resolveSmsAccount(db: any, userId: string, shopId?: string
     if (existing) {
         // A shop created after the SMS account was first touched still needs
         // linking, otherwise "import from my orders" finds nothing.
-        if (!existing.shop_id && shopId) {
-            await db.from('sms_accounts').update({ shop_id: shopId, updated_at: new Date().toISOString() }).eq('id', existing.id)
-            existing.shop_id = shopId
+        const patch: Record<string, any> = {}
+        if (!existing.shop_id && shopId) patch.shop_id = shopId
+        if (existing.status === 'locked') {
+            patch.status = 'active'
+            patch.unlocked_at = new Date().toISOString()
+            patch.unlock_amount = 0
+        }
+        if (Object.keys(patch).length) {
+            patch.updated_at = new Date().toISOString()
+            // .eq(status) keeps a concurrent admin suspension from being undone.
+            let update = db.from('sms_accounts').update(patch).eq('id', existing.id)
+            if (patch.status) update = update.eq('status', 'locked')
+            const { error } = await update
+            if (!error) Object.assign(existing, patch)
         }
         return existing as SmsAccount
     }
 
     const { data: created, error } = await db
         .from('sms_accounts')
-        .insert({ user_id: userId, shop_id: shopId ?? null })
+        .insert({ user_id: userId, shop_id: shopId ?? null, status: 'active', unlocked_at: new Date().toISOString(), unlock_amount: 0 })
         .select('id, user_id, shop_id, status, credits, total_purchased, total_used, default_sender')
         .single()
 
