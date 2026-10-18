@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { SmsPaymentForm } from '@/components/sms/sms-payment-form'
-import { SmsActiveGate, SmsPageHeader, useSmsPlatform, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
+import { SmsActiveGate, SmsPageHeader, useSmsPlatform, smsPlatformName, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
 
 const BUSINESS_BADGE: Record<string, { label: string; className: string }> = {
     approved: { label: 'Approved', className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' },
@@ -31,7 +31,7 @@ export default function SmsPlatformHome() {
     return (
         <>
             <SmsPageHeader
-                title="SMS Platform"
+                title={smsPlatformName(info?.isSub)}
                 description="Send bulk SMS to any Ghana number — pay per message."
                 icon={MessageSquare}
                 badge={info && (
