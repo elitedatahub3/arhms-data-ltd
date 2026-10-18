@@ -206,10 +206,11 @@ async function main() {
     check('the Hubtel rollback rail never lists them', !/Utilities/.test(menu), menu)
 
     menu = await menuFor({}, 'member')
-    check('a registered user (AFA listed for them) sees AFA as 3 and Utilities as 4', /3\. AFA Registration/.test(menu) && /4\. Utilities/.test(menu), menu)
+    check('a registered user (AFA listed for them) sees AFA as 3 and "Pay Utility" as 4',
+        menu.endsWith('3. AFA Registration\n4. Pay Utility') && /^Welcome to ARHMSTECH\nChoose a Service:/.test(menu), JSON.stringify(menu))
 
     menu = await menuFor({ settings: [{ key: 'ussd_afa_enabled', value: 'false' }] }, 'member')
-    check('…and with AFA switched off, Utilities moves up to 3', /3\. Utilities/.test(menu) && !/AFA/.test(menu), menu)
+    check('…and with AFA switched off, "Pay Utility" moves up to 3', /3\. Pay Utility/.test(menu) && !/AFA/.test(menu), menu)
 
     // ── The conversation ────────────────────────────────────────────────────────
     seed(); r = loadRoute()

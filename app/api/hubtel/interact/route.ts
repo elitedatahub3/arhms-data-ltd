@@ -1478,7 +1478,10 @@ function uniqueNetworks(bundles: Array<{ network: string }>): string[] {
     for (const b of bundles) {
         if (!seen.includes(b.network)) seen.push(b.network);
     }
-    return seen;
+    // MTN is option 1. The loaders sort networks alphabetically, which buried it behind
+    // AT and EXPRESS MTN; everything else keeps that order.
+    const mtn = seen.filter((n) => String(n).trim().toUpperCase() === 'MTN');
+    return [...mtn, ...seen.filter((n) => !mtn.includes(n))];
 }
 
 /** The service menu for whoever this session belongs to. */
@@ -1496,15 +1499,22 @@ function extraServices(sessionData: any): Array<'afa' | 'util'> {
 
 const EXTRA_SERVICE_LABELS = { afa: 'AFA Registration', util: 'Utilities' } as const;
 
+/** The name a main-site user is welcomed to. */
+const MEMBER_MENU_BRAND = 'ARHMSTECH';
+const MEMBER_SERVICE_LABELS = { afa: 'AFA Registration', util: 'Pay Utility' } as const;
+
 function serviceMenuFor(sessionData: any): string {
     const extras = extraServices(sessionData)
         .map((key, i) => `\n${3 + i}. ${EXTRA_SERVICE_LABELS[key]}`)
         .join('');
     if (sessionData.mode === 'member') {
-        // ASCII only: a non-ASCII character in a Hubtel response makes the call throw.
-        const raw = String(sessionData.member?.firstName || '').replace(/[^\x20-\x7E]/g, '').trim();
-        const name = raw.length > 16 ? `${raw.slice(0, 15)}.` : raw;
-        return `Welcome back${name ? ` ${name}` : ''}\n1. Data Bundles\n2. Result Checker${extras}\n0. Exit`;
+        // What a main-site user sees. Deliberately plain: the brand, no help line, and the
+        // services in the order the platform sells them. Labels differ slightly from a shop's
+        // (the shop menu is the shop's own wording), so they are listed here, not shared.
+        const memberExtras = extraServices(sessionData)
+            .map((key, i) => `\n${3 + i}. ${MEMBER_SERVICE_LABELS[key]}`)
+            .join('');
+        return `Welcome to ${MEMBER_MENU_BRAND}\nChoose a Service:\n1. Data Bundles\n2. Waec Results Checker${memberExtras}`;
     }
     if (sessionData.mode === 'shop' && extras) {
         const shop = String(sessionData.shopName || 'ARHMS');

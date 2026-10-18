@@ -148,8 +148,12 @@ async function main() {
     seed()
     let r = loadRoute()
     let out = await init(r, MEMBER_PHONE, 's1')
-    check('registered number skips the short code', /^Welcome back Ama/.test(out.Message) && !/short code/i.test(out.Message), out.Message)
-    check('  …and lands on the service menu with data + checker', /1\. Data Bundles/.test(out.Message) && /2\. Result Checker/.test(out.Message))
+    check('registered number skips the short code', /^Welcome to ARHMSTECH/.test(out.Message) && !/short code/i.test(out.Message), out.Message)
+    check('  …and lands on the service menu with data + checker', /1\. Data Bundles/.test(out.Message) && /2\. Waec Results Checker/.test(out.Message))
+    check('  …laid out as the platform menu: brand, "Choose a Service:", no help line, no first name, no Exit line',
+        out.Message.startsWith('Welcome to ARHMSTECH\nChoose a Service:\n1. Data Bundles\n2. Waec Results Checker')
+        && !/help/i.test(out.Message) && !/Ama|Welcome back|Exit/.test(out.Message), JSON.stringify(out.Message))
+    check('  …and fits one screen', out.Message.length < 160, `${out.Message.length}`)
     const session = tables.hubtel_sessions.find((s) => s.session_id === 's1')
     check('  …and the session is stored as a member at choose_service',
         session?.current_step === 'choose_service' && session?.data?.mode === 'member' && session?.data?.member?.userId === 'u-ama',
@@ -161,7 +165,7 @@ async function main() {
 
     seed(); r = loadRoute()
     out = await init(r, '0241234567', 's3')
-    check('local 0XXXXXXXXX dial-in format is recognised too', /^Welcome back Ama/.test(out.Message), out.Message)
+    check('local 0XXXXXXXXX dial-in format is recognised too', /^Welcome to ARHMSTECH/.test(out.Message), out.Message)
 
     seed(); r = loadRoute()
     out = await init(r, '233201111111', 's4')
@@ -190,6 +194,24 @@ async function main() {
     await init(r, MEMBER_PHONE, 's9')
     out = await say(r, MEMBER_PHONE, 's9', '1')
     check('member picks Data → network list (MTN)', /Select Network/.test(out.Message) && /1\. MTN/.test(out.Message), out.Message)
+    // MTN leads the network list even though the catalogue sorts AT and EXPRESS MTN before it.
+    seed({ data_packages: [
+        { id: 'p0', network: 'AT-BigTime', size: '5GB', price: 30, agent_price: 28, is_available: true, sort_order: 1 },
+        { id: 'p1', network: 'MTN', size: '1GB', price: 10, agent_price: 8, dealer_price: 7, is_available: true, sort_order: 1 },
+        { id: 'pe', network: 'EXPRESS MTN', size: '1GB', price: 9, agent_price: 8, is_available: true, sort_order: 1 },
+        { id: 'pt', network: 'Telecel', size: '1GB', price: 9, agent_price: 8, is_available: true, sort_order: 1 },
+    ] }); r = loadRoute()
+    await init(r, MEMBER_PHONE, 's9b')
+    out = await say(r, MEMBER_PHONE, 's9b', '1')
+    check('MTN is the FIRST network offered, ahead of AT-BigTime and EXPRESS MTN',
+        /Select Network:\n1\. MTN\n/.test(out.Message), JSON.stringify(out.Message))
+    check('  …and the rest keep their order after it', out.Message.indexOf('2. AT-BigTime') > 0 && out.Message.indexOf('3. EXPRESS MTN') > out.Message.indexOf('2. AT-BigTime') && out.Message.indexOf('4. Telecel') > 0, JSON.stringify(out.Message))
+    out = await say(r, MEMBER_PHONE, 's9b', '1')
+    check('  …and choosing 1 really is MTN (the menu and the choice agree)', /Select Bundle/.test(out.Message) && /1GB - GHS 8/.test(out.Message), out.Message)
+
+    seed(); r = loadRoute()
+    await init(r, MEMBER_PHONE, 's9')
+    out = await say(r, MEMBER_PHONE, 's9', '1')
     out = await say(r, MEMBER_PHONE, 's9', '1')
     check("bundle menu quotes the AGENT's price (8 and 16), not the customer's 10 and 20",
         /1GB - GHS 8\n/.test(out.Message) && /2GB - GHS 16\n/.test(out.Message), out.Message)
