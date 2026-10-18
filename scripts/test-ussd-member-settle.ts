@@ -34,6 +34,8 @@ const REPO_ROOT = path.resolve(__dirname, '..')
 type Row = Record<string, any>
 let tables: Record<string, Row[]> = {}
 const counters = { credits: 0, dataBuys: 0, rcBuys: 0, afaAlerts: 0, sms: [] as string[], rcArgs: [] as any[] }
+/** Platform order confirmations: each call to sendPlatformOrderSms, and what its house fallback sent. */
+const platformSms: Array<{ userId: any; isShopOrder: boolean; recipient: string; body: string; reference: string; houseSent?: string }> = []
 let dataBuyResult: { ok: boolean; error?: string } = { ok: true }
 /** Makes the claim's conditional UPDATE error, as if the filter or connection failed. */
 let failClaimQuery = false
@@ -113,8 +115,23 @@ const originalLoad = (Module as any)._load
     if (request === '@/lib/afa/checkout') {
         return { notifyAdminsOfAfaApplication: async () => { counters.afaAlerts++ } }
     }
-    if (request === '@/lib/hubtel-sms-service') {
-        return { sendHubtelSMS: async (p: any) => { counters.sms.push(p.message); return { success: true } } }
+    if (request === '@/lib/sms-service') {
+        return { sendSMS: async (p: any) => { counters.sms.push(p.message); return { success: true } } }
+    }
+    if (request === '@/lib/sms/platform-order-sms') {
+        // Records the call, then takes the house fallback, which is what the real one does whenever the
+        // buyer has not switched their own sender on. Its own-sender behaviour is tested in
+        // scripts/test-ussd-confirmation-sms.ts.
+        return {
+            sendPlatformOrderSms: async (p: any) => {
+                const entry: any = { userId: p.userId, isShopOrder: p.isShopOrder, recipient: p.recipient, body: p.body, reference: p.reference }
+                platformSms.push(entry)
+                const before = counters.sms.length
+                await p.houseSend()
+                entry.houseSent = counters.sms[before]
+                counters.sms.length = before // keep `counters.sms` meaning "failure notices" only
+            },
+        }
     }
     if (request.startsWith('@/')) return originalLoad.apply(this, [path.join(REPO_ROOT, request.slice(2)), parent, isMain])
     return originalLoad.apply(this, [request, parent, isMain])
@@ -138,7 +155,7 @@ function seed(overrides: Row = {}, extraTables: Record<string, Row[]> = {}) {
         results_checker_orders: [],
         ...extraTables,
     }
-    counters.credits = 0; counters.dataBuys = 0; counters.rcBuys = 0; counters.afaAlerts = 0; counters.sms = []; counters.rcArgs = []
+    counters.credits = 0; counters.dataBuys = 0; counters.rcBuys = 0; counters.afaAlerts = 0; counters.sms = []; counters.rcArgs = []; platformSms.length = 0
     afaRpc = { error: null }; rpcCalls.length = 0
     dataBuyResult = { ok: true }
 }
@@ -256,6 +273,12 @@ async function main() {
         && call.args.p_form_data.date_of_birth === '1990-03-15' && call.args.p_form_data.region === 'Ashanti' && call.args.p_form_data.location === 'Kumasi'
         && call.args.p_form_data.phone === '0241234567' && call.args.p_form_data.notes === null, JSON.stringify(call?.args.p_form_data))
     check('  …the admins are alerted once and no failure SMS is sent', counters.afaAlerts === 1 && counters.sms.length === 0, JSON.stringify({ alerts: counters.afaAlerts, sms: counters.sms }))
+    check('  …the applicant is confirmed through the PLATFORM rule (house sender, or the buyer own sender ID when switched on), for the member',
+        platformSms.length === 1 && platformSms[0].userId === 'u1' && platformSms[0].isShopOrder === false && platformSms[0].recipient === '0241234567'
+        && platformSms[0].reference === `afa:${REF}:received` && /AFA registration for Ama Boateng has been received/.test(platformSms[0].body), JSON.stringify(platformSms))
+    const house = platformSms[0]?.houseSent || ''
+    check('  …and the house fallback is the platform sender with its signature, ASCII, and not the buyer-sender text',
+        house.startsWith('Your AFA registration for Ama Boateng') && house.endsWith('\n\nARHMSGh') && /^[\x20-\x7E\n]+$/.test(house), JSON.stringify(house))
 
     seedAfa()
     const [af1, af2] = await Promise.all([settle(25), settle(25)])
@@ -263,23 +286,23 @@ async function main() {
 
     seedAfa(); afaRpc = { error: { code: '23505', message: 'duplicate key value violates unique constraint "afa_orders_reference_code_unique"' } }
     r = await settle(25)
-    check('a duplicate-reference error from the database is a success, not a failure SMS', r.success && !r.creditedOnly && counters.sms.length === 0, JSON.stringify(r))
+    check('a duplicate-reference error from the database is a success, not a failure SMS, and no second confirmation', r.success && !r.creditedOnly && counters.sms.length === 0 && platformSms.length === 0, JSON.stringify(r))
 
     seedAfa({}, { afa_orders: [{ id: 'a1', reference_code: REF, status: 'pending' }] })
     r = await settle(25)
-    check('an AFA order that already exists is not placed again', r.success && rpcCalls.length === 0 && counters.sms.length === 0, JSON.stringify({ rpc: rpcCalls.length }))
+    check('an AFA order that already exists is not placed again, nor confirmed again', r.success && rpcCalls.length === 0 && counters.sms.length === 0 && platformSms.length === 0, JSON.stringify({ rpc: rpcCalls.length }))
 
     seedAfa(); afaRpc = { error: { message: 'INSUFFICIENT_BALANCE' } }
     r = await settle(25)
-    check('an AFA order the wallet cannot cover keeps the money and tells the member (one SMS)', r.success && r.creditedOnly === true && counters.sms.length === 1 && counters.afaAlerts === 0, JSON.stringify({ r, sms: counters.sms.length }))
+    check('an AFA order the wallet cannot cover keeps the money and tells the member (one SMS)', r.success && r.creditedOnly === true && counters.sms.length === 1 && counters.afaAlerts === 0 && platformSms.length === 0, JSON.stringify({ r, sms: counters.sms.length }))
 
     seedAfa({}, { sub_agents: [{ id: 'm1', user_id: 'u1', upline_shop_id: 'sh1' }] })
     r = await settle(25)
-    check('a sub-agent is refused (their RPC is not installed): money kept, one SMS, no order', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1, JSON.stringify({ r, rpc: rpcCalls.length }))
+    check('a sub-agent is refused (their RPC is not installed): money kept, one SMS, no order', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1 && platformSms.length === 0, JSON.stringify({ r, rpc: rpcCalls.length }))
 
     seedAfa({}, { admin_settings: [{ key: 'afa_price_customer', value: '30' }, { key: 'afa_price_agent', value: '30' }, { key: 'afa_price_dealer', value: '22' }] })
     r = await settle(25)
-    check('if the price rose above what was paid, nothing is charged silently: money kept, one SMS', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1 && /price changed/.test(r.error || ''), JSON.stringify({ r }))
+    check('if the price rose above what was paid, nothing is charged silently: money kept, one SMS', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1 && platformSms.length === 0 && /price changed/.test(r.error || ''), JSON.stringify({ r }))
 
     seedAfa({ metadata: { ...afaMeta, afa: null } })
     r = await settle(25)

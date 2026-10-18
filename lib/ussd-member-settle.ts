@@ -18,7 +18,7 @@
 import { processCompletedWalletPayment } from '@/lib/payments'
 import { purchaseDataWithWallet } from '@/lib/wallet-data-purchase'
 import { purchaseWithWallet } from '@/lib/vouchers/checkout'
-import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
+import { sendSMS } from '@/lib/sms-service'
 import { USSD_MEMBER_PAYMENT_KIND } from '@/lib/ussd-member'
 import { resolveAfaApiPrice, resolveAfaCostPrice } from '@/lib/afa-pricing'
 
@@ -280,6 +280,28 @@ async function buyAfaFromWallet(
     } catch (alertError: any) {
         console.error('[UssdMember] AFA admin alert failed:', alertError?.message)
     }
+
+    // Confirm to the applicant. A main-site order: the platform's house sender, or the buyer's OWN
+    // sender ID (paid from their SMS credits) when they have switched on "Use my sender ID for order
+    // confirmations" — the same rule as every other platform confirmation (sendPlatformOrderSms),
+    // which falls back to the house message whenever their sender cannot be used, so the applicant
+    // is never left without one. Only reached for a freshly placed order: a duplicate returned above.
+    try {
+        const { sendPlatformOrderSms } = await import('@/lib/sms/platform-order-sms')
+        const applicant = String(form.phone || '')
+        const name = String(form.full_name || '').replace(/[^\x20-\x7E]/g, '').trim()
+        const body = `Your AFA registration for ${name} has been received and is being processed. Thank you.`
+        await sendPlatformOrderSms({
+            userId,
+            isShopOrder: false,
+            recipient: applicant,
+            body,
+            reference: `afa:${reference}:received`,
+            houseSend: () => sendSMS({ recipient: applicant, message: `${body}\n\nARHMSGh` }),
+        })
+    } catch (smsError: any) {
+        console.error('[UssdMember] AFA confirmation SMS failed:', smsError?.message)
+    }
     return { ok: true }
 }
 
@@ -299,7 +321,8 @@ async function notifyCreditedOnly(meta: any, amount: number, reason: string) {
     const item = String(meta.item_name || 'your order').replace(/[^\x20-\x7E]/g, '')
     const why = String(reason || '').replace(/[^\x20-\x7E]/g, '').slice(0, 50)
     try {
-        await sendHubtelSMS({
+        // The platform's house sender: this is a notice to the payer about their own money.
+        await sendSMS({
             recipient: to,
             message: `ARHMS: Your GHS ${amount.toFixed(2)} payment is safe in your ARHMS wallet. We could not complete ${item} (${why}). Buy again from your wallet at arhmsgh.com.`,
         })

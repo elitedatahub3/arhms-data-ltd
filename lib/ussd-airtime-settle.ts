@@ -20,7 +20,7 @@
  * settler itself returns the money to the wallet.
  */
 import { processAirtimeDirectOrder } from '@/lib/airtime-order-payments'
-import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
+import { sendSMS } from '@/lib/sms-service'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
 
 /**
@@ -64,6 +64,12 @@ export function composeAirtimeSms(
  * Texts the person who paid. A no-op for anything that is not a USSD airtime payment, so
  * callers can invoke it unconditionally.
  *
+ * Sent from the platform's house sender (sendSMS: active_sms_provider and SMS_ENABLED apply).
+ * These are notices about the payer's own money, not order confirmations to a customer — those
+ * ("received" and "credited") are sent by processAirtimeDirectOrder and finalizeAirtimeOrder
+ * through sendPlatformOrderSms, to the beneficiary, under the buyer's own sender ID when they
+ * have switched that on.
+ *
  * `completed` is sent only when the payer is NOT the beneficiary: a beneficiary is already
  * texted "credited successfully" by finalizeAirtimeOrder, and the same person should not get
  * two messages. Failures always go to the payer — nothing else tells them.
@@ -104,7 +110,7 @@ export async function smsUssdAirtimePayer(
 
     const total = params.totalPaid ?? Number(payment.total_amount)
     try {
-        await sendHubtelSMS({ recipient: meta.payer_msisdn, message: composeAirtimeSms(event, meta, total, reference) })
+        await sendSMS({ recipient: meta.payer_msisdn, message: composeAirtimeSms(event, meta, total, reference) })
     } catch (error: any) {
         console.error('[UssdAirtimeSms] SMS failed:', reference, error?.message)
     }

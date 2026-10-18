@@ -73,8 +73,8 @@ const originalLoad = (Module as any)._load
     if (request === '@/lib/shop-service') {
         return { creditShopRcProfit: async (p: any) => { credits.push({ ownerId: p.ownerId, amount: p.amount, reference: p.reference }); return { credited: true } } }
     }
-    if (request === '@/lib/hubtel-sms-service') {
-        return { sendHubtelSMS: async (p: any) => { sms.push({ recipient: p.recipient, message: p.message }); return { success: true } } }
+    if (request === '@/lib/sms-service') {
+        return { sendSMS: async (p: any) => { sms.push({ recipient: p.recipient, message: p.message }); return { success: true } } }
     }
     if (request === '@/lib/afa/checkout') {
         return { notifyAdminsOfAfaApplication: async () => { adminAlerts++ } }

@@ -75,9 +75,6 @@ let purchaseResult: any = { success: false, error: 'Insufficient wallet balance'
 
 const originalLoad = (Module as any)._load
 ;(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
-    if (request === '@/lib/hubtel-sms-service') {
-        return { sendHubtelSMS: async (p: any) => { sms.push({ recipient: p.recipient, message: p.message }); return { success: true } } }
-    }
     if (request === '@/lib/airtime-order-payments') {
         return { processAirtimeDirectOrder: async (reference: string, userId?: string) => { settleCalls.push({ reference, userId }); return typeof settleResult === 'function' ? settleResult() : settleResult } }
     }
@@ -89,7 +86,13 @@ const originalLoad = (Module as any)._load
         return { sendPushToUser: async () => {}, sendPushToAdmins: async (p: any) => { adminPushes.push(p.title) } }
     }
     if (request === '@/lib/api-webhook') return { queueApiWebhook: async () => {} }
-    if (request === '@/lib/sms-service') return { sendAirtimeCompletedSMS: async () => {} }
+    // The platform's house sender: what the payer notices go through.
+    if (request === '@/lib/sms-service') {
+        return {
+            sendSMS: async (p: any) => { sms.push({ recipient: p.recipient, message: p.message }); return { success: true } },
+            sendAirtimeCompletedSMS: async () => {},
+        }
+    }
     if (request === '@/lib/sms/platform-order-sms') return { sendPlatformOrderSms: async () => {} }
     if (request === '@/lib/sms/order-confirmations') return { sendShopOrderConfirmation: async () => ({ sent: false, skipped: 'stub' }) }
     if (request.startsWith('@/')) return originalLoad.apply(this, [path.join(REPO_ROOT, request.slice(2)), parent, isMain])

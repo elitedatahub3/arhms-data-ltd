@@ -12,8 +12,12 @@
  *
  * No-ops for anything that is not a USSD utility payment, so the callers can invoke it
  * unconditionally.
+ *
+ * Sent from the platform's house sender (sendSMS: active_sms_provider and SMS_ENABLED apply).
+ * They are notices to the person who paid about THEIR money, not order confirmations to a
+ * customer, so the SMS Platform's own-sender setting does not apply to them.
  */
-import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
+import { sendSMS } from '@/lib/sms-service'
 
 export type UssdUtilityEvent = 'processing' | 'completed' | 'refunded' | 'failed'
 
@@ -72,7 +76,7 @@ export async function smsUssdUtilityPayer(
 
     const total = params.totalPaid ?? Number(payment.total_amount)
     try {
-        await sendHubtelSMS({ recipient: meta.payer_msisdn, message: composeUtilitySms(event, meta, total, reference) })
+        await sendSMS({ recipient: meta.payer_msisdn, message: composeUtilitySms(event, meta, total, reference) })
     } catch (error: any) {
         console.error('[UssdUtilitySms] SMS failed:', reference, error?.message)
     }

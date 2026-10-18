@@ -15,7 +15,7 @@
  * and afa_orders.reference_code is UNIQUE, so the second is a no-op.
  */
 import { createClient } from '@supabase/supabase-js'
-import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
+import { sendSMS } from '@/lib/sms-service'
 import { computeShopProfit, insertOrderWithSplit, profitColumns } from '@/lib/shop-profit'
 import { creditOrderProfit } from '@/lib/shop-profit-credit'
 import { notifyAdminsOfAfaApplication } from '@/lib/afa/checkout'
@@ -127,7 +127,8 @@ export async function fulfillUSSDAFABySession(params: {
         await notifyAdminsOfAfaApplication(supabaseAdmin, row).catch(() => {})
     })
     deferredWork.push(async () => {
-        await sendHubtelSMS({
+        // A shop's guest: the platform's house sender, like every other USSD notice.
+        await sendSMS({
             recipient: data.payerMsisdn || session.mobile,
             message: `${AFA_ITEM_NAME} received for ${form.full_name}. We will process it and SMS you when it is done. ARHMS DATA`,
         }).catch((err: any) => console.error('[USSD-AFA Fulfill] SMS failed:', err?.message))

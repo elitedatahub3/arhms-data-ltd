@@ -101,8 +101,8 @@ const originalLoad = (Module as any)._load
             logInitiate: async () => {},
         }
     }
-    if (request === '@/lib/hubtel-sms-service') {
-        return { sendHubtelSMS: async (p: any) => { calls.sms.push(p.message); return { success: true } } }
+    if (request === '@/lib/sms-service') {
+        return { sendSMS: async (p: any) => { calls.sms.push(p.message); return { success: true } } }
     }
     if (request === '@/lib/paystack-momo-service') {
         return { verifyTransaction: async () => ({ outcome: 'paid', amountPesewas: verifyAmountPesewas, raw: {} }) }

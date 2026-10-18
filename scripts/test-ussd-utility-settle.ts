@@ -66,8 +66,8 @@ const settleCalls: Array<{ reference: string; userId?: string }> = []
 
 const originalLoad = (Module as any)._load
 ;(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
-    if (request === '@/lib/hubtel-sms-service') {
-        return { sendHubtelSMS: async (p: any) => { sms.push({ recipient: p.recipient, message: p.message }); return { success: true } } }
+    if (request === '@/lib/sms-service') {
+        return { sendSMS: async (p: any) => { sms.push({ recipient: p.recipient, message: p.message }); return { success: true } } }
     }
     if (request === '@/lib/utility-order-payments') {
         return { processUtilityDirectOrder: async (reference: string, userId?: string) => { settleCalls.push({ reference, userId }); return typeof settleResult === 'function' ? settleResult() : settleResult } }
