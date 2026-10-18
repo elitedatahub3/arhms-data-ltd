@@ -22,7 +22,7 @@
  * requires user_id and wallet_id NOT NULL, and a USSD caller has neither.
  */
 
-export type UssdOrderType = 'data' | 'rc' | 'afa' | 'util'
+export type UssdOrderType = 'data' | 'rc' | 'afa' | 'util' | 'air'
 
 export interface ResolvedUssdOrder {
     sessionId: string
@@ -36,7 +36,7 @@ export interface ResolvedUssdOrder {
  */
 function normaliseOrderType(value: unknown): UssdOrderType {
     const v = String(value ?? '')
-    return v === 'data' ? 'data' : v === 'afa' ? 'afa' : v === 'util' ? 'util' : 'rc'
+    return v === 'data' ? 'data' : v === 'afa' ? 'afa' : v === 'util' ? 'util' : v === 'air' ? 'air' : 'rc'
 }
 
 /**
@@ -121,7 +121,7 @@ export async function resolveByReference(
  * NOT match `startsWith('RC-')`, which is what keeps voucher routing intact.
  */
 export function buildUssdReference(orderType: UssdOrderType): string {
-    const kind = orderType === 'data' ? 'DATA' : orderType === 'afa' ? 'AFA' : orderType === 'util' ? 'UTIL' : 'RC'
+    const kind = orderType === 'data' ? 'DATA' : orderType === 'afa' ? 'AFA' : orderType === 'util' ? 'UTIL' : orderType === 'air' ? 'AIR' : 'RC'
     const stamp = Date.now().toString(36).toUpperCase()
     // crypto.randomUUID is available on the edge runtime; the slice keeps the
     // reference comfortably inside Paystack's length limit.

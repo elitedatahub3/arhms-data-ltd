@@ -49,6 +49,18 @@ async function haltForAdmin(supabase: any, order: any, note: string): Promise<vo
         body: `${order.network} GHS ${Number(order.airtime_amount).toFixed(2)} → ${order.beneficiary_phone}. ${note}`,
         url: '/admin/airtime',
     }).catch(() => {})
+
+    // A top-up bought over USSD: the buyer hung up long ago and nothing else tells them it is
+    // being held. Texted once however often the order is re-dispatched. A no-op for every
+    // other order.
+    if (String(order.reference_code || '').startsWith('USSD-AIR-')) {
+        try {
+            const { smsUssdAirtimePayer } = await import('@/lib/ussd-airtime-settle')
+            await smsUssdAirtimePayer(supabase, { reference: order.reference_code, event: 'delayed' })
+        } catch (smsError: any) {
+            console.error('[AirtimeDispatch] USSD payer SMS failed (non-fatal):', smsError?.message)
+        }
+    }
 }
 
 export interface AirtimeDispatchResult {

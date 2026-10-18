@@ -206,11 +206,14 @@ async function main() {
     check('the Hubtel rollback rail never lists them', !/Utilities/.test(menu), menu)
 
     menu = await menuFor({}, 'member')
-    check('a registered user (AFA listed for them) sees AFA as 3 and "Pay Utility" as 4',
-        menu.endsWith('3. AFA Registration\n4. Pay Utility') && /^Welcome to ARHMSTECH\nChoose a Service:/.test(menu), JSON.stringify(menu))
+    check('a registered user sees the platform menu in order: AFA 3, Buy Airtime 4, Pay Utility 5',
+        menu.endsWith('3. AFA Registration\n4. Buy Airtime\n5. Pay Utility') && /^Welcome to ARHMSTECH\nChoose a Service:/.test(menu), JSON.stringify(menu))
 
     menu = await menuFor({ settings: [{ key: 'ussd_afa_enabled', value: 'false' }] }, 'member')
-    check('…and with AFA switched off, "Pay Utility" moves up to 3', /3\. Pay Utility/.test(menu) && !/AFA/.test(menu), menu)
+    check('…and with AFA switched off, the rest move up: Buy Airtime 3, Pay Utility 4', menu.endsWith('3. Buy Airtime\n4. Pay Utility') && !/AFA/.test(menu), menu)
+
+    menu = await menuFor({ settings: [{ key: 'ussd_airtime_enabled', value: 'false' }] }, 'member')
+    check('…and with airtime switched off, Pay Utility is 4 (after AFA)', menu.endsWith('3. AFA Registration\n4. Pay Utility') && !/Airtime/.test(menu), menu)
 
     // ── The conversation ────────────────────────────────────────────────────────
     seed(); r = loadRoute()
@@ -315,7 +318,7 @@ async function main() {
     // ── A registered user ───────────────────────────────────────────────────────
     seed(); r = loadRoute(); quoteHandler = () => goodQuote({ total: 50.26, fee: 0.26 }); createHandler = () => ({ ok: true, amount: 50.26 })
     await dial(r, MEMBER_PHONE, 'k1', 'mtn')
-    out = await say(r, MEMBER_PHONE, 'k1', '4', 'mtn') // 3 is AFA for a registered user
+    out = await say(r, MEMBER_PHONE, 'k1', '5', 'mtn') // 3 is AFA and 4 is airtime for a registered user
     check('a registered user reaches the bill list too', /ECG Prepaid/.test(out.Message), out.Message)
     await say(r, MEMBER_PHONE, 'k1', '1', 'mtn'); await say(r, MEMBER_PHONE, 'k1', '94415486839', 'mtn'); await say(r, MEMBER_PHONE, 'k1', '1', 'mtn')
     out = await say(r, MEMBER_PHONE, 'k1', '50', 'mtn')

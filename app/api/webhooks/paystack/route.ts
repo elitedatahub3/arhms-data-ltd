@@ -110,6 +110,31 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ received: true })
                 }
 
+                // Airtime: the same shape as a bill — recorded before the charge, settled by the
+                // website's own airtime buyer, never by the wallet top-up path.
+                const { findUssdAirtimePayment, settleUssdAirtimeOrder } = await import('@/lib/ussd-airtime-settle')
+                const airtimePayment = await findUssdAirtimePayment(supabase, reference)
+                if (airtimePayment) {
+                    const result = await settleUssdAirtimeOrder(supabase, {
+                        payment: airtimePayment,
+                        reference,
+                        amountPaid: paidAmountKobo / 100,
+                    })
+                    await logCallback({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        transactionId: event.data.id ? String(event.data.id) : null,
+                        payerMsisdn: metadata?.payer_msisdn ?? null,
+                        message: result.success ? null : `Airtime settle failed: ${result.error}`,
+                        raw: event.data,
+                    })
+                    if (result.success) {
+                        await supabase.from('hubtel_sessions').delete().eq('session_id', airtimePayment.metadata?.session_id ?? '')
+                    }
+                    return NextResponse.json({ received: true })
+                }
+
                 // A registered user's order: credit their wallet, then buy from it.
                 // Recognised by its wallet_payments row, which outlives the session.
                 const { findMemberPayment, settleMemberUssdOrder } = await import('@/lib/ussd-member-settle')

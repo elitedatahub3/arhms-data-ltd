@@ -64,14 +64,14 @@ function builder(table: string) {
 const db: any = { from: (t: string) => builder(t), rpc: async () => ({ data: null, error: null }) }
 
 // ── What settlement did ─────────────────────────────────────────────────────────
-const calls = { bill: [] as string[], topup: [] as string[], logged: [] as any[], sms: [] as string[] }
+const calls = { bill: [] as string[], air: [] as string[], topup: [] as string[], logged: [] as any[], sms: [] as string[] }
 let verifyAmountPesewas = 5150
 
 /** A module whose every export is an inert async function — for collaborators this test is not about. */
 const inert = () => new Proxy({}, { get: (_t, prop) => (prop === '__esModule' ? false : async () => ({})) })
 
 const REAL = new Set([
-    '@/lib/ussd-utility-settle', '@/lib/ussd-utility-sms', '@/lib/ussd-member-settle', '@/lib/ussd-member',
+    '@/lib/ussd-utility-settle', '@/lib/ussd-utility-sms', '@/lib/ussd-airtime-settle', '@/lib/ussd-member-settle', '@/lib/ussd-member',
     '@/lib/ussd-reference', '@/lib/ussd-settle', '@/lib/ussd-afa',
     // The two routes under test.
     '@/app/api/webhooks/paystack/route', '@/app/api/cron/verify-paystack-momo-payments/route',
@@ -82,6 +82,9 @@ const originalLoad = (Module as any)._load
     if (request === '@/lib/supabase') return { createServerClient: () => db }
     if (request === '@/lib/utility-order-payments') {
         return { processUtilityDirectOrder: async (reference: string) => { calls.bill.push(reference); return { success: true, order: { status: 'processing' } } } }
+    }
+    if (request === '@/lib/airtime-order-payments') {
+        return { processAirtimeDirectOrder: async (reference: string) => { calls.air.push(reference); return { success: true } } }
     }
     if (request === '@/lib/payments') {
         return {
@@ -125,6 +128,10 @@ const cron = require('@/app/api/cron/verify-paystack-momo-payments/route')
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const REF = 'USSD-UTIL-ABCDEF-123456'
+const airMeta = {
+    kind: 'airtime_order', channel: 'ussd', network: 'MTN', beneficiary_phone: '0241234567', airtime_amount: 10,
+    fee_amount: 0.3, payer_msisdn: '233201234567', session_id: 's1', role: 'agent',
+}
 const billMeta = {
     kind: 'utility_order', channel: 'ussd', service: 'ecg', account_number: '94415486839', bill_amount: 50,
     shop_id: 'sh1', shop_name: 'Kofi Store', payer_msisdn: '233201234567', session_id: 's1',
@@ -137,7 +144,7 @@ function seed(ref = REF, meta: Row = billMeta, extra: Record<string, Row[]> = {}
         hubtel_sessions: [{ session_id: 's1', mobile: '233201234567', data: {} }],
         ...extra,
     }
-    calls.bill.length = 0; calls.topup.length = 0; calls.logged.length = 0; calls.sms.length = 0
+    calls.bill.length = 0; calls.air.length = 0; calls.topup.length = 0; calls.logged.length = 0; calls.sms.length = 0
     verifyAmountPesewas = 5150
 }
 
@@ -210,6 +217,47 @@ async function main() {
     seed('UTIL-WEB-0001', { kind: 'utility_order', service: 'ecg' }, { hubtel_payment_logs: [] })
     r = await runSweep()
     check('control: a website bill (UTIL-) is still paid by the sweep as before', calls.bill.includes('UTIL-WEB-0001') && calls.topup.length === 0, JSON.stringify(calls))
+
+    // ── Airtime: the same two routes, the same stakes ───────────────────────────
+    // A USSD airtime payment that fell through to the wallet top-up path would credit the member's
+    // wallet and buy nothing.
+    const AIR_REF = 'USSD-AIR-ABCDEF-123456'
+    const seedAir = (ref = AIR_REF, meta: Row = airMeta, extra: Record<string, Row[]> = {}) => {
+        seed(ref, meta, extra)
+        tables.wallet_payments[0].amount = 10.3
+        tables.wallet_payments[0].total_amount = 10.3
+        verifyAmountPesewas = 1030
+    }
+
+    seedAir()
+    r = await postWebhook(AIR_REF, 1030, { session_id: 's1', order_type: 'air', payer_msisdn: '233201234567' })
+    check('webhook: a USSD airtime payment goes to the airtime buyer, once, and is acknowledged', r.status === 200 && r.json.received === true && calls.air.length === 1 && calls.air[0] === AIR_REF, JSON.stringify({ r, calls }))
+    check('webhook: …and is NEVER treated as a wallet top-up', calls.topup.length === 0 && calls.bill.length === 0, JSON.stringify(calls))
+    check('webhook: …the session is cleaned up and the delivery logged as a success', tables.hubtel_sessions.length === 0 && calls.logged.some((l) => l.clientReference === AIR_REF && l.status === 'success'))
+
+    seedAir()
+    r = await postWebhook(AIR_REF, 500, { session_id: 's1', order_type: 'air' })
+    check('webhook: an underpaid airtime payment buys nothing and is logged failed', calls.air.length === 0 && calls.topup.length === 0 && calls.logged.some((l) => l.status === 'failed'), JSON.stringify(calls))
+
+    seedAir(AIR_REF, airMeta, { hubtel_payment_logs: [] })
+    r = await runSweep()
+    check('sweep, pending-payments route ALONE: buys the airtime, does not top up', calls.air.includes(AIR_REF) && calls.topup.length === 0, JSON.stringify(calls))
+
+    seedAir()
+    tables.wallet_payments[0].status = 'completed'
+    r = await runSweep()
+    check('sweep, USSD-log route ALONE: buys the airtime, does not top up', calls.air.includes(AIR_REF) && calls.topup.length === 0, JSON.stringify(calls))
+
+    seedAir(); verifyAmountPesewas = 300
+    r = await runSweep()
+    check('sweep: an underpaid airtime payment is neither bought nor topped up', calls.air.length === 0 && calls.topup.length === 0, JSON.stringify(calls))
+
+    seedAir('AIRPAY-WEB-0001', { kind: 'airtime_order', network: 'MTN', beneficiary_phone: '0241234567', airtime_amount: 10 }, { hubtel_payment_logs: [] })
+    r = await runSweep()
+    check('control: a website airtime payment (AIRPAY-) is still bought by the sweep as before', calls.air.includes('AIRPAY-WEB-0001') && calls.topup.length === 0, JSON.stringify(calls))
+
+    seed(); await postWebhook(REF, 5150, { session_id: 's1' })
+    check('a USSD BILL is still paid as a bill, and never as airtime, after this change', calls.bill.includes(REF) && calls.air.length === 0 && calls.topup.length === 0, JSON.stringify(calls))
 
     console.log(`\n${passed} passed, ${failed} failed`)
     process.exit(failed === 0 ? 0 : 1)

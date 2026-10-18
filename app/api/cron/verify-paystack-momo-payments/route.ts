@@ -38,6 +38,7 @@ import {
 import { resolveByReference } from '@/lib/ussd-reference'
 import { findMemberPayment, settleMemberUssdOrder } from '@/lib/ussd-member-settle'
 import { findUssdUtilityPayment, settleUssdUtilityOrder } from '@/lib/ussd-utility-settle'
+import { findUssdAirtimePayment, settleUssdAirtimeOrder } from '@/lib/ussd-airtime-settle'
 import { USSD_MEMBER_PAYMENT_KIND } from '@/lib/ussd-member'
 import {
     processCompletedWalletPayment,
@@ -199,6 +200,15 @@ export async function GET(request: NextRequest) {
                             amountPaid: (verified.amountPesewas ?? 0) / 100,
                         })
                         if (!r.success) throw new Error(r.error || 'USSD utility order failed')
+                    } else if (payment.reference.startsWith('USSD-AIR-') && metadata.kind === 'airtime_order' && metadata.channel === 'ussd') {
+                        // Airtime bought over USSD. Without this it would fall to the wallet
+                        // top-up branch below and credit the wallet instead of buying the airtime.
+                        const r = await settleUssdAirtimeOrder(supabase, {
+                            payment,
+                            reference: payment.reference,
+                            amountPaid: (verified.amountPesewas ?? 0) / 100,
+                        })
+                        if (!r.success) throw new Error(r.error || 'USSD airtime order failed')
                     } else if (payment.reference.startsWith('USSD-') && metadata.kind === USSD_MEMBER_PAYMENT_KIND) {
                         // A registered user's USSD order: credit the wallet AND buy
                         // the item, not just the credit a plain top-up gets.
@@ -476,6 +486,28 @@ export async function GET(request: NextRequest) {
                     if (result.success) {
                         results.ussdFulfilled++
                         await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', utilityPayment.metadata?.session_id ?? '')
+                    } else {
+                        results.failed++
+                    }
+                    continue
+                }
+
+                // Airtime settles through the website's airtime buyer (see the webhook).
+                const airtimePayment = await findUssdAirtimePayment(supabase, reference)
+                if (airtimePayment) {
+                    const result = await settleUssdAirtimeOrder(supabase, { payment: airtimePayment, reference, amountPaid })
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: amountPaid,
+                        message: result.success
+                            ? 'Recovered by reconciliation sweep.'
+                            : `Airtime settle failed: ${result.error ?? 'unknown error'}`,
+                        raw: verified.raw,
+                    })
+                    if (result.success) {
+                        results.ussdFulfilled++
+                        await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', airtimePayment.metadata?.session_id ?? '')
                     } else {
                         results.failed++
                     }

@@ -160,6 +160,20 @@ export async function finalizeAirtimeOrder(
         tag: `airtime-${existing.reference_code}`,
     }).catch(() => {})
 
+    // A top-up bought over USSD: tell the person who paid, if they are not also the one
+    // receiving it (that person is texted below). A no-op for every other order.
+    if (String(existing.reference_code || '').startsWith('USSD-AIR-')) {
+        try {
+            const { smsUssdAirtimePayer } = await import('@/lib/ussd-airtime-settle')
+            await smsUssdAirtimePayer(supabase, {
+                reference: existing.reference_code,
+                event: status === 'completed' ? 'completed' : 'failed',
+            })
+        } catch (smsError: any) {
+            console.error('[AirtimeCompletion] USSD payer SMS failed (non-fatal):', smsError?.message)
+        }
+    }
+
     if (status === 'completed') {
         // A storefront top-up is confirmed by the SHOP, under its own sender ID
         // and from its own SMS credits — the buyer dealt with that shop, not with
