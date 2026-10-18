@@ -22,7 +22,7 @@ export async function GET() {
         const blockedReason = enabled ? smsBlockReason(shop, sub, ctx.userStatus) : SMS_DISABLED_MESSAGE
 
         // loadSmsContext selects a fixed column list, so the toggles are read here.
-        // * so the platform switch (20261018000000) reads as off until it exists.
+        // * so the platform switch (20261018010000) reads as off until it exists.
         const { data: toggles } = await supabaseAdmin
             .from('sms_accounts')
             .select('*')
@@ -153,7 +153,7 @@ export async function PATCH(request: Request) {
         if (error) {
             console.error('[SmsAccount] PATCH failed:', error)
             if (error.code === '42703') {
-                return NextResponse.json({ error: 'Run migration 20261018000000_sms_platform_order_sms.sql first.' }, { status: 500 })
+                return NextResponse.json({ error: 'Run migration 20261018010000_sms_platform_order_sms.sql first.' }, { status: 500 })
             }
             return NextResponse.json({ error: 'Could not save that setting' }, { status: 500 })
         }
