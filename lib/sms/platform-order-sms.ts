@@ -57,7 +57,7 @@ async function sendUnderBuyerSender(params: PlatformOrderSmsParams): Promise<boo
     const db = createServerClient() as any
 
     // * rather than naming the column, so a database without
-    // 20261018000000_sms_platform_order_sms.sql simply reads it as off.
+    // 20261018010000_sms_platform_order_sms.sql simply reads it as off.
     const { data: account } = await db.from('sms_accounts').select('*').eq('user_id', params.userId).maybeSingle()
     if (!account || account.platform_order_sms_enabled !== true) return false
     if (account.status !== 'active') {
