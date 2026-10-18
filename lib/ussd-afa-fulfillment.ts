@@ -16,6 +16,7 @@
  */
 import { createClient } from '@supabase/supabase-js'
 import { sendSMS } from '@/lib/sms-service'
+import { sendShopOrHouseSms } from '@/lib/sms/order-confirmations'
 import { computeShopProfit, insertOrderWithSplit, profitColumns } from '@/lib/shop-profit'
 import { creditOrderProfit } from '@/lib/shop-profit-credit'
 import { notifyAdminsOfAfaApplication } from '@/lib/afa/checkout'
@@ -127,11 +128,25 @@ export async function fulfillUSSDAFABySession(params: {
         await notifyAdminsOfAfaApplication(supabaseAdmin, row).catch(() => {})
     })
     deferredWork.push(async () => {
-        // A shop's guest: the platform's house sender, like every other USSD notice.
-        await sendSMS({
-            recipient: data.payerMsisdn || session.mobile,
-            message: `${AFA_ITEM_NAME} received for ${form.full_name}. We will process it and SMS you when it is done. ARHMS DATA`,
-        }).catch((err: any) => console.error('[USSD-AFA Fulfill] SMS failed:', err?.message))
+        // A shop's guest hears from the SHOP: its own sender ID, paid from its SMS credits.
+        // The house sender only steps in when the shop cannot carry it (no approved sender,
+        // no credits), so the buyer is never left without a receipt.
+        const phone = data.payerMsisdn || session.mobile
+        await sendShopOrHouseSms(
+            supabaseAdmin,
+            {
+                shopId: shop.id,
+                orderId: referenceCode,
+                kind: 'afa',
+                phone,
+                message: `${AFA_ITEM_NAME} received for ${form.full_name}. We will process it and SMS you when it is done. Thank you for choosing ${shop.shop_name || 'us'}.`,
+                details: {},
+            },
+            () => sendSMS({
+                recipient: phone,
+                message: `${AFA_ITEM_NAME} received for ${form.full_name}. We will process it and SMS you when it is done. ARHMS DATA`,
+            })
+        ).catch((err: any) => console.error('[USSD-AFA Fulfill] SMS failed:', err?.message))
     })
     deferredWork.push(async () => {
         await supabaseAdmin.from('hubtel_sessions').delete().eq('session_id', sessionId)

@@ -22,7 +22,7 @@ import { isKingFlexySmsConfigured } from '@/lib/kingflexy-sms-service'
 import { countSegments } from '@/lib/sms/sms-rules'
 import { getAllowedSenders, dispatchCampaignBatch, settleCampaignIfDone } from '@/lib/sms/customer-sms'
 
-export type OrderSmsKind = 'data' | 'airtime'
+export type OrderSmsKind = 'data' | 'airtime' | 'afa' | 'utility' | 'voucher'
 
 export interface OrderConfirmationParams {
     /** The storefront the order was placed on — a sub-agent's own shop, for a sub. */
@@ -30,6 +30,13 @@ export interface OrderConfirmationParams {
     /** Ours, only for the idempotency key. */
     orderId: string
     kind: OrderSmsKind
+    /**
+     * Replaces the generated text. USSD sends afa/utility/voucher notices this way:
+     * their wording is the caller's, only the sender and the billing are ours.
+     */
+    message?: string
+    /** Distinguishes several notices for one order (a bill's processing vs completed). */
+    suffix?: string
     /** The buyer's number, in any Ghana form. */
     phone: string
     details: {
@@ -46,7 +53,10 @@ export interface OrderConfirmationResult {
     campaignId?: string
 }
 
-const TOGGLE_COLUMN: Record<OrderSmsKind, string> = {
+// Only data and airtime have an owner switch. The USSD notices (afa, utility,
+// voucher) go out under the shop whenever it can carry them: the buyer dialled that
+// shop's code, and the alternative is the house sender on a stranger's sale.
+const TOGGLE_COLUMN: Partial<Record<OrderSmsKind, string>> = {
     data: 'order_sms_data_enabled',
     airtime: 'order_sms_airtime_enabled',
 }
@@ -57,6 +67,7 @@ const TOGGLE_COLUMN: Record<OrderSmsKind, string> = {
  * every single order.
  */
 function buildMessage(kind: OrderSmsKind, shopName: string, params: OrderConfirmationParams): string {
+    if (params.message) return params.message.replace(/\s+/g, ' ').trim()
     const network = (params.details.network || '').trim()
 
     if (kind === 'airtime') {
@@ -152,13 +163,14 @@ export async function sendShopOrderConfirmation(
 
         const { data: account } = await db
             .from('sms_accounts')
-            .select(`id, user_id, status, credits, ${TOGGLE_COLUMN[params.kind]}`)
+            .select(`id, user_id, status, credits${TOGGLE_COLUMN[params.kind] ? `, ${TOGGLE_COLUMN[params.kind]}` : ''}`)
             .eq('user_id', shop.owner_id)
             .maybeSingle()
 
         if (!account) return { sent: false, skipped: 'no sms account' }
         if (account.status !== 'active') return { sent: false, skipped: `account ${account.status}` }
-        if (!account[TOGGLE_COLUMN[params.kind]]) return { sent: false, skipped: `${params.kind} confirmations off` }
+        const toggle = TOGGLE_COLUMN[params.kind]
+        if (toggle && !account[toggle]) return { sent: false, skipped: `${params.kind} confirmations off` }
 
         // ── Sender ───────────────────────────────────────────────────────────
         // Their OWN approved name only. Falling back to a pool sender would put
@@ -189,7 +201,7 @@ export async function sendShopOrderConfirmation(
         // Supplier webhooks replay and sync crons re-run over the same order.
         // The reference is unique per (account, reference), so the check below
         // and the insert's own constraint both hold the line.
-        const reference = `order:${params.orderId}:${params.kind}`.slice(0, 100)
+        const reference = `order:${params.orderId}:${params.kind}${params.suffix ? `:${params.suffix}` : ''}`.slice(0, 100)
 
         const { data: existing } = await db
             .from('sms_campaigns')
@@ -285,4 +297,28 @@ export async function sendShopOrderConfirmation(
         console.error('[OrderSms] Unexpected error (order unaffected):', error?.message || error)
         return { sent: false, skipped: 'unexpected error' }
     }
+}
+
+/**
+ * A USSD notice for a shop's buyer: under the SHOP's sender ID when it can carry it,
+ * otherwise through `fallback` (the house path). The buyer is never left without one.
+ *
+ * "Already sent" is not a failure: a replayed settlement must not text twice.
+ */
+export async function sendShopOrHouseSms(
+    db: any,
+    params: OrderConfirmationParams,
+    fallback: () => Promise<unknown>
+): Promise<{ via: 'shop' | 'house' | 'none'; skipped?: string }> {
+    const outcome = await sendShopOrderConfirmation(db, params)
+    if (outcome.sent) return { via: 'shop' }
+    if (outcome.skipped === 'already sent' || outcome.skipped === 'already sending') {
+        return { via: 'none', skipped: outcome.skipped }
+    }
+    try {
+        await fallback()
+    } catch (err: any) {
+        console.error('[OrderSms] House fallback failed:', err?.message || err)
+    }
+    return { via: 'house', skipped: outcome.skipped }
 }

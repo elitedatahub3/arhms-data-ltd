@@ -8,6 +8,7 @@
  */
 import { createClient } from '@supabase/supabase-js'
 import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
+import { sendShopOrHouseSms } from '@/lib/sms/order-confirmations'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { computeShopProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
 import { creditOrderProfit } from '@/lib/shop-profit-credit'
@@ -240,7 +241,7 @@ export async function fulfillUSSDRCBySession(params: {
 
     // 7. Send PIN & Serial via Hubtel SMS
     const recipientPhone = recipientMobile || payerMobile
-    const smsResult = await sendHubtelSMS({
+    const houseVoucherSms = () => sendHubtelSMS({
         recipient: recipientPhone,
         message:
             `Your ${selectedCheckerName} Result Checker is ready!\n\n` +
@@ -248,6 +249,28 @@ export async function fulfillUSSDRCBySession(params: {
             `Serial: ${voucher.serial_number}\n\n` +
             `Visit waecdirect.org to check your results.\n\nARHMS DATA`,
     })
+
+    let smsResult: unknown
+    if (shopId) {
+        // A shop's buyer gets the voucher from the SHOP's sender ID; the house route is
+        // the fallback, so a voucher that was paid for always reaches the buyer.
+        smsResult = await sendShopOrHouseSms(
+            supabaseAdmin,
+            {
+                shopId,
+                orderId: String(orderId),
+                kind: 'voucher',
+                phone: recipientPhone,
+                message:
+                    `Your ${selectedCheckerName} Result Checker. PIN: ${voucher.pin} Serial: ${voucher.serial_number} ` +
+                    `Check results at waecdirect.org. Thank you for choosing ${shopName || 'us'}.`,
+                details: {},
+            },
+            houseVoucherSms
+        )
+    } else {
+        smsResult = await houseVoucherSms()
+    }
 
     console.log('[USSD-RC Fulfill] SMS result:', smsResult)
 

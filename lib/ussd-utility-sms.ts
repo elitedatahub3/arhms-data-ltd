@@ -13,11 +13,14 @@
  * No-ops for anything that is not a USSD utility payment, so the callers can invoke it
  * unconditionally.
  *
- * Sent from the platform's house sender (sendSMS: active_sms_provider and SMS_ENABLED apply).
+ * A SHOP's buyer (meta.shop_id) is texted from the SHOP's sender ID, paid from its SMS credits, with
+ * the house sender as the fallback when the shop cannot carry it. Everyone else gets the platform's
+ * house sender (sendSMS: active_sms_provider and SMS_ENABLED apply).
  * They are notices to the person who paid about THEIR money, not order confirmations to a
  * customer, so the SMS Platform's own-sender setting does not apply to them.
  */
 import { sendSMS } from '@/lib/sms-service'
+import { sendShopOrHouseSms } from '@/lib/sms/order-confirmations'
 
 export type UssdUtilityEvent = 'processing' | 'completed' | 'refunded' | 'failed'
 
@@ -76,7 +79,26 @@ export async function smsUssdUtilityPayer(
 
     const total = params.totalPaid ?? Number(payment.total_amount)
     try {
-        await sendSMS({ recipient: meta.payer_msisdn, message: composeUtilitySms(event, meta, total, reference) })
+        const message = composeUtilitySms(event, meta, total, reference)
+        const house = () => sendSMS({ recipient: meta.payer_msisdn, message })
+        if (meta.shop_id) {
+            // The 'ARHMS:' lead would put the house name on a shop-branded text.
+            await sendShopOrHouseSms(
+                db,
+                {
+                    shopId: meta.shop_id,
+                    orderId: reference,
+                    kind: 'utility',
+                    suffix: event,
+                    phone: meta.payer_msisdn,
+                    message: message.replace(/^ARHMS:s*/, ''),
+                    details: {},
+                },
+                house
+            )
+        } else {
+            await house()
+        }
     } catch (error: any) {
         console.error('[UssdUtilitySms] SMS failed:', reference, error?.message)
     }
