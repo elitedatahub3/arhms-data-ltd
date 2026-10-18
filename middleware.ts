@@ -212,6 +212,14 @@ export async function middleware(request: NextRequest) {
         return NextResponse.next({ request: { headers: request.headers } })
     }
 
+    // === USSD INTERNAL BYPASS ===
+    // /api/ussd/* is called only by the edge USSD route, server to server, and every
+    // handler there checks the shared x-ussd-internal token itself. The session lookup and
+    // per-IP rate limit below would only throttle the one caller that must never be throttled.
+    if (pathname.startsWith('/api/ussd/')) {
+        return NextResponse.next({ request: { headers: request.headers } })
+    }
+
     // === PAYSTACK WEBHOOK BYPASS ===
     // Server-to-server and signed: the route verifies x-paystack-signature itself,
     // so the session lookup, CORS and rate limiting below add only latency and

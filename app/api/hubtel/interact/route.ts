@@ -24,6 +24,17 @@ import { getDeliveryStatusForConfirm } from '@/lib/delivery-status';
 import { channelForNetwork, formatDuration, isConfirmWorthy } from '@/lib/delivery-estimate';
 import { logInitiate } from '@/lib/hubtel-payment-log';
 import {
+    UTIL_AMOUNT_PROMPT,
+    UTIL_PHONE_PROMPT,
+    accountPrompt,
+    callUtilitiesApi,
+    readAccountNumber,
+    readAmount,
+    renderUtilityMenu,
+    serviceFromChoice,
+    utilityLabel,
+} from '@/lib/ussd-utilities';
+import {
     AFA_CARD_PROMPT,
     AFA_DOB_PROMPT,
     AFA_ITEM_NAME,
@@ -133,6 +144,15 @@ const USSD_FLAG_TTL_MS = 60_000;
 /** admin_settings key naming which gateway collects for a USSD sale. */
 const USSD_PROVIDER_KEY = SCOPE_SETTING_KEY.ussd;
 
+/** admin_settings key: utility bills are on the USSD menu only when this is exactly 'true'. */
+const UTILITIES_ENABLED_KEY = 'ussd_utilities_enabled';
+
+/** The edge route's wait on the Node-side bill route: pricing a bill, and recording a payment. */
+const UTIL_QUOTE_TIMEOUT_MS = 7500;
+const UTIL_CREATE_TIMEOUT_MS = 3500;
+/** Wrong accounts tolerated before the session ends, so nobody can probe meters from a keypad. */
+const MAX_UTIL_ATTEMPTS = 3;
+
 /** admin_settings key: 'false' takes AFA registration off the USSD menu. */
 const AFA_ENABLED_KEY = 'ussd_afa_enabled';
 
@@ -163,6 +183,14 @@ interface UssdFlags {
     afaEnabled: boolean;
     /** admin_settings.storefront_afa_enabled — the same switch the storefront obeys. */
     afaStorefrontOpen: boolean;
+    /**
+     * Utility bills on the menu. OFF unless ussd_utilities_enabled is exactly 'true' —
+     * unlike the other switches — because bills move real money through a provider whose
+     * track record here is short.
+     */
+    utilitiesEnabled: boolean;
+    /** admin_settings.utility_public_launch — the website's own master switch for bills. */
+    utilityLaunched: boolean;
 }
 
 let ussdFlagCache: { flags: UssdFlags; at: number } | null = null;
@@ -185,7 +213,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
             getSupabaseAdmin()
                 .from('admin_settings')
                 .select('key, value')
-                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MEMBER_SKIP_CODE_KEY, AFA_ENABLED_KEY, 'storefront_afa_enabled', ...ALL_MTN_GATE_KEYS]),
+                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MEMBER_SKIP_CODE_KEY, AFA_ENABLED_KEY, 'storefront_afa_enabled', UTILITIES_ENABLED_KEY, 'utility_public_launch', ...ALL_MTN_GATE_KEYS]),
             3000,
             'ussd flags fetch timeout'
         );
@@ -220,6 +248,8 @@ async function getUssdFlags(): Promise<UssdFlags> {
             memberSkipCode: String(raw[MEMBER_SKIP_CODE_KEY] ?? 'true').toLowerCase() !== 'false',
             afaEnabled: String(raw[AFA_ENABLED_KEY] ?? 'true').toLowerCase() !== 'false',
             afaStorefrontOpen: String(raw['storefront_afa_enabled'] ?? '') === 'true',
+            utilitiesEnabled: String(raw[UTILITIES_ENABLED_KEY] ?? '') === 'true',
+            utilityLaunched: String(raw['utility_public_launch'] ?? '') === 'true',
         };
         ussdFlagCache = { flags, at: Date.now() };
         return flags;
@@ -234,7 +264,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
         // runs when we could not read the setting at all — the same reasoning as
         // loadGateSettings(), which also treats an unreadable setting as off.
         return ussdFlagCache?.flags
-            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false, memberSkipCode: false, afaEnabled: false, afaStorefrontOpen: false };
+            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false, memberSkipCode: false, afaEnabled: false, afaStorefrontOpen: false, utilitiesEnabled: false, utilityLaunched: false };
     }
 }
 
@@ -284,6 +314,7 @@ export async function POST(req: Request) {
                         member,
                         // A sub-agent member is not offered AFA: see loadAfaOffer.
                         afaListed: ussdFlags.afaEnabled && ussdFlags.paymentProvider === 'paystack_momo' && !member.sub,
+                        utilListed: ussdFlags.utilitiesEnabled && ussdFlags.utilityLaunched && ussdFlags.paymentProvider === 'paystack_momo',
                     };
                     waitUntil((async () => {
                         const { error } = await getSupabaseAdmin().from('hubtel_sessions').upsert({
@@ -383,7 +414,11 @@ export async function POST(req: Request) {
             // application returns to its last question, not to the service menu.
             const back = currentStep === 'enter_phone' && sessionData.orderType === 'afa'
                 ? 'afa_town'
-                : BACK_STEPS[currentStep];
+                // Back from the amount returns to the last thing asked: the linked phone for
+                // ECG, the account number for the TV bills.
+                : currentStep === 'util_amount'
+                    ? (sessionData.util?.service === 'ecg' ? 'util_phone' : 'util_account')
+                    : BACK_STEPS[currentStep];
             if (back === 'exit') {
                 endSession(SessionId);
                 return respond(SessionId, 'release', 'Thank you for using ARHMS. Goodbye.');
@@ -416,7 +451,7 @@ export async function POST(req: Request) {
                 try {
                     const shopPromise = getSupabaseAdmin()
                         .from('shop_profiles')
-                        .select('id, shop_name, owner_id')
+                        .select('id, shop_name, owner_id, utilities_enabled')
                         .eq('ussd_code', code)
                         .eq('ussd_status', 'active')
                         .eq('approval_status', 'approved')
@@ -469,6 +504,10 @@ export async function POST(req: Request) {
                 // AFA is listed only for a shop that has priced it. One small read, and
                 // only when the switches are on; if it is slow or fails the shop simply
                 // shows no AFA line rather than delaying the menu.
+                // Bills are listed for a shop that accepts them. No read needed: the flag rides
+                // on the shop row already fetched. The Node-side route re-checks everything.
+                sessionData.utilListed = ussdFlags.utilitiesEnabled && ussdFlags.utilityLaunched
+                    && ussdFlags.paymentProvider === 'paystack_momo' && shop.utilities_enabled === true;
                 sessionData.afaListed = false;
                 if (ussdFlags.afaEnabled && ussdFlags.afaStorefrontOpen && ussdFlags.paymentProvider === 'paystack_momo') {
                     try {
@@ -540,7 +579,17 @@ export async function POST(req: Request) {
                     });
                 }
 
-                if (userInput === '3' && sessionData.afaListed) {
+                // 3 and up map through the same list the menu was numbered from.
+                const extraKey = /^\d+$/.test(userInput || '') ? extraServices(sessionData)[parseInt(userInput, 10) - 3] : undefined;
+
+                if (extraKey === 'util') {
+                    sessionData.orderType = 'util';
+                    sessionData.util = { attempts: 0 };
+                    saveAsync(SessionId, 'util_service', sessionData);
+                    return respond(SessionId, 'response', renderUtilityMenu(), { label: 'Select bill' });
+                }
+
+                if (extraKey === 'afa') {
                     let offer: { price: number } | null = null;
                     try {
                         offer = await withTimeout(loadAfaOffer(getSupabaseAdmin(), sessionData), 6000, 'AFA offer timeout');
@@ -650,6 +699,129 @@ export async function POST(req: Request) {
                 sessionData.afaForm = { ...(sessionData.afaForm || {}), location: parsed.value };
                 saveAsync(SessionId, 'enter_phone', sessionData);
                 return respond(SessionId, 'response', AFA_PHONE_PROMPT, { label: 'Number to register', fieldType: 'phone' });
+            }
+
+            // ── UTILITIES: which bill, which account, how much ───────────────────
+            // Nothing here decides a price or whether an account exists. The Node-side route
+            // does, in one bounded provider call at the amount step (lib/ussd-utilities.ts
+            // explains why it cannot run here). The caller sees the account holder's name and
+            // the total on the confirm screen, before any money is asked for.
+            case 'util_service': {
+                if (!userInput) {
+                    saveAsync(SessionId, 'util_service', sessionData);
+                    return respond(SessionId, 'response', renderUtilityMenu(), { label: 'Select bill' });
+                }
+                const service = serviceFromChoice(userInput);
+                if (!service) {
+                    saveAsync(SessionId, 'util_service', sessionData);
+                    return respond(SessionId, 'response', `Invalid selection.\n${renderUtilityMenu()}`, { label: 'Select bill' });
+                }
+                sessionData.util = { ...(sessionData.util || {}), service };
+                sessionData.itemName = utilityLabel(service);
+                saveAsync(SessionId, 'util_account', sessionData);
+                return respond(SessionId, 'response', accountPrompt(service), { label: 'Account number' });
+            }
+
+            case 'util_account': {
+                const service = sessionData.util?.service;
+                if (!service) {
+                    endSession(SessionId);
+                    return respond(SessionId, 'release', 'Session expired. Please dial again.');
+                }
+                if (!userInput) {
+                    saveAsync(SessionId, 'util_account', sessionData);
+                    return respond(SessionId, 'response', accountPrompt(service), { label: 'Account number' });
+                }
+                const account = readAccountNumber(userInput);
+                if (!account.ok) {
+                    saveAsync(SessionId, 'util_account', sessionData);
+                    return respond(SessionId, 'response', `${account.error}\n${accountPrompt(service)}`, { label: 'Account number' });
+                }
+                sessionData.util = { ...sessionData.util, accountNumber: account.value };
+                // ECG finds a meter through the phone it is linked to, so it needs that too.
+                if (service === 'ecg') {
+                    saveAsync(SessionId, 'util_phone', sessionData);
+                    return respond(SessionId, 'response', UTIL_PHONE_PROMPT, { label: 'Linked phone', fieldType: 'phone' });
+                }
+                saveAsync(SessionId, 'util_amount', sessionData);
+                return respond(SessionId, 'response', UTIL_AMOUNT_PROMPT, { label: 'Amount', fieldType: 'decimal' });
+            }
+
+            case 'util_phone': {
+                if (!userInput) {
+                    saveAsync(SessionId, 'util_phone', sessionData);
+                    return respond(SessionId, 'response', UTIL_PHONE_PROMPT, { label: 'Linked phone', fieldType: 'phone' });
+                }
+                const phone = userInput === '1' ? normalizeGhanaPhone(Mobile) : normalizeGhanaPhone(userInput);
+                if (!phone) {
+                    saveAsync(SessionId, 'util_phone', sessionData);
+                    return respond(SessionId, 'response', `Invalid number.\n${UTIL_PHONE_PROMPT}`, { label: 'Linked phone', fieldType: 'phone' });
+                }
+                sessionData.util = { ...sessionData.util, phone };
+                saveAsync(SessionId, 'util_amount', sessionData);
+                return respond(SessionId, 'response', UTIL_AMOUNT_PROMPT, { label: 'Amount', fieldType: 'decimal' });
+            }
+
+            case 'util_amount': {
+                const u = sessionData.util || {};
+                if (!u.service || !u.accountNumber) {
+                    endSession(SessionId);
+                    return respond(SessionId, 'release', 'Session expired. Please dial again.');
+                }
+                if (!userInput) {
+                    saveAsync(SessionId, 'util_amount', sessionData);
+                    return respond(SessionId, 'response', UTIL_AMOUNT_PROMPT, { label: 'Amount', fieldType: 'decimal' });
+                }
+                const amount = readAmount(userInput);
+                if (!amount.ok) {
+                    saveAsync(SessionId, 'util_amount', sessionData);
+                    return respond(SessionId, 'response', `${amount.error}\n${UTIL_AMOUNT_PROMPT}`, { label: 'Amount', fieldType: 'decimal' });
+                }
+
+                const result = await callUtilitiesApi(
+                    new URL(req.url).origin,
+                    { action: 'quote', sessionId: SessionId, service: u.service, accountNumber: u.accountNumber, phone: u.phone, amount: amount.value },
+                    UTIL_QUOTE_TIMEOUT_MS
+                );
+
+                if (!result.ok || !result.quote) {
+                    const message = screenText(result.error, 'We could not price that bill. Please try again.');
+                    if (result.field === 'fatal') {
+                        endSession(SessionId);
+                        return respond(SessionId, 'release', message);
+                    }
+                    if (result.field === 'amount') {
+                        saveAsync(SessionId, 'util_amount', sessionData);
+                        return respond(SessionId, 'response', screenText(`${message}\n${UTIL_AMOUNT_PROMPT}`, UTIL_AMOUNT_PROMPT), { label: 'Amount', fieldType: 'decimal' });
+                    }
+                    // An account the provider would not verify: count it, and send the caller
+                    // back to re-enter it (and the phone, for ECG) rather than the amount.
+                    const attempts = (u.attempts || 0) + 1;
+                    if (attempts >= MAX_UTIL_ATTEMPTS) {
+                        endSession(SessionId);
+                        return respond(SessionId, 'release', 'We could not verify that account. Please check the number and dial again.');
+                    }
+                    sessionData.util = { ...u, attempts };
+                    const retryStep = result.field === 'phone' ? 'util_phone' : 'util_account';
+                    saveAsync(SessionId, retryStep, sessionData);
+                    return respond(
+                        SessionId,
+                        'response',
+                        screenText(`${message}\n${retryStep === 'util_phone' ? UTIL_PHONE_PROMPT : accountPrompt(u.service)}`, accountPrompt(u.service)),
+                        { label: retryStep === 'util_phone' ? 'Linked phone' : 'Account number', ...(retryStep === 'util_phone' ? { fieldType: 'phone' as const } : {}) }
+                    );
+                }
+
+                // The price is the server's, signed; the session only carries it to confirm.
+                const q = result.quote;
+                sessionData.util = { ...u, quote: q };
+                sessionData.selectedPrice = q.total;
+                sessionData.itemName = q.label;
+                saveAsync(SessionId, 'confirm', sessionData);
+
+                const holder = toAsciiSafe(q.accountName, '').slice(0, 24);
+                const body = `Confirm ${q.label}:\n${q.accountNumber}${holder ? `\n${holder}` : ''}\nBill GHS ${formatGhs(q.billAmount)}\nFee GHS ${formatGhs(q.fee)}\nTotal GHS ${formatGhs(q.total)}`;
+                return respond(SessionId, 'response', `${body}${USSD_CONFIRM_FOOTER}`, { label: 'Confirm order' });
             }
 
             // ── DATA: NETWORK ────────────────────────────────────────────────────
@@ -844,8 +1016,10 @@ export async function POST(req: Request) {
                 }
 
                 const price = parseFloat(String(sessionData.selectedPrice || '0'));
-                const orderType: 'data' | 'rc' | 'afa' =
-                    sessionData.orderType === 'data' ? 'data' : sessionData.orderType === 'afa' ? 'afa' : 'rc';
+                const orderType: 'data' | 'rc' | 'afa' | 'util' =
+                    sessionData.orderType === 'data' ? 'data'
+                        : sessionData.orderType === 'afa' ? 'afa'
+                            : sessionData.orderType === 'util' ? 'util' : 'rc';
 
                 // The Hubtel rollback rail fulfils data and checkers only. A session
                 // opened before an admin flipped to it must not charge for an AFA it
@@ -853,6 +1027,11 @@ export async function POST(req: Request) {
                 if (orderType === 'afa' && ussdFlags.paymentProvider === 'hubtel') {
                     endSession(SessionId);
                     return respond(SessionId, 'release', 'AFA registration is unavailable right now. Please try again later.');
+                }
+                // Same for bills, which settle through their own payment record.
+                if (orderType === 'util' && (ussdFlags.paymentProvider === 'hubtel' || !sessionData.util?.quote?.token)) {
+                    endSession(SessionId);
+                    return respond(SessionId, 'release', 'Bill payments are unavailable right now. Please try again later.');
                 }
 
                 sessionData.chargedAmount = price;
@@ -941,7 +1120,15 @@ export async function POST(req: Request) {
                             // once and buys from the wallet (lib/ussd-member-settle.ts).
                             // Recorded BEFORE the charge for the same reason as the
                             // session: a payment we cannot match is a lost customer.
-                            sessionData.mode === 'member'
+                            // A bill records its payment through the Node-side route, which holds the
+                            // signed quote's contents; the edge sends only the quote and the reference.
+                            orderType === 'util'
+                                ? callUtilitiesApi(
+                                    new URL(req.url).origin,
+                                    { action: 'create', sessionId: SessionId, reference, token: sessionData.util.quote.token },
+                                    UTIL_CREATE_TIMEOUT_MS
+                                ).then((r) => { if (!r.ok) throw new Error(r.error || 'Bill payment could not be recorded'); })
+                                : sessionData.mode === 'member'
                                 ? recordMemberPayment(getSupabaseAdmin(), sessionData.member, {
                                     reference,
                                     amount: price,
@@ -958,7 +1145,7 @@ export async function POST(req: Request) {
                                 })
                                 : Promise.resolve(),
                         ]),
-                        2500,
+                        orderType === 'util' ? UTIL_CREATE_TIMEOUT_MS + 500 : 2500,
                         'Order save timeout'
                     );
                 } catch (saveError: any) {
@@ -1154,6 +1341,9 @@ const BACK_STEPS: Record<string, string> = {
     afa_dob: 'afa_card',
     afa_region: 'afa_dob',
     afa_town: 'afa_region',
+    util_service: 'choose_service',
+    util_account: 'util_service',
+    util_phone: 'util_account',
 };
 
 /**
@@ -1292,17 +1482,34 @@ function uniqueNetworks(bundles: Array<{ network: string }>): string[] {
 }
 
 /** The service menu for whoever this session belongs to. */
+/**
+ * The services after Data (1) and Result Checker (2), in the order they are numbered from 3.
+ * Numbered by what is actually on offer, so a shop with bills but no AFA shows "3. Utilities",
+ * not a gap — and choose_service reads the caller's number back through this same list.
+ */
+function extraServices(sessionData: any): Array<'afa' | 'util'> {
+    const out: Array<'afa' | 'util'> = [];
+    if (sessionData.afaListed) out.push('afa');
+    if (sessionData.utilListed) out.push('util');
+    return out;
+}
+
+const EXTRA_SERVICE_LABELS = { afa: 'AFA Registration', util: 'Utilities' } as const;
+
 function serviceMenuFor(sessionData: any): string {
+    const extras = extraServices(sessionData)
+        .map((key, i) => `\n${3 + i}. ${EXTRA_SERVICE_LABELS[key]}`)
+        .join('');
     if (sessionData.mode === 'member') {
         // ASCII only: a non-ASCII character in a Hubtel response makes the call throw.
         const raw = String(sessionData.member?.firstName || '').replace(/[^\x20-\x7E]/g, '').trim();
         const name = raw.length > 16 ? `${raw.slice(0, 15)}.` : raw;
-        return `Welcome back${name ? ` ${name}` : ''}\n1. Data Bundles\n2. Result Checker${sessionData.afaListed ? '\n3. AFA Registration' : ''}\n0. Exit`;
+        return `Welcome back${name ? ` ${name}` : ''}\n1. Data Bundles\n2. Result Checker${extras}\n0. Exit`;
     }
-    if (sessionData.mode === 'shop' && sessionData.afaListed) {
+    if (sessionData.mode === 'shop' && extras) {
         const shop = String(sessionData.shopName || 'ARHMS');
         const name = shop.length > 20 ? `${shop.slice(0, 19)}.` : shop;
-        return `Welcome to ${name}\n1. Data Bundles\n2. Result Checker\n3. AFA Registration\n0. Exit`;
+        return `Welcome to ${name}\n1. Data Bundles\n2. Result Checker${extras}\n0. Exit`;
     }
     return renderServiceMenu(sessionData.shopName || 'ARHMS');
 }

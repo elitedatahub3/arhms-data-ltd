@@ -83,6 +83,33 @@ export async function POST(request: NextRequest) {
                 const { ensureUssdSession } = await import('@/lib/ussd-reference')
                 const { logCallback } = await import('@/lib/hubtel-payment-log')
 
+                // A utility bill: the payment record was written before the charge and
+                // settles through the website's own bill payer. Recognised by its record,
+                // because a USSD- reference that fell through to the wallet top-up path
+                // would credit a wallet instead of paying the bill.
+                const { findUssdUtilityPayment, settleUssdUtilityOrder } = await import('@/lib/ussd-utility-settle')
+                const utilityPayment = await findUssdUtilityPayment(supabase, reference)
+                if (utilityPayment) {
+                    const result = await settleUssdUtilityOrder(supabase, {
+                        payment: utilityPayment,
+                        reference,
+                        amountPaid: paidAmountKobo / 100,
+                    })
+                    await logCallback({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        transactionId: event.data.id ? String(event.data.id) : null,
+                        payerMsisdn: metadata?.payer_msisdn ?? null,
+                        message: result.success ? null : `Utility settle failed: ${result.error}`,
+                        raw: event.data,
+                    })
+                    if (result.success) {
+                        await supabase.from('hubtel_sessions').delete().eq('session_id', utilityPayment.metadata?.session_id ?? '')
+                    }
+                    return NextResponse.json({ received: true })
+                }
+
                 // A registered user's order: credit their wallet, then buy from it.
                 // Recognised by its wallet_payments row, which outlives the session.
                 const { findMemberPayment, settleMemberUssdOrder } = await import('@/lib/ussd-member-settle')

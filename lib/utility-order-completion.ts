@@ -243,5 +243,20 @@ export async function finalizeUtilityOrder(
         tag: `utility-${existing.reference_code}`,
     }).catch(() => {})
 
+    // A bill paid over USSD: the buyer hung up long ago and has no page to read, so text them.
+    // A no-op for every other order.
+    if (String(existing.reference_code || '').startsWith('USSD-UTIL-')) {
+        try {
+            const { smsUssdUtilityPayer } = await import('@/lib/ussd-utility-sms')
+            await smsUssdUtilityPayer(supabase, {
+                reference: existing.reference_code,
+                event: finalStatus === 'completed' ? 'completed' : refunded ? 'refunded' : 'failed',
+                totalPaid: Number(existing.total_paid ?? 0),
+            })
+        } catch (smsError: any) {
+            console.error('[UtilityCompletion] USSD payer SMS failed (non-fatal):', smsError?.message)
+        }
+    }
+
     return { success: true, order: existing }
 }

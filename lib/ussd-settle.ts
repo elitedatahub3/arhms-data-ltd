@@ -20,6 +20,13 @@ export async function fulfillUssdSession(params: {
     if (orderType === 'data') {
         return (await import('@/lib/ussd-data-fulfillment')).fulfillUSSDDataBySession(rest)
     }
+    if (orderType === 'util') {
+        // A utility bill is recorded as a wallet_payments row, not in the session, and the
+        // webhook and sweep route it through lib/ussd-utility-settle.ts before they ever
+        // resolve a session. Reaching here means that routing was bypassed — and the
+        // default below would hand the payment to the result-checker fulfiller.
+        return { success: false, error: 'Utility bills settle through their payment record' }
+    }
     if (orderType === 'afa') {
         return (await import('@/lib/ussd-afa-fulfillment')).fulfillUSSDAFABySession(rest)
     }

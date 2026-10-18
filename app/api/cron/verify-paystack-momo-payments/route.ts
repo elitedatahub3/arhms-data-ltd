@@ -37,6 +37,7 @@ import {
 } from '@/lib/hubtel-status-throttle'
 import { resolveByReference } from '@/lib/ussd-reference'
 import { findMemberPayment, settleMemberUssdOrder } from '@/lib/ussd-member-settle'
+import { findUssdUtilityPayment, settleUssdUtilityOrder } from '@/lib/ussd-utility-settle'
 import { USSD_MEMBER_PAYMENT_KIND } from '@/lib/ussd-member'
 import {
     processCompletedWalletPayment,
@@ -188,7 +189,17 @@ export async function GET(request: NextRequest) {
 
                     // Same routing as the webhook and verify-hubtel-payments. Every
                     // processor is idempotent, so racing a late callback is safe.
-                    if (payment.reference.startsWith('USSD-') && metadata.kind === USSD_MEMBER_PAYMENT_KIND) {
+                    if (payment.reference.startsWith('USSD-') && metadata.kind === 'utility_order' && metadata.channel === 'ussd') {
+                        // A bill paid over USSD. Without this it would fall to the wallet
+                        // top-up branch below and credit the account of record instead of
+                        // paying the bill.
+                        const r = await settleUssdUtilityOrder(supabase, {
+                            payment,
+                            reference: payment.reference,
+                            amountPaid: (verified.amountPesewas ?? 0) / 100,
+                        })
+                        if (!r.success) throw new Error(r.error || 'USSD utility order failed')
+                    } else if (payment.reference.startsWith('USSD-') && metadata.kind === USSD_MEMBER_PAYMENT_KIND) {
                         // A registered user's USSD order: credit the wallet AND buy
                         // the item, not just the credit a plain top-up gets.
                         const r = await settleMemberUssdOrder(supabase, {
@@ -449,6 +460,28 @@ export async function GET(request: NextRequest) {
                 // A registered user's order settles into their wallet and is bought
                 // from it (lib/ussd-member-settle.ts). Same call the webhook makes;
                 // both steps are idempotent, so racing it is safe.
+                // A utility bill settles through the website's bill payer (see the webhook).
+                const utilityPayment = await findUssdUtilityPayment(supabase, reference)
+                if (utilityPayment) {
+                    const result = await settleUssdUtilityOrder(supabase, { payment: utilityPayment, reference, amountPaid })
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: amountPaid,
+                        message: result.success
+                            ? 'Recovered by reconciliation sweep.'
+                            : `Utility settle failed: ${result.error ?? 'unknown error'}`,
+                        raw: verified.raw,
+                    })
+                    if (result.success) {
+                        results.ussdFulfilled++
+                        await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', utilityPayment.metadata?.session_id ?? '')
+                    } else {
+                        results.failed++
+                    }
+                    continue
+                }
+
                 const memberPayment = await findMemberPayment(supabase, reference)
                 if (memberPayment) {
                     const result = await settleMemberUssdOrder(supabase, { payment: memberPayment, reference, amountPaid })
