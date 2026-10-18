@@ -31,6 +31,7 @@ import { BusinessPerformanceWidget } from '@/components/dashboard/BusinessPerfor
 import { ShopDashboardSection } from '@/components/dashboard/ShopDashboardSection'
 import { SubAgentHelpCard } from '@/components/dashboard/SubAgentHelpCard'
 import { TodaysOrdersSummary } from '@/components/dashboard/TodaysOrdersSummary'
+import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
 import { DealerWelcomeModal } from '@/components/dashboard/DealerWelcomeModal'
 import { DealerExpiryBanner } from '@/components/dashboard/DealerExpiryBanner'
 
@@ -368,6 +369,7 @@ export default function DashboardPage() {
                     <RecentOrdersWidget />
                 </div>
                 <div className="space-y-8">
+                    <DeliveryStatusCard />
                     <TodaysOrdersSummary />
                     
                     {/* Simplified Quick Actions */}

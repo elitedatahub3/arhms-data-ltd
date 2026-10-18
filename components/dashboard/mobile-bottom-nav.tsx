@@ -288,6 +288,7 @@ const NAV_VARIANTS = {
             orders: [
                 { href: '/admin/orders', label: 'Orders', icon: ShoppingCart },
                 { href: '/admin/fulfillment', label: 'Fulfillment', icon: Activity },
+                { href: '/admin/delivery-status', label: 'Delivery Status', icon: Activity },
                 { href: '/admin/up2u-checker', label: 'UP2U Checker', icon: ShieldCheck },
                 { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
                 { href: '/admin/airtime', label: 'Airtime', icon: Phone },

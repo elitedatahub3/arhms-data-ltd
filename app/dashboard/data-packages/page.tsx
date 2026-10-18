@@ -11,6 +11,7 @@ import { generateReferenceCode, calculatePaystackFee } from '@/lib/utils'
 import { resolveProvider, isMomoPromptProvider, type PaymentProvider } from '@/lib/payment-provider'
 import { validateGhanaianPhone, detectNetwork } from '@/lib/phone-validation'
 import { NetworkIcon } from '@/components/network-icon'
+import { DeliveryConfirmLine } from '@/components/delivery/DeliveryConfirmLine'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1870,6 +1871,7 @@ export default function DataPackagesPage() {
                                 </div>
                                 <p className="text-lg font-black tracking-tight shrink-0">{formatCurrency(selectedTotal)}</p>
                             </div>
+                            <DeliveryConfirmLine network={selectedPackage.network} className="-mt-3 px-1" />
 
                             {/* How to pay */}
                             <div className="grid grid-cols-2 gap-3">

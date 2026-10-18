@@ -20,6 +20,8 @@ import {
 } from '@/lib/paystack-momo-service';
 import { resolveProviderForScope, SCOPE_SETTING_KEY, type PaymentProvider } from '@/lib/payment-provider';
 import { buildUssdReference } from '@/lib/ussd-reference';
+import { getDeliveryStatusForConfirm } from '@/lib/delivery-status';
+import { channelForNetwork, formatDuration, isConfirmWorthy } from '@/lib/delivery-estimate';
 import { logInitiate } from '@/lib/hubtel-payment-log';
 
 /**
@@ -574,10 +576,11 @@ export async function POST(req: Request) {
                 }
 
                 saveAsync(SessionId, 'confirm', sessionData);
+                const confirmBody = `Confirm Order:\n${sessionData.itemName} x1\nCost: GHS ${formatGhs(sessionData.selectedPrice)}\nTo: ${recipientMobile}`;
                 return respond(
                     SessionId,
                     'response',
-                    `Confirm Order:\n${sessionData.itemName} x1\nCost: GHS ${formatGhs(sessionData.selectedPrice)}\nTo: ${recipientMobile}\n\n1. Confirm & Pay\n0. Cancel`,
+                    `${confirmBody}${await ussdDeliveryLine(sessionData.orderType, sessionData.network, confirmBody)}${USSD_CONFIRM_FOOTER}`,
                     { label: 'Confirm order' }
                 );
             }
@@ -1071,6 +1074,24 @@ function approvalInstruction(network: string | null): string {
         return 'Enter your MoMo PIN on the prompt to pay. You will get an SMS when done.';
     }
     return 'Approve the payment prompt on your phone. You will get an SMS once it is done.';
+}
+
+const USSD_CONFIRM_FOOTER = '\n\n1. Confirm & Pay\n0. Cancel';
+
+/**
+ * "\nDelivery: ~2 min" for the confirm screen, or '' — when the channel isn't
+ * live and fast, when the lookup is slow or fails, or when the line would push
+ * the screen past one page. Never discouraging, never blocking a purchase.
+ */
+async function ussdDeliveryLine(orderType: string | undefined, network: string | undefined, body: string): Promise<string> {
+    if (orderType !== 'data') return '';
+    const channel = channelForNetwork(network);
+    if (!channel) return '';
+    const est = await getDeliveryStatusForConfirm(channel);
+    if (!isConfirmWorthy(est)) return '';
+    const line = `\nDelivery: ~${formatDuration(est.current)}`;
+    if (!/^[\x20-\x7E\n]*$/.test(line)) return '';
+    return (body + line + USSD_CONFIRM_FOOTER).length <= USSD_SCREEN_CHARS ? line : '';
 }
 
 /**

@@ -11,7 +11,8 @@
     "lint": "next lint && npm run lint:theme",
     "lint:theme": "node scripts/check-theme-scope.js",
     "audit:security": "npm audit",
-    "audit:all": "npm run lint && npm run audit:security"
+    "audit:all": "npm run lint && npm run audit:security",
+    "test": "node --experimental-strip-types --no-warnings --test lib/__tests__/*.test.mts"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

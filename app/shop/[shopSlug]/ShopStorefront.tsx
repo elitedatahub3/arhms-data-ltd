@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils'
 import StorefrontUtilities from '@/components/shop/storefront-utilities'
 import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
+import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
+import { channelForNetwork } from '@/lib/delivery-estimate'
 import {
     Phone, Mail, MessageCircle, ShoppingCart, Loader2,
     CheckCircle2, AlertCircle, X, Search, Zap, Smartphone, ChevronDown, Check, Menu, Bell,
@@ -2120,6 +2122,10 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 {/* ── Data Packages Tab Content ── */}
                 {(activeTab === 'data' || activeTab === 'mashup') && (
                     <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-4">
+
+                {activeTab === 'data' && (
+                    <DeliveryStatusCard className="mb-8" headlineChannel={channelForNetwork(activeNetwork)} />
+                )}
 
                 {/* ── Network Filter Tabs ── */}
                 {activeTab === 'data' && networks.length > 1 && (
