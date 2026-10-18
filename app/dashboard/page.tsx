@@ -288,6 +288,9 @@ export default function DashboardPage() {
             {/* Dynamic Role Greeting Box */}
             <RoleGreetingBox stats={stats!} />
 
+            {/* Live delivery speed per network */}
+            <DeliveryStatusCard className="mb-2" />
+
             {/* Premium Wallet & Business Card */}
             <div className="grid lg:grid-cols-3 gap-6">
                 <Card id="wallet-card" className="lg:col-span-2 overflow-hidden border border-border/70 shadow-sm bg-gradient-to-br from-primary to-blue-700 dark:to-blue-800 group">
@@ -369,7 +372,6 @@ export default function DashboardPage() {
                     <RecentOrdersWidget />
                 </div>
                 <div className="space-y-8">
-                    <DeliveryStatusCard />
                     <TodaysOrdersSummary />
                     
                     {/* Simplified Quick Actions */}
