@@ -69,7 +69,8 @@ function makeDb(tables: Tables) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { computeShopProfit, creditOrderProfit, profitColumns } = require('@/lib/shop-profit')
+const { computeShopProfit, profitColumns } = require('@/lib/shop-profit')
+const { creditOrderProfit } = require('@/lib/shop-profit-credit')
 
 // ── Fixture: a three-level network ──────────────────────────────────────────────
 //   Lead shop L (owner uL) ← sub S1 (owner u1) ← sub-of-sub S2 (owner u2)

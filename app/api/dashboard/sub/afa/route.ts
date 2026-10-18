@@ -4,7 +4,8 @@ import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { resolveSubAgentContext } from '@/lib/sub-agents'
 import { validateAfaFormData } from '@/lib/afa-validation'
 import { resolveAfaCostPrice } from '@/lib/afa-pricing'
-import { computeShopProfit, creditOrderProfit, profitColumns } from '@/lib/shop-profit'
+import { computeShopProfit, profitColumns } from '@/lib/shop-profit'
+import { creditOrderProfit } from '@/lib/shop-profit-credit'
 
 /**
  * AFA registration for sub-agents.

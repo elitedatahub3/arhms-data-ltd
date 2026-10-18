@@ -7,7 +7,8 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { calculateRCPrice, getRCTypeById } from '@/lib/vouchers/pricing'
-import { computeShopProfit, creditOrderProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
+import { computeShopProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
+import { creditOrderProfit } from '@/lib/shop-profit-credit'
 
 export interface RCVoucher {
     id: string

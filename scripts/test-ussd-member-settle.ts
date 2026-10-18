@@ -33,7 +33,7 @@ const REPO_ROOT = path.resolve(__dirname, '..')
 
 type Row = Record<string, any>
 let tables: Record<string, Row[]> = {}
-const counters = { credits: 0, dataBuys: 0, rcBuys: 0, sms: [] as string[], rcArgs: [] as any[] }
+const counters = { credits: 0, dataBuys: 0, rcBuys: 0, afaAlerts: 0, sms: [] as string[], rcArgs: [] as any[] }
 let dataBuyResult: { ok: boolean; error?: string } = { ok: true }
 /** Makes the claim's conditional UPDATE error, as if the filter or connection failed. */
 let failClaimQuery = false
@@ -47,6 +47,7 @@ function builder(table: string) {
         select() { return api },
         update(p: any) { op = 'update'; payload = p; return api },
         eq(c: string, v: any) { filters.push((r) => r[c] === v); return api },
+        in(c: string, vs: any[]) { filters.push((r) => vs.includes(r[c])); return api },
         // The one shape the code uses:
         //   metadata->>purchase_claimed_at.is.null,metadata->>purchase_claimed_at.lt.<iso>
         or(expr: string) {
@@ -68,7 +69,13 @@ function builder(table: string) {
     }
     return api
 }
-const db = { from: (t: string) => builder(t) }
+/** What process_afa_order does in this test. */
+let afaRpc: { error: null | { code?: string; message: string } } = { error: null }
+const rpcCalls: Array<{ name: string; args: any }> = []
+const db = {
+    from: (t: string) => builder(t),
+    rpc: async (name: string, args: any) => { await Promise.resolve(); rpcCalls.push({ name, args }); return { data: null, error: afaRpc.error } },
+}
 
 const originalLoad = (Module as any)._load
 ;(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
@@ -103,6 +110,9 @@ const originalLoad = (Module as any)._load
     if (request === '@/lib/vouchers/checkout') {
         return { purchaseWithWallet: async (p: any) => { counters.rcBuys++; counters.rcArgs.push(p); return { order: {}, vouchers: [] } } }
     }
+    if (request === '@/lib/afa/checkout') {
+        return { notifyAdminsOfAfaApplication: async () => { counters.afaAlerts++ } }
+    }
     if (request === '@/lib/hubtel-sms-service') {
         return { sendHubtelSMS: async (p: any) => { counters.sms.push(p.message); return { success: true } } }
     }
@@ -128,7 +138,8 @@ function seed(overrides: Row = {}, extraTables: Record<string, Row[]> = {}) {
         results_checker_orders: [],
         ...extraTables,
     }
-    counters.credits = 0; counters.dataBuys = 0; counters.rcBuys = 0; counters.sms = []; counters.rcArgs = []
+    counters.credits = 0; counters.dataBuys = 0; counters.rcBuys = 0; counters.afaAlerts = 0; counters.sms = []; counters.rcArgs = []
+    afaRpc = { error: null }; rpcCalls.length = 0
     dataBuyResult = { ok: true }
 }
 const settle = async (amountPaid = 8) => {
@@ -214,6 +225,65 @@ async function main() {
     check('a result-checker order buys through the wallet checker purchase, keyed on the USSD reference',
         r.success && counters.rcBuys === 1 && counters.rcArgs[0]?.typeId === 't1' && counters.rcArgs[0]?.referenceCode === REF && counters.rcArgs[0]?.quantity === 1,
         state() + ' ' + JSON.stringify(counters.rcArgs[0]))
+
+    // ── AFA registration for a registered user ─────────────────────────────────────
+    const AFA_FORM = {
+        full_name: 'Ama Boateng', id_number: 'GHA-123456789-0', date_of_birth: '1990-03-15',
+        region: 'Ashanti', location: 'Kumasi', phone: '0241234567',
+    }
+    const afaMeta = { kind: 'ussd_member', channel: 'ussd', order_type: 'afa', item_name: 'AFA Registration', recipient: '0241234567', payer_msisdn: '0241234567', session_id: 's1', afa: AFA_FORM }
+    const seedAfa = (over: Row = {}, extra: Record<string, Row[]> = {}) => seed(
+        { amount: 25, metadata: afaMeta, ...over },
+        {
+            users: [{ id: 'u1', role: 'agent', is_api_user: false }],
+            sub_agents: [],
+            afa_orders: [],
+            admin_settings: [
+                { key: 'afa_price_customer', value: '30' }, { key: 'afa_price_agent', value: '25' }, { key: 'afa_price_dealer', value: '22' },
+            ],
+            ...extra,
+        }
+    )
+
+    seedAfa()
+    r = await settle(25)
+    const call = rpcCalls[0]
+    check('an AFA order is placed through process_afa_order at the role price',
+        r.success && counters.credits === 1 && rpcCalls.length === 1 && call.name === 'process_afa_order' && call.args.p_user_id === 'u1'
+        && Number(call.args.p_amount) === 25 && call.args.p_reference_code === REF, JSON.stringify({ r, rpcCalls }))
+    check('  …with the applicant, a Ghana Card ID type and no notes',
+        call?.args.p_form_data.full_name === 'Ama Boateng' && call.args.p_form_data.id_type === 'Ghana Card' && call.args.p_form_data.id_number === 'GHA-123456789-0'
+        && call.args.p_form_data.date_of_birth === '1990-03-15' && call.args.p_form_data.region === 'Ashanti' && call.args.p_form_data.location === 'Kumasi'
+        && call.args.p_form_data.phone === '0241234567' && call.args.p_form_data.notes === null, JSON.stringify(call?.args.p_form_data))
+    check('  …the admins are alerted once and no failure SMS is sent', counters.afaAlerts === 1 && counters.sms.length === 0, JSON.stringify({ alerts: counters.afaAlerts, sms: counters.sms }))
+
+    seedAfa()
+    const [af1, af2] = await Promise.all([settle(25), settle(25)])
+    check('two simultaneous AFA settlements place ONE order', af1.success && af2.success && rpcCalls.length === 1 && counters.credits === 1 && counters.sms.length === 0, JSON.stringify({ rpc: rpcCalls.length }))
+
+    seedAfa(); afaRpc = { error: { code: '23505', message: 'duplicate key value violates unique constraint "afa_orders_reference_code_unique"' } }
+    r = await settle(25)
+    check('a duplicate-reference error from the database is a success, not a failure SMS', r.success && !r.creditedOnly && counters.sms.length === 0, JSON.stringify(r))
+
+    seedAfa({}, { afa_orders: [{ id: 'a1', reference_code: REF, status: 'pending' }] })
+    r = await settle(25)
+    check('an AFA order that already exists is not placed again', r.success && rpcCalls.length === 0 && counters.sms.length === 0, JSON.stringify({ rpc: rpcCalls.length }))
+
+    seedAfa(); afaRpc = { error: { message: 'INSUFFICIENT_BALANCE' } }
+    r = await settle(25)
+    check('an AFA order the wallet cannot cover keeps the money and tells the member (one SMS)', r.success && r.creditedOnly === true && counters.sms.length === 1 && counters.afaAlerts === 0, JSON.stringify({ r, sms: counters.sms.length }))
+
+    seedAfa({}, { sub_agents: [{ id: 'm1', user_id: 'u1', upline_shop_id: 'sh1' }] })
+    r = await settle(25)
+    check('a sub-agent is refused (their RPC is not installed): money kept, one SMS, no order', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1, JSON.stringify({ r, rpc: rpcCalls.length }))
+
+    seedAfa({}, { admin_settings: [{ key: 'afa_price_customer', value: '30' }, { key: 'afa_price_agent', value: '30' }, { key: 'afa_price_dealer', value: '22' }] })
+    r = await settle(25)
+    check('if the price rose above what was paid, nothing is charged silently: money kept, one SMS', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1 && /price changed/.test(r.error || ''), JSON.stringify({ r }))
+
+    seedAfa({ metadata: { ...afaMeta, afa: null } })
+    r = await settle(25)
+    check('a payment whose applicant details were lost is not guessed at', r.creditedOnly === true && rpcCalls.length === 0 && counters.sms.length === 1, JSON.stringify({ r }))
 
     // A plain wallet top-up is not a member order.
     seed({ metadata: { kind: 'wallet_topup' } })

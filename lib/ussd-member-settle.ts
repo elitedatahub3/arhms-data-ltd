@@ -20,6 +20,7 @@ import { purchaseDataWithWallet } from '@/lib/wallet-data-purchase'
 import { purchaseWithWallet } from '@/lib/vouchers/checkout'
 import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
 import { USSD_MEMBER_PAYMENT_KIND } from '@/lib/ussd-member'
+import { resolveAfaApiPrice, resolveAfaCostPrice } from '@/lib/afa-pricing'
 
 export interface MemberSettleResult {
     success: boolean
@@ -83,7 +84,7 @@ export async function settleMemberUssdOrder(
         return { success: true }
     }
 
-    const purchase = await buyFromWallet(db, payment.user_id, meta, reference)
+    const purchase = await buyFromWallet(db, payment.user_id, meta, reference, expected)
     if (purchase.ok) return { success: true }
 
     // A failure with the order already in place is a lost race or a retry, not a failed
@@ -129,7 +130,7 @@ async function claimPurchase(db: any, reference: string, metadata: Record<string
 
 /** True when an order for this reference already exists and did not fail. */
 async function orderAlreadyPlaced(db: any, orderType: string, reference: string): Promise<boolean> {
-    const table = orderType === 'rc' ? 'results_checker_orders' : 'orders'
+    const table = orderType === 'rc' ? 'results_checker_orders' : orderType === 'afa' ? 'afa_orders' : 'orders'
     const { data } = await db.from(table).select('id, status').eq('reference_code', reference).maybeSingle()
     return !!data && data.status !== 'failed'
 }
@@ -138,8 +139,11 @@ async function buyFromWallet(
     db: any,
     userId: string,
     meta: any,
-    reference: string
+    reference: string,
+    paidAmount: number
 ): Promise<{ ok: boolean; error?: string }> {
+    if (meta.order_type === 'afa') return buyAfaFromWallet(db, userId, meta, reference, paidAmount)
+
     if (meta.order_type === 'data') {
         const result = await purchaseDataWithWallet({
             supabase: db,
@@ -209,6 +213,74 @@ async function buyFromWallet(
     }
 
     return { ok: false, error: `Unknown order type: ${meta.order_type}` }
+}
+
+/**
+ * AFA registration from the wallet, through the same RPC the dashboard uses.
+ *
+ * process_afa_order deducts the wallet and inserts the order in one transaction, and
+ * afa_orders.reference_code is UNIQUE, so a repeat raises a duplicate error (read as
+ * success) instead of charging twice. A sub-agent is refused here as well as on the
+ * menu: their purchase goes through process_sub_afa_order, which is not installed.
+ */
+async function buyAfaFromWallet(
+    db: any,
+    userId: string,
+    meta: any,
+    reference: string,
+    paidAmount: number
+): Promise<{ ok: boolean; error?: string }> {
+    const { data: existing } = await db.from('afa_orders').select('id').eq('reference_code', reference).maybeSingle()
+    if (existing) return { ok: true }
+
+    const form = meta.afa
+    if (!form) return { ok: false, error: 'The registration details were lost' }
+
+    const [{ data: user }, { data: membership }] = await Promise.all([
+        db.from('users').select('*').eq('id', userId).maybeSingle(),
+        db.from('sub_agents').select('id').eq('user_id', userId).maybeSingle(),
+    ])
+    if (membership) return { ok: false, error: 'AFA is not available to sub-agents on USSD' }
+
+    const priced = user?.is_api_user === true
+        ? await resolveAfaApiPrice(db, user?.role)
+        : await resolveAfaCostPrice(db, user?.role)
+    if (!priced.ok || !priced.price) return { ok: false, error: 'AFA pricing is not configured' }
+    // The wallet holds what was paid; a price that rose in between is not charged silently.
+    if (priced.price > paidAmount + 0.005) return { ok: false, error: 'The price changed since you dialled' }
+
+    const { error } = await db.rpc('process_afa_order', {
+        p_user_id: userId,
+        p_amount: priced.price,
+        p_form_data: {
+            full_name: form.full_name,
+            phone: form.phone,
+            id_type: 'Ghana Card',
+            id_number: form.id_number,
+            date_of_birth: form.date_of_birth,
+            location: form.location,
+            region: form.region,
+            notes: null,
+        },
+        p_reference_code: reference,
+    })
+
+    if (error) {
+        const message = String(error.message || '')
+        if (error.code === '23505' || /duplicate key|afa_orders_reference_code_unique/.test(message)) return { ok: true }
+        if (message.includes('INSUFFICIENT_BALANCE')) return { ok: false, error: 'Not enough balance' }
+        console.error('[UssdMember] process_afa_order failed:', reference, message)
+        return { ok: false, error: 'The registration could not be completed' }
+    }
+
+    // Best-effort — a failed alert must never undo a placed order.
+    try {
+        const { notifyAdminsOfAfaApplication } = await import('@/lib/afa/checkout')
+        await notifyAdminsOfAfaApplication(db, { full_name: form.full_name, phone: form.phone, region: form.region })
+    } catch (alertError: any) {
+        console.error('[UssdMember] AFA admin alert failed:', alertError?.message)
+    }
+    return { ok: true }
 }
 
 function friendlyRcError(code: string | undefined): string {

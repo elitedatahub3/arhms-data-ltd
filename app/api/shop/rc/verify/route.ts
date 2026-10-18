@@ -5,7 +5,7 @@ import { checkPaymentStatus } from '@/lib/moolre-payment-service'
 import { verifyTransaction } from '@/lib/paystack-momo-service'
 import { isPaystackMomoPending, clearPaystackMomoPending } from '@/lib/paystack-momo-checkout'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { creditOrderProfit } from '@/lib/shop-profit'
+import { creditOrderProfit } from '@/lib/shop-profit-credit'
 
 const redis = Redis.fromEnv()
 

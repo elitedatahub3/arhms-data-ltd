@@ -139,19 +139,14 @@ export async function POST(request: NextRequest) {
                 const amountPaid = paidAmountKobo / 100
                 const deferredWork: Array<() => Promise<void>> = []
 
-                const result = resolved.orderType === 'data'
-                    ? await (await import('@/lib/ussd-data-fulfillment')).fulfillUSSDDataBySession({
-                        sessionId: resolved.sessionId,
-                        referenceCode: reference,
-                        amountPaid,
-                        deferredWork,
-                    })
-                    : await (await import('@/lib/ussd-rc-fulfillment')).fulfillUSSDRCBySession({
-                        sessionId: resolved.sessionId,
-                        referenceCode: reference,
-                        amountPaid,
-                        deferredWork,
-                    })
+                const { fulfillUssdSession } = await import('@/lib/ussd-settle')
+                const result = await fulfillUssdSession({
+                    orderType: resolved.orderType,
+                    sessionId: resolved.sessionId,
+                    referenceCode: reference,
+                    amountPaid,
+                    deferredWork,
+                })
 
                 await logCallback({
                     clientReference: reference,

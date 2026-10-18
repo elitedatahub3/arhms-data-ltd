@@ -488,13 +488,11 @@ export async function GET(request: NextRequest) {
                 const deferredWork: Array<() => Promise<void>> = []
                 // Both fulfillers are idempotent on referenceCode, so racing the
                 // webhook is safe — whichever arrives second is a no-op.
-                const result = resolved.orderType === 'data'
-                    ? await (await import('@/lib/ussd-data-fulfillment')).fulfillUSSDDataBySession({
-                        sessionId: resolved.sessionId, referenceCode: reference, amountPaid, deferredWork,
-                    })
-                    : await (await import('@/lib/ussd-rc-fulfillment')).fulfillUSSDRCBySession({
-                        sessionId: resolved.sessionId, referenceCode: reference, amountPaid, deferredWork,
-                    })
+                const { fulfillUssdSession } = await import('@/lib/ussd-settle')
+                const result = await fulfillUssdSession({
+                    orderType: resolved.orderType, sessionId: resolved.sessionId,
+                    referenceCode: reference, amountPaid, deferredWork,
+                })
 
                 await logStatusCheck({
                     clientReference: reference,

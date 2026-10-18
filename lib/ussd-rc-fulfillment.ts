@@ -9,7 +9,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { computeShopProfit, creditOrderProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
+import { computeShopProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
+import { creditOrderProfit } from '@/lib/shop-profit-credit'
 
 const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

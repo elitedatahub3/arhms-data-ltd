@@ -18,6 +18,7 @@
  */
 import { rolePriceForPackage } from '@/lib/data-order-pricing'
 import { calculateRCPrice } from '@/lib/vouchers/pricing'
+import type { UssdAfaForm } from '@/lib/ussd-afa'
 
 export interface UssdMember {
     userId: string
@@ -189,13 +190,15 @@ export async function recordMemberPayment(
         reference: string
         amount: number
         order: {
-            orderType: 'data' | 'rc'
+            orderType: 'data' | 'rc' | 'afa'
             packageId?: string
             typeId?: string
             itemName: string
             recipient: string
             payerMsisdn: string
             sessionId: string
+            /** The applicant, for an AFA registration — settlement has no session to read. */
+            afa?: UssdAfaForm
         }
     }
 ): Promise<void> {
@@ -227,6 +230,7 @@ export async function recordMemberPayment(
             recipient: params.order.recipient,
             payer_msisdn: params.order.payerMsisdn,
             session_id: params.order.sessionId,
+            afa: params.order.afa ?? null,
         },
     })
     if (error) throw error

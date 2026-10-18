@@ -24,6 +24,23 @@ import { getDeliveryStatusForConfirm } from '@/lib/delivery-status';
 import { channelForNetwork, formatDuration, isConfirmWorthy } from '@/lib/delivery-estimate';
 import { logInitiate } from '@/lib/hubtel-payment-log';
 import {
+    AFA_CARD_PROMPT,
+    AFA_DOB_PROMPT,
+    AFA_ITEM_NAME,
+    AFA_NAME_PROMPT,
+    AFA_PHONE_PROMPT,
+    AFA_TOWN_PROMPT,
+    lastRegionPage,
+    loadAfaOffer,
+    parseDateOfBirth,
+    parseFullName,
+    parseGhanaCard,
+    parseTown,
+    regionFromChoice,
+    renderRegionMenu,
+    type UssdAfaForm,
+} from '@/lib/ussd-afa';
+import {
     findMemberByPhone,
     loadMemberBundles,
     loadMemberCheckers,
@@ -116,6 +133,9 @@ const USSD_FLAG_TTL_MS = 60_000;
 /** admin_settings key naming which gateway collects for a USSD sale. */
 const USSD_PROVIDER_KEY = SCOPE_SETTING_KEY.ussd;
 
+/** admin_settings key: 'false' takes AFA registration off the USSD menu. */
+const AFA_ENABLED_KEY = 'ussd_afa_enabled';
+
 /** admin_settings key: 'false' makes registered users enter a short code again. */
 const MEMBER_SKIP_CODE_KEY = 'ussd_member_skip_code';
 
@@ -136,6 +156,13 @@ interface UssdFlags {
      * writes 'false' to ussd_member_skip_code — the kill switch if it misbehaves.
      */
     memberSkipCode: boolean;
+    /**
+     * AFA registration on the menu (lib/ussd-afa.ts). On unless an admin writes 'false'
+     * to ussd_afa_enabled. Shops additionally need the storefront AFA switch.
+     */
+    afaEnabled: boolean;
+    /** admin_settings.storefront_afa_enabled — the same switch the storefront obeys. */
+    afaStorefrontOpen: boolean;
 }
 
 let ussdFlagCache: { flags: UssdFlags; at: number } | null = null;
@@ -158,7 +185,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
             getSupabaseAdmin()
                 .from('admin_settings')
                 .select('key, value')
-                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MEMBER_SKIP_CODE_KEY, ...ALL_MTN_GATE_KEYS]),
+                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MEMBER_SKIP_CODE_KEY, AFA_ENABLED_KEY, 'storefront_afa_enabled', ...ALL_MTN_GATE_KEYS]),
             3000,
             'ussd flags fetch timeout'
         );
@@ -191,6 +218,8 @@ async function getUssdFlags(): Promise<UssdFlags> {
             // unrelated decision.
             mtnGateEnabled: resolveGateEnabled(raw, 'site'),
             memberSkipCode: String(raw[MEMBER_SKIP_CODE_KEY] ?? 'true').toLowerCase() !== 'false',
+            afaEnabled: String(raw[AFA_ENABLED_KEY] ?? 'true').toLowerCase() !== 'false',
+            afaStorefrontOpen: String(raw['storefront_afa_enabled'] ?? '') === 'true',
         };
         ussdFlagCache = { flags, at: Date.now() };
         return flags;
@@ -205,7 +234,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
         // runs when we could not read the setting at all — the same reasoning as
         // loadGateSettings(), which also treats an unreadable setting as off.
         return ussdFlagCache?.flags
-            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false, memberSkipCode: false };
+            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false, memberSkipCode: false, afaEnabled: false, afaStorefrontOpen: false };
     }
 }
 
@@ -253,6 +282,8 @@ export async function POST(req: Request) {
                         operator: (Operator || 'mtn').toLowerCase(),
                         mode: 'member',
                         member,
+                        // A sub-agent member is not offered AFA: see loadAfaOffer.
+                        afaListed: ussdFlags.afaEnabled && ussdFlags.paymentProvider === 'paystack_momo' && !member.sub,
                     };
                     waitUntil((async () => {
                         const { error } = await getSupabaseAdmin().from('hubtel_sessions').upsert({
@@ -348,7 +379,11 @@ export async function POST(req: Request) {
 
         // Global "0" = Back one step (or Exit at the first menu after the short code)
         if (requestType !== 'initiation' && userInput === '0') {
-            const back = BACK_STEPS[currentStep];
+            // Back from the recipient step depends on what is being bought: an AFA
+            // application returns to its last question, not to the service menu.
+            const back = currentStep === 'enter_phone' && sessionData.orderType === 'afa'
+                ? 'afa_town'
+                : BACK_STEPS[currentStep];
             if (back === 'exit') {
                 endSession(SessionId);
                 return respond(SessionId, 'release', 'Thank you for using ARHMS. Goodbye.');
@@ -431,8 +466,25 @@ export async function POST(req: Request) {
                 sessionData.ownerId = shop.owner_id;
                 sessionData.codeAttempts = 0;
 
+                // AFA is listed only for a shop that has priced it. One small read, and
+                // only when the switches are on; if it is slow or fails the shop simply
+                // shows no AFA line rather than delaying the menu.
+                sessionData.afaListed = false;
+                if (ussdFlags.afaEnabled && ussdFlags.afaStorefrontOpen && ussdFlags.paymentProvider === 'paystack_momo') {
+                    try {
+                        const { data: afaRow } = await withTimeout(
+                            getSupabaseAdmin().from('shop_afa_pricing').select('selling_price').eq('shop_id', shop.id).maybeSingle(),
+                            1500,
+                            'AFA price lookup timeout'
+                        );
+                        sessionData.afaListed = Number(afaRow?.selling_price) > 0;
+                    } catch (e: any) {
+                        console.warn('[Hubtel Interact] AFA listing skipped:', e?.message);
+                    }
+                }
+
                 saveAsync(SessionId, 'choose_service', sessionData);
-                return respond(SessionId, 'response', renderServiceMenu(shop.shop_name), {
+                return respond(SessionId, 'response', serviceMenuFor(sessionData), {
                     label: 'Select service',
                 });
             }
@@ -488,7 +540,116 @@ export async function POST(req: Request) {
                     });
                 }
 
+                if (userInput === '3' && sessionData.afaListed) {
+                    let offer: { price: number } | null = null;
+                    try {
+                        offer = await withTimeout(loadAfaOffer(getSupabaseAdmin(), sessionData), 6000, 'AFA offer timeout');
+                    } catch (e: any) {
+                        console.error('[Hubtel Interact] loadAfaOffer failed:', e?.message);
+                    }
+                    if (!offer) {
+                        return reprompt(`AFA registration is unavailable right now.\n${menu}`);
+                    }
+
+                    sessionData.orderType = 'afa';
+                    sessionData.selectedPrice = offer.price;
+                    sessionData.itemName = AFA_ITEM_NAME;
+                    sessionData.afaForm = {};
+                    sessionData.afaRegionPage = 0;
+                    saveAsync(SessionId, 'afa_name', sessionData);
+                    return respond(SessionId, 'response', AFA_NAME_PROMPT, { label: 'Full name' });
+                }
+
                 return reprompt(`${invalid('input')}${menu}`);
+            }
+
+            // ── AFA: the applicant's answers ─────────────────────────────────────
+            // Five short questions. A wrong answer re-asks the same one with the reason;
+            // "0" goes back one (handled above). Each answer is checked with the same
+            // rules the web forms use, so nothing reaches the admin queue the dashboard
+            // would have refused.
+
+            case 'afa_name': {
+                if (!userInput) {
+                    saveAsync(SessionId, 'afa_name', sessionData);
+                    return respond(SessionId, 'response', AFA_NAME_PROMPT, { label: 'Full name' });
+                }
+                const parsed = parseFullName(userInput);
+                if (!parsed.ok) {
+                    saveAsync(SessionId, 'afa_name', sessionData);
+                    return respond(SessionId, 'response', `${parsed.error}\n${AFA_NAME_PROMPT}`, { label: 'Full name' });
+                }
+                sessionData.afaForm = { ...(sessionData.afaForm || {}), full_name: parsed.value };
+                saveAsync(SessionId, 'afa_card', sessionData);
+                return respond(SessionId, 'response', AFA_CARD_PROMPT, { label: 'Ghana Card' });
+            }
+
+            case 'afa_card': {
+                if (!userInput) {
+                    saveAsync(SessionId, 'afa_card', sessionData);
+                    return respond(SessionId, 'response', AFA_CARD_PROMPT, { label: 'Ghana Card' });
+                }
+                const parsed = parseGhanaCard(userInput);
+                if (!parsed.ok) {
+                    saveAsync(SessionId, 'afa_card', sessionData);
+                    return respond(SessionId, 'response', `${parsed.error}\n${AFA_CARD_PROMPT}`, { label: 'Ghana Card' });
+                }
+                sessionData.afaForm = { ...(sessionData.afaForm || {}), id_number: parsed.value };
+                saveAsync(SessionId, 'afa_dob', sessionData);
+                return respond(SessionId, 'response', AFA_DOB_PROMPT, { label: 'Date of birth' });
+            }
+
+            case 'afa_dob': {
+                if (!userInput) {
+                    saveAsync(SessionId, 'afa_dob', sessionData);
+                    return respond(SessionId, 'response', AFA_DOB_PROMPT, { label: 'Date of birth' });
+                }
+                const parsed = parseDateOfBirth(userInput);
+                if (!parsed.ok) {
+                    saveAsync(SessionId, 'afa_dob', sessionData);
+                    return respond(SessionId, 'response', `${parsed.error}\n${AFA_DOB_PROMPT}`, { label: 'Date of birth' });
+                }
+                sessionData.afaForm = { ...(sessionData.afaForm || {}), date_of_birth: parsed.value };
+                sessionData.afaRegionPage = 0;
+                saveAsync(SessionId, 'afa_region', sessionData);
+                return respond(SessionId, 'response', renderRegionMenu(0), { label: 'Select region' });
+            }
+
+            case 'afa_region': {
+                const page: number = sessionData.afaRegionPage || 0;
+                if (userInput === '99' || userInput === '88') {
+                    const next = userInput === '99' ? Math.min(page + 1, lastRegionPage()) : Math.max(page - 1, 0);
+                    sessionData.afaRegionPage = next;
+                    saveAsync(SessionId, 'afa_region', sessionData);
+                    return respond(SessionId, 'response', renderRegionMenu(next), { label: 'Select region' });
+                }
+                if (!userInput) {
+                    saveAsync(SessionId, 'afa_region', sessionData);
+                    return respond(SessionId, 'response', renderRegionMenu(page), { label: 'Select region' });
+                }
+                const region = regionFromChoice(userInput, page);
+                if (!region) {
+                    saveAsync(SessionId, 'afa_region', sessionData);
+                    return respond(SessionId, 'response', `Invalid selection.\n${renderRegionMenu(page)}`, { label: 'Select region' });
+                }
+                sessionData.afaForm = { ...(sessionData.afaForm || {}), region };
+                saveAsync(SessionId, 'afa_town', sessionData);
+                return respond(SessionId, 'response', AFA_TOWN_PROMPT, { label: 'Town' });
+            }
+
+            case 'afa_town': {
+                if (!userInput) {
+                    saveAsync(SessionId, 'afa_town', sessionData);
+                    return respond(SessionId, 'response', AFA_TOWN_PROMPT, { label: 'Town' });
+                }
+                const parsed = parseTown(userInput);
+                if (!parsed.ok) {
+                    saveAsync(SessionId, 'afa_town', sessionData);
+                    return respond(SessionId, 'response', `${parsed.error}\n${AFA_TOWN_PROMPT}`, { label: 'Town' });
+                }
+                sessionData.afaForm = { ...(sessionData.afaForm || {}), location: parsed.value };
+                saveAsync(SessionId, 'enter_phone', sessionData);
+                return respond(SessionId, 'response', AFA_PHONE_PROMPT, { label: 'Number to register', fieldType: 'phone' });
             }
 
             // ── DATA: NETWORK ────────────────────────────────────────────────────
@@ -608,7 +769,9 @@ export async function POST(req: Request) {
                         return respond(
                             SessionId,
                             'response',
-                            'Invalid number.\nEnter recipient number:\n(or send 1 for your own number)',
+                            sessionData.orderType === 'afa'
+                                ? `Invalid number.\n${AFA_PHONE_PROMPT}`
+                                : 'Invalid number.\nEnter recipient number:\n(or send 1 for your own number)',
                             { label: 'Recipient number', fieldType: 'phone' }
                         );
                     }
@@ -648,6 +811,21 @@ export async function POST(req: Request) {
                     }
                 }
 
+                if (sessionData.orderType === 'afa') {
+                    // The applicant's phone is the number being registered. The ID is not
+                    // echoed back: a USSD screen is not a place to display it.
+                    sessionData.afaForm = { ...(sessionData.afaForm || {}), phone: recipientMobile };
+                    saveAsync(SessionId, 'confirm', sessionData);
+                    const nm = String(sessionData.afaForm.full_name || '');
+                    const shown = nm.length > 28 ? `${nm.slice(0, 27)}.` : nm;
+                    return respond(
+                        SessionId,
+                        'response',
+                        `Confirm AFA Registration:\n${shown}\nCost: GHS ${formatGhs(sessionData.selectedPrice)}\nNumber: ${recipientMobile}${USSD_CONFIRM_FOOTER}`,
+                        { label: 'Confirm order' }
+                    );
+                }
+
                 saveAsync(SessionId, 'confirm', sessionData);
                 const confirmBody = `Confirm Order:\n${sessionData.itemName} x1\nCost: GHS ${formatGhs(sessionData.selectedPrice)}\nTo: ${recipientMobile}`;
                 return respond(
@@ -666,7 +844,16 @@ export async function POST(req: Request) {
                 }
 
                 const price = parseFloat(String(sessionData.selectedPrice || '0'));
-                const orderType: 'data' | 'rc' = sessionData.orderType === 'data' ? 'data' : 'rc';
+                const orderType: 'data' | 'rc' | 'afa' =
+                    sessionData.orderType === 'data' ? 'data' : sessionData.orderType === 'afa' ? 'afa' : 'rc';
+
+                // The Hubtel rollback rail fulfils data and checkers only. A session
+                // opened before an admin flipped to it must not charge for an AFA it
+                // cannot deliver.
+                if (orderType === 'afa' && ussdFlags.paymentProvider === 'hubtel') {
+                    endSession(SessionId);
+                    return respond(SessionId, 'release', 'AFA registration is unavailable right now. Please try again later.');
+                }
 
                 sessionData.chargedAmount = price;
                 // The candidate lists are only needed while browsing; dropping them
@@ -766,6 +953,7 @@ export async function POST(req: Request) {
                                         recipient: sessionData.recipientMobile || payerMsisdn,
                                         payerMsisdn,
                                         sessionId: SessionId,
+                                        afa: orderType === 'afa' ? (sessionData.afaForm as UssdAfaForm) : undefined,
                                     },
                                 })
                                 : Promise.resolve(),
@@ -961,6 +1149,11 @@ const BACK_STEPS: Record<string, string> = {
     select_bundle: 'choose_network',
     select_checker_type: 'choose_service',
     enter_phone: 'choose_service',
+    afa_name: 'choose_service',
+    afa_card: 'afa_name',
+    afa_dob: 'afa_card',
+    afa_region: 'afa_dob',
+    afa_town: 'afa_region',
 };
 
 /**
@@ -1104,7 +1297,12 @@ function serviceMenuFor(sessionData: any): string {
         // ASCII only: a non-ASCII character in a Hubtel response makes the call throw.
         const raw = String(sessionData.member?.firstName || '').replace(/[^\x20-\x7E]/g, '').trim();
         const name = raw.length > 16 ? `${raw.slice(0, 15)}.` : raw;
-        return `Welcome back${name ? ` ${name}` : ''}\n1. Data Bundles\n2. Result Checker\n0. Exit`;
+        return `Welcome back${name ? ` ${name}` : ''}\n1. Data Bundles\n2. Result Checker${sessionData.afaListed ? '\n3. AFA Registration' : ''}\n0. Exit`;
+    }
+    if (sessionData.mode === 'shop' && sessionData.afaListed) {
+        const shop = String(sessionData.shopName || 'ARHMS');
+        const name = shop.length > 20 ? `${shop.slice(0, 19)}.` : shop;
+        return `Welcome to ${name}\n1. Data Bundles\n2. Result Checker\n3. AFA Registration\n0. Exit`;
     }
     return renderServiceMenu(sessionData.shopName || 'ARHMS');
 }

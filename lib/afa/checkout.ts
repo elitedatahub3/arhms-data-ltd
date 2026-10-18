@@ -1,5 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
-import { creditOrderProfit } from '@/lib/shop-profit'
+import { creditOrderProfit } from '@/lib/shop-profit-credit'
 
 /**
  * Settlement for a storefront AFA registration.
@@ -86,7 +86,7 @@ export async function finalizeAfaShopOrder(params: {
 }
 
 /** Emails every admin and fires a push. Never throws. */
-async function notifyAdminsOfAfaApplication(db: any, order: any) {
+export async function notifyAdminsOfAfaApplication(db: any, order: any) {
     try {
         const { data: adminUsers } = await db
             .from('users')
