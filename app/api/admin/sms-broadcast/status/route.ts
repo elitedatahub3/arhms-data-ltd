@@ -40,8 +40,11 @@ export async function GET(request: NextRequest) {
         const supabase = createServerClient()
         const columns = 'id, status, total, sent_count, success_count, failed_count, errors, created_at, completed_at, updated_at'
 
-        // ?active=1 — the most recent unfinished broadcast, so the page can pick
-        // tracking back up after a reload instead of losing sight of the job.
+        // ?active=1 — the most recent unfinished broadcast, so the page can offer
+        // to resume or cancel it. Report only: the page asks this every time it
+        // opens, and restarting here texted people from a page visit nobody meant
+        // as a send. Restarts happen on the ?jobId= poll, which the page runs only
+        // after the admin presses Send or Resume.
         if (request.nextUrl.searchParams.get('active') === '1') {
             const { data: active } = await (supabase
                 .from('sms_broadcast_jobs') as any)
@@ -50,7 +53,6 @@ export async function GET(request: NextRequest) {
                 .order('created_at', { ascending: false })
                 .limit(1)
             const job = active?.[0] ?? null
-            if (job) restartIfStalled(request, job)
             return NextResponse.json({ job })
         }
 

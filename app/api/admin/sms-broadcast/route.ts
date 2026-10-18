@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { kickSmsBroadcast } from '@/lib/sms-broadcast-kick'
+import { greetName, greetShopName } from '@/lib/sms-broadcast-greeting'
 import { z } from 'zod'
 import { adminLongTextSchema } from '@/lib/validation'
 import { Ratelimit } from '@upstash/ratelimit'
@@ -120,7 +121,8 @@ export async function POST(request: NextRequest) {
             }
 
             if (usersData.length > 0 && roleFilter !== 'shop_owner') {
-                recipients = [...recipients, ...usersData]
+                // greet_name fills the {name} in "Hi {name}! ..." for each person.
+                recipients = [...recipients, ...usersData.map(u => ({ ...u, greet_name: greetName(u.first_name) }))]
             }
         }
 
@@ -156,7 +158,8 @@ export async function POST(request: NextRequest) {
                     id: `shop_${s.id}`,
                     first_name: `Shop Owner (${s.shop_name})`,
                     phone_number: s.owner_phone,
-                    role: 'shop_owner'
+                    role: 'shop_owner',
+                    greet_name: greetShopName(s.shop_name),
                 }))
 
                 // Deduplicate phones
