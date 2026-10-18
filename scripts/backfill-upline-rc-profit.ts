@@ -1,6 +1,6 @@
 /**
  * Back-pay uplines for Results Checker sales their sub-agents made before the
- * profit split existed (lib/shop-profit.ts, migration 20261018010000).
+ * profit split existed (lib/shop-profit.ts, migration 20261018020000).
  *
  * Until then a sub's checker sale paid the sub the whole margin and every upline
  * nothing. This lists each completed sub-shop checker order with what each upline

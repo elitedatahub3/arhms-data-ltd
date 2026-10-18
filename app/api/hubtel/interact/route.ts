@@ -23,6 +23,13 @@ import { buildUssdReference } from '@/lib/ussd-reference';
 import { getDeliveryStatusForConfirm } from '@/lib/delivery-status';
 import { channelForNetwork, formatDuration, isConfirmWorthy } from '@/lib/delivery-estimate';
 import { logInitiate } from '@/lib/hubtel-payment-log';
+import {
+    findMemberByPhone,
+    loadMemberBundles,
+    loadMemberCheckers,
+    recordMemberPayment,
+    type UssdMember,
+} from '@/lib/ussd-member';
 
 /**
  * Hubtel Programmable Services — Service Interaction URL
@@ -109,12 +116,26 @@ const USSD_FLAG_TTL_MS = 60_000;
 /** admin_settings key naming which gateway collects for a USSD sale. */
 const USSD_PROVIDER_KEY = SCOPE_SETTING_KEY.ussd;
 
+/** admin_settings key: 'false' makes registered users enter a short code again. */
+const MEMBER_SKIP_CODE_KEY = 'ussd_member_skip_code';
+
+/**
+ * How long the dial-in waits to recognise a registered user. Past this the caller
+ * simply gets the short-code screen — recognising them is never worth a dropped call.
+ */
+const MEMBER_LOOKUP_TIMEOUT_MS = 1500;
+
 interface UssdFlags {
     enabled: boolean;
     /** 'paystack_momo' (we collect) | 'hubtel' (AddToCart, the pre-Paystack path). */
     paymentProvider: PaymentProvider;
     /** Refuse MTN data orders to numbers that are not registered yet. */
     mtnGateEnabled: boolean;
+    /**
+     * Registered users skip the short code (lib/ussd-member.ts). On unless an admin
+     * writes 'false' to ussd_member_skip_code — the kill switch if it misbehaves.
+     */
+    memberSkipCode: boolean;
 }
 
 let ussdFlagCache: { flags: UssdFlags; at: number } | null = null;
@@ -137,7 +158,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
             getSupabaseAdmin()
                 .from('admin_settings')
                 .select('key, value')
-                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, ...ALL_MTN_GATE_KEYS]),
+                .in('key', [USSD_ENABLED_KEY, USSD_PROVIDER_KEY, MEMBER_SKIP_CODE_KEY, ...ALL_MTN_GATE_KEYS]),
             3000,
             'ussd flags fetch timeout'
         );
@@ -169,6 +190,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
             // stops the service, and applying it here would be borrowing a rule from an
             // unrelated decision.
             mtnGateEnabled: resolveGateEnabled(raw, 'site'),
+            memberSkipCode: String(raw[MEMBER_SKIP_CODE_KEY] ?? 'true').toLowerCase() !== 'false',
         };
         ussdFlagCache = { flags, at: Date.now() };
         return flags;
@@ -183,7 +205,7 @@ async function getUssdFlags(): Promise<UssdFlags> {
         // runs when we could not read the setting at all — the same reasoning as
         // loadGateSettings(), which also treats an unreadable setting as off.
         return ussdFlagCache?.flags
-            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false };
+            ?? { enabled: false, paymentProvider: 'paystack_momo', mtnGateEnabled: false, memberSkipCode: false };
     }
 }
 
@@ -203,8 +225,51 @@ export async function POST(req: Request) {
             return respond(SessionId, 'release', USSD_OFFLINE_MESSAGE);
         }
 
-        // ULTRA-FAST PATH: Initiation — return hardcoded response, defer everything
+        // Initiation. A caller whose number is an account on the main site is never
+        // asked for a short code: they go straight to the platform menu at their own
+        // prices (lib/ussd-member.ts). Everyone else gets the short-code screen.
+        //
+        // Recognising them costs one indexed lookup inside this keypress, capped at
+        // MEMBER_LOOKUP_TIMEOUT_MS. If it is slow or fails, the caller gets the
+        // short-code screen — the old flow — rather than a dropped session.
+        //
+        // Only on the Paystack rail: members settle into their wallet, which the
+        // Hubtel AddToCart rollback path knows nothing about.
         if (requestType === 'initiation' && SessionId) {
+            if (ussdFlags.memberSkipCode && ussdFlags.paymentProvider === 'paystack_momo' && Mobile) {
+                let member: UssdMember | null = null;
+                try {
+                    member = await withTimeout(
+                        findMemberByPhone(getSupabaseAdmin(), String(Mobile)),
+                        MEMBER_LOOKUP_TIMEOUT_MS,
+                        'Member lookup timeout'
+                    );
+                } catch (err: any) {
+                    console.warn('[Hubtel Interact] Member lookup skipped:', err?.message);
+                }
+
+                if (member) {
+                    const memberData = {
+                        operator: (Operator || 'mtn').toLowerCase(),
+                        mode: 'member',
+                        member,
+                    };
+                    waitUntil((async () => {
+                        const { error } = await getSupabaseAdmin().from('hubtel_sessions').upsert({
+                            session_id: SessionId,
+                            mobile: Mobile || '',
+                            current_step: 'choose_service',
+                            data: memberData,
+                            updated_at: new Date().toISOString(),
+                        });
+                        if (error) console.error('[Hubtel] Member session creation error:', error);
+                    })());
+                    return respond(SessionId, 'response', serviceMenuFor(memberData), {
+                        label: 'Select service',
+                    });
+                }
+            }
+
             const response = respond(SessionId, 'response', WELCOME_MESSAGE, {
                 label: 'Short code',
             });
@@ -374,7 +439,7 @@ export async function POST(req: Request) {
 
             // ── SERVICE ──────────────────────────────────────────────────────────
             case 'choose_service': {
-                const shopLabel = sessionData.shopName || 'ARHMS';
+                const menu = serviceMenuFor(sessionData);
                 // Every re-render below has to persist the step it drew, otherwise a
                 // back-navigation would leave the DB pointing at the step we left.
                 const reprompt = (msg: string) => {
@@ -385,7 +450,7 @@ export async function POST(req: Request) {
                 if (userInput === '2') {
                     const checkers = await loadCheckers(sessionData);
                     if (!checkers.length) {
-                        return reprompt(`Result checkers unavailable.\n${renderServiceMenu(shopLabel)}`);
+                        return reprompt(`Result checkers unavailable.\n${menu}`);
                     }
                     sessionData.availableCheckers = checkers;
                     saveAsync(SessionId, 'select_checker_type', sessionData);
@@ -395,14 +460,22 @@ export async function POST(req: Request) {
                 }
 
                 if (userInput === '1') {
-                    // Platform mode has no data catalogue on USSD — only shops sell bundles.
-                    if (sessionData.mode !== 'shop') {
-                        return reprompt(`Data bundles unavailable.\n${renderServiceMenu(shopLabel)}`);
+                    // A shop sells its own catalogue; a registered user buys the platform
+                    // catalogue at their own prices. The house code sells no bundles.
+                    if (sessionData.mode !== 'shop' && sessionData.mode !== 'member') {
+                        return reprompt(`Data bundles unavailable.\n${menu}`);
                     }
 
-                    const bundles = await loadShopBundles(sessionData.shopId);
+                    let bundles: Array<{ id: string; network: string; size: string; price: number }> = [];
+                    try {
+                        bundles = sessionData.mode === 'member'
+                            ? await withTimeout(loadMemberBundles(getSupabaseAdmin(), sessionData.member), 8000, 'Member bundles timeout')
+                            : await loadShopBundles(sessionData.shopId);
+                    } catch (e: any) {
+                        console.error('[Hubtel Interact] Bundle load failed:', e?.message);
+                    }
                     if (!bundles.length) {
-                        return reprompt(`No bundles available.\n${renderServiceMenu(shopLabel)}`);
+                        return reprompt(`No bundles available.\n${menu}`);
                     }
 
                     sessionData.allBundles = bundles;
@@ -415,7 +488,7 @@ export async function POST(req: Request) {
                     });
                 }
 
-                return reprompt(`${invalid('input')}${renderServiceMenu(shopLabel)}`);
+                return reprompt(`${invalid('input')}${menu}`);
             }
 
             // ── DATA: NETWORK ────────────────────────────────────────────────────
@@ -674,7 +747,29 @@ export async function POST(req: Request) {
                 // has to fit inside Hubtel's ~10s window after it.
                 try {
                     await withTimeout(
-                        save(SessionId, 'awaiting_payment', sessionData),
+                        Promise.all([
+                            save(SessionId, 'awaiting_payment', sessionData),
+                            // A registered user's order is also recorded as a pending
+                            // wallet top-up carrying the order: settlement credits it
+                            // once and buys from the wallet (lib/ussd-member-settle.ts).
+                            // Recorded BEFORE the charge for the same reason as the
+                            // session: a payment we cannot match is a lost customer.
+                            sessionData.mode === 'member'
+                                ? recordMemberPayment(getSupabaseAdmin(), sessionData.member, {
+                                    reference,
+                                    amount: price,
+                                    order: {
+                                        orderType,
+                                        packageId: sessionData.selectedPackageId,
+                                        typeId: sessionData.selectedCheckerId,
+                                        itemName: sessionData.itemName,
+                                        recipient: sessionData.recipientMobile || payerMsisdn,
+                                        payerMsisdn,
+                                        sessionId: SessionId,
+                                    },
+                                })
+                                : Promise.resolve(),
+                        ]),
                         2500,
                         'Order save timeout'
                     );
@@ -912,6 +1007,15 @@ async function getHouseCode(): Promise<string | null> {
  * resolved, otherwise the platform's `ussd_price ?? customer_price`.
  */
 async function loadCheckers(sessionData: any): Promise<Array<{ id: string; name: string; price: number }>> {
+    // A registered user pays their dashboard price (lib/ussd-member.ts).
+    if (sessionData.mode === 'member') {
+        try {
+            return await withTimeout(loadMemberCheckers(getSupabaseAdmin(), sessionData.member), 8000, 'Member checkers timeout');
+        } catch (e: any) {
+            console.error('[Hubtel Interact] loadMemberCheckers failed:', e?.message);
+            return [];
+        }
+    }
     try {
         const typesPromise = getSupabaseAdmin()
             .from('results_checker_types')
@@ -992,6 +1096,17 @@ function uniqueNetworks(bundles: Array<{ network: string }>): string[] {
         if (!seen.includes(b.network)) seen.push(b.network);
     }
     return seen;
+}
+
+/** The service menu for whoever this session belongs to. */
+function serviceMenuFor(sessionData: any): string {
+    if (sessionData.mode === 'member') {
+        // ASCII only: a non-ASCII character in a Hubtel response makes the call throw.
+        const raw = String(sessionData.member?.firstName || '').replace(/[^\x20-\x7E]/g, '').trim();
+        const name = raw.length > 16 ? `${raw.slice(0, 15)}.` : raw;
+        return `Welcome back${name ? ` ${name}` : ''}\n1. Data Bundles\n2. Result Checker\n0. Exit`;
+    }
+    return renderServiceMenu(sessionData.shopName || 'ARHMS');
 }
 
 function renderServiceMenu(shopName: string): string {

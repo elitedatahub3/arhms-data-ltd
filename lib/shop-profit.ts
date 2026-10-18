@@ -197,7 +197,7 @@ export function profitColumns(split: ProfitSplit): Record<string, unknown> {
 
 /**
  * Inserts an order row carrying split columns, surviving a database that does not
- * have them yet (migration 20261018010000_shop_profit_split.sql).
+ * have them yet (migration 20261018020000_shop_profit_split.sql).
  *
  * Losing the columns costs the uplines their legs on this order, which the backfill
  * script can find later. Failing the insert would cost the customer their order.
@@ -211,7 +211,7 @@ export async function insertOrderWithSplit(
     const first = await db.from(table).insert(row).select(select).single()
     if (!first.error || !/parent_|grandparent_/.test(String(first.error.message || ''))) return first
 
-    console.error(`[ShopProfit] ${table} has no split columns yet — run 20261018010000_shop_profit_split.sql. Upline legs dropped for this order.`)
+    console.error(`[ShopProfit] ${table} has no split columns yet — run 20261018020000_shop_profit_split.sql. Upline legs dropped for this order.`)
     const stripped = { ...row }
     for (const column of PROFIT_SPLIT_COLUMNS) delete stripped[column]
     return db.from(table).insert(stripped).select(select).single()

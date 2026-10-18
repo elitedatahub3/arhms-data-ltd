@@ -83,6 +83,33 @@ export async function POST(request: NextRequest) {
                 const { ensureUssdSession } = await import('@/lib/ussd-reference')
                 const { logCallback } = await import('@/lib/hubtel-payment-log')
 
+                // A registered user's order: credit their wallet, then buy from it.
+                // Recognised by its wallet_payments row, which outlives the session.
+                const { findMemberPayment, settleMemberUssdOrder } = await import('@/lib/ussd-member-settle')
+                const memberPayment = await findMemberPayment(supabase, reference)
+                if (memberPayment) {
+                    const result = await settleMemberUssdOrder(supabase, {
+                        payment: memberPayment,
+                        reference,
+                        amountPaid: paidAmountKobo / 100,
+                    })
+                    await logCallback({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        transactionId: event.data.id ? String(event.data.id) : null,
+                        payerMsisdn: metadata?.payer_msisdn ?? null,
+                        message: result.creditedOnly
+                            ? `Credited to wallet; purchase failed: ${result.error}`
+                            : result.success ? null : `Member settle failed: ${result.error}`,
+                        raw: event.data,
+                    })
+                    if (result.success) {
+                        await supabase.from('hubtel_sessions').delete().eq('session_id', memberPayment.metadata?.session_id ?? '')
+                    }
+                    return NextResponse.json({ received: true })
+                }
+
                 // Paystack echoes back the metadata the charge was created with, so
                 // it tells us which session it is settling. No mapping store needed —
                 // the reference is only the fallback, for a charge whose metadata did

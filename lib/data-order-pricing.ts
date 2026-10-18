@@ -52,8 +52,6 @@ export async function resolveDataPrice(
         .single()
 
     const userRole = (userRoleData as any)?.role
-    const isAgent = userRole === 'agent'
-    const isDealer = userRole === 'dealer'
 
     // Check if user is a sub-agent. Membership, upline and the upline's live
     // eligibility all come from the shared resolver — see lib/sub-agents.ts.
@@ -100,13 +98,7 @@ export async function resolveDataPrice(
 
     // API users pay the admin-set API price when the package has one — see
     // lib/api-pricing.ts. Otherwise, role-based pricing.
-    const price = (isApiUserRow(userRoleData) && hasApiPrice((pkg as any).api_price))
-        ? Number((pkg as any).api_price)
-        : (isDealer && (pkg as any).dealer_price > 0)
-        ? (pkg as any).dealer_price
-        : (isAgent && (pkg as any).agent_price > 0)
-            ? (pkg as any).agent_price
-            : (pkg as any).price
+    const price = rolePriceForPackage(userRoleData, pkg)
 
     return {
         ok: true,
@@ -117,4 +109,19 @@ export async function resolveDataPrice(
             uplineShopId: null,
         },
     }
+}
+
+/**
+ * What a non-sub user pays for `pkg`: the admin-set API price for an API user,
+ * else dealer → agent → base. The single expression resolveDataPrice() charges,
+ * exported so a catalogue (the USSD member menu) can quote the identical number.
+ *
+ * @param userRow A users row read with '*', so is_api_user is present when it exists.
+ */
+export function rolePriceForPackage(userRow: any, pkg: any): number {
+    const role = userRow?.role
+    if (isApiUserRow(userRow) && hasApiPrice(pkg?.api_price)) return Number(pkg.api_price)
+    if (role === 'dealer' && Number(pkg?.dealer_price) > 0) return Number(pkg.dealer_price)
+    if (role === 'agent' && Number(pkg?.agent_price) > 0) return Number(pkg.agent_price)
+    return Number(pkg?.price)
 }

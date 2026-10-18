@@ -36,6 +36,8 @@ import {
     PAYSTACK_MOMO_CRON_THROTTLE_KEYS,
 } from '@/lib/hubtel-status-throttle'
 import { resolveByReference } from '@/lib/ussd-reference'
+import { findMemberPayment, settleMemberUssdOrder } from '@/lib/ussd-member-settle'
+import { USSD_MEMBER_PAYMENT_KIND } from '@/lib/ussd-member'
 import {
     processCompletedWalletPayment,
     processCompletedUpgradePayment,
@@ -186,7 +188,16 @@ export async function GET(request: NextRequest) {
 
                     // Same routing as the webhook and verify-hubtel-payments. Every
                     // processor is idempotent, so racing a late callback is safe.
-                    if (payment.reference.startsWith('DATA-')) {
+                    if (payment.reference.startsWith('USSD-') && metadata.kind === USSD_MEMBER_PAYMENT_KIND) {
+                        // A registered user's USSD order: credit the wallet AND buy
+                        // the item, not just the credit a plain top-up gets.
+                        const r = await settleMemberUssdOrder(supabase, {
+                            payment,
+                            reference: payment.reference,
+                            amountPaid: (verified.amountPesewas ?? 0) / 100,
+                        })
+                        if (!r.success) throw new Error(r.error || 'USSD member order failed')
+                    } else if (payment.reference.startsWith('DATA-')) {
                         const { processDataDirectOrder } = await import('@/lib/data-order-payments')
                         const r = await processDataDirectOrder(payment.reference)
                         if (!r.success && !r.alreadyProcessed) throw new Error(r.error || 'Data order processing failed')
@@ -434,6 +445,33 @@ export async function GET(request: NextRequest) {
                 }
 
                 const amountPaid = (verified.amountPesewas ?? 0) / 100
+
+                // A registered user's order settles into their wallet and is bought
+                // from it (lib/ussd-member-settle.ts). Same call the webhook makes;
+                // both steps are idempotent, so racing it is safe.
+                const memberPayment = await findMemberPayment(supabase, reference)
+                if (memberPayment) {
+                    const result = await settleMemberUssdOrder(supabase, { payment: memberPayment, reference, amountPaid })
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: amountPaid,
+                        message: result.creditedOnly
+                            ? `Recovered by reconciliation sweep. Credited to wallet; purchase failed: ${result.error}`
+                            : result.success
+                                ? 'Recovered by reconciliation sweep.'
+                                : `Member settle failed: ${result.error ?? 'unknown error'}`,
+                        raw: verified.raw,
+                    })
+                    if (result.success) {
+                        results.ussdFulfilled++
+                        await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', memberPayment.metadata?.session_id ?? '')
+                    } else {
+                        results.failed++
+                    }
+                    continue
+                }
+
                 const resolved = await resolveByReference(supabase, reference)
                 if (!resolved) {
                     console.error('[CronPaystackMomo] Paid but unresolvable, needs a human:', reference)
