@@ -49,6 +49,7 @@ interface RCType {
     name: string
     cost_price: number
     agent_price: number
+    dealer_price?: number | null
     customer_price: number
 }
 
@@ -211,11 +212,14 @@ export default function ShopPricingPage() {
         return profit > 0 && profit <= maxProfit
     }
 
-    // Vouchers settle against results_checker_types.cost_price: that is what
-    // /api/shop/rc-pricing validates and what the storefront pays the shop
-    // (selling_price - cost_price). Showing the role price here would advertise
-    // a profit the owner never earns.
-    const getRcCostPrice = (type: RCType) => type.cost_price
+    // Vouchers settle against the owner's own role price — the same rule as data,
+    // and what /api/shop/rc-pricing validates and lib/shop-profit.ts pays. The
+    // platform's cost_price is the platform's margin, not the owner's.
+    const getRcCostPrice = (type: RCType) => {
+        if (dbUser?.role === 'dealer' && Number(type.dealer_price) > 0) return Number(type.dealer_price)
+        if (dbUser?.role === 'agent' && Number(type.agent_price) > 0) return Number(type.agent_price)
+        return Number(type.customer_price)
+    }
 
     const getRcProfit = (type: RCType, sellingStr: string) => {
         const selling = parseFloat(sellingStr)

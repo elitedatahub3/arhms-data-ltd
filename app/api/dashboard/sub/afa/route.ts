@@ -4,7 +4,7 @@ import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { resolveSubAgentContext } from '@/lib/sub-agents'
 import { validateAfaFormData } from '@/lib/afa-validation'
 import { resolveAfaCostPrice } from '@/lib/afa-pricing'
-import { creditShopRcProfit } from '@/lib/shop-service'
+import { computeShopProfit, creditOrderProfit, profitColumns } from '@/lib/shop-profit'
 
 /**
  * AFA registration for sub-agents.
@@ -202,7 +202,17 @@ export async function POST(request: NextRequest) {
         if (ctx.unavailable) return NextResponse.json({ error: ctx.unavailable }, { status: 503 })
 
         const price = ctx.price!
-        const margin = Math.round((price - ctx.platformCost!) * 100) / 100
+
+        // The sub is buying at their upline's price, so in money terms this is the
+        // upline's sale: the upline keeps what it adds over its own cost, and on a
+        // level-2 network the root Lead keeps theirs. Paying the direct upline
+        // everything above its role price used to give the root nothing.
+        const split = await computeShopProfit(db, {
+            kind: 'afa',
+            ownerId: ctx.uplineOwnerId!,
+            unitPrice: price,
+        })
+        const margin = split ? split.totalMargin : -1
 
         // Fails closed. This happens when an admin raises the role price after
         // the Lead set theirs; the alternatives are silently overcharging the
@@ -220,18 +230,16 @@ export async function POST(request: NextRequest) {
          * success and the duplicate path.
          */
         const creditParent = async () => {
-            if (margin <= 0) return
-            const credit = await creditShopRcProfit({
-                ownerId: ctx.uplineOwnerId!,
-                amount: margin,
-                description: `AFA Registration by sub-agent: ${formData.full_name}`,
-                reference: referenceCode,
-            })
-            if (!credit.credited && credit.reason !== 'already credited') {
-                // The sub has been charged and the order exists; a failed credit
-                // is a reconciliation problem, not a reason to fail their sale.
-                console.error('[SubAFA] Parent credit not applied:', credit.reason, referenceCode)
-            }
+            if (!split || margin <= 0) return
+            // Every leg, each under its own reference — idempotent per leg. A
+            // failed credit is a reconciliation problem, never a reason to fail a
+            // sale the sub has already paid for.
+            await creditOrderProfit(
+                db,
+                { shop_id: ctx.uplineShopId, ...profitColumns(split) },
+                referenceCode,
+                `AFA Registration by sub-agent: ${formData.full_name}`
+            )
         }
 
         const { data: rpcResult, error: rpcError } = await db.rpc('process_sub_afa_order', {
@@ -241,8 +249,8 @@ export async function POST(request: NextRequest) {
             p_reference_code: referenceCode,
             p_shop_id:        ctx.uplineShopId,
             p_shop_name:      ctx.shopName,
-            p_shop_markup:    margin,
-            p_cost_price:     ctx.platformCost,
+            p_shop_markup:    split?.sellerProfit ?? 0,
+            p_cost_price:     split?.unitCost ?? ctx.platformCost,
         })
 
         if (rpcError) {
@@ -286,8 +294,14 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Failed to process registration' }, { status: 500 })
         }
 
-        // Credit the Lead. creditShopRcProfit is not RC-specific — it is the
-        // generic shop-wallet credit for sales that produce no shop_orders row.
+        // Record the upline legs on the row (process_sub_afa_order predates them),
+        // then pay every leg. Best-effort: a database without the split columns
+        // just keeps the row as the RPC wrote it.
+        if (split?.ancestors.length) {
+            const { shop_markup: _ignored, ...legColumns } = profitColumns(split)
+            await db.from('afa_orders').update(legColumns).eq('reference_code', referenceCode)
+                .then(({ error }: any) => error && console.error('[SubAFA] Split columns not recorded:', error.message))
+        }
         await creditParent()
 
         // Best-effort admin alert — never block a completed registration on it.

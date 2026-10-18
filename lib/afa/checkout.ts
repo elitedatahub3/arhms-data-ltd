@@ -1,5 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
-import { creditShopRcProfit } from '@/lib/shop-service'
+import { creditOrderProfit } from '@/lib/shop-profit'
 
 /**
  * Settlement for a storefront AFA registration.
@@ -25,7 +25,10 @@ export async function finalizeAfaShopOrder(params: {
     // 1. Idempotency — load the order
     const { data: order, error: orderFetchError } = await db
         .from('afa_orders')
-        .select('id, shop_id, shop_name, shop_markup, payment_amount, payment_status, full_name, phone, region, customer_email')
+        // '*' rather than a column list: the split columns (parent_/grandparent_)
+        // arrive with a migration, and naming them before it runs would fail the
+        // whole select — and with it, settlement of a paid order.
+        .select('*')
         .eq('reference_code', reference)
         .maybeSingle()
 
@@ -66,22 +69,11 @@ export async function finalizeAfaShopOrder(params: {
     // such sale. It claims the credit via the unique index on
     // shop_wallet_transactions(reference, type), so the webhook and the verify
     // poll racing each other still credits exactly once.
-    const shopProfit = Number(order.shop_markup) || 0
-    if (shopProfit > 0 && order.shop_id) {
-        const { data: shop } = await db
-            .from('shop_profiles')
-            .select('owner_id')
-            .eq('id', order.shop_id)
-            .maybeSingle()
-
-        if (shop?.owner_id) {
-            await creditShopRcProfit({
-                ownerId: shop.owner_id,
-                amount: shopProfit,
-                description: `AFA Registration: ${order.full_name}`,
-                reference,
-            })
-        }
+    //
+    // Every leg on the row is paid — the selling shop and, on a sub's sale, each
+    // upline — each under its own reference (lib/shop-profit.ts).
+    if (order.shop_id) {
+        await creditOrderProfit(db, order, reference, `AFA Registration: ${order.full_name}`)
     }
 
     // 5. Tell the admins there is something to process. Best-effort — a failed

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { computeShopProfit, insertOrderWithSplit, profitColumns } from '@/lib/shop-profit'
 import { Redis } from '@upstash/redis'
 import { initiatePayment, MOOLRE_PAYMENT_CHANNEL_MAP } from '@/lib/moolre-payment-service'
 import {
@@ -157,9 +158,21 @@ export async function POST(request: NextRequest) {
         }
 
         const sellingPrice = parseFloat(shopPricing.selling_price)
-        const costPrice = costResult.price
-        const shopMarkup = Math.max(0, sellingPrice - costPrice)
         const totalAmount = sellingPrice
+
+        // A sub's cost is their upline's AFA price, and each level above keeps its
+        // own spread — the sub used to be credited everything above the root's
+        // role price. See lib/shop-profit.ts.
+        const split = await computeShopProfit(db, {
+            kind: 'afa',
+            ownerId: shop.owner_id,
+            unitPrice: sellingPrice,
+        })
+        if (!split || split.totalMargin <= 0) {
+            return NextResponse.json({ error: 'AFA registration is not available in this shop' }, { status: 404 })
+        }
+        const costPrice = split.unitCost
+        const shopMarkup = split.sellerProfit
 
         const applicantName = String(formData.full_name).trim()
         // Hubtel rejects non-ASCII in Description/CustomerName by throwing after
@@ -172,12 +185,11 @@ export async function POST(request: NextRequest) {
         if (!existingRef) {
             const referenceCode = `AFA-SHOP-${shop.id.slice(0, 8)}-${Date.now()}`
 
-            const { data: order, error: orderErr } = await db
-                .from('afa_orders')
-                .insert({
+            const { data: order, error: orderErr } = await insertOrderWithSplit(db, 'afa_orders', {
                     user_id: null,
                     shop_id: shop.id,
                     shop_name: shop.shop_name,
+                    ...profitColumns(split),
                     shop_markup: shopMarkup,
                     cost_price: costPrice,
                     payment_amount: sellingPrice,
@@ -199,8 +211,6 @@ export async function POST(request: NextRequest) {
                     source: 'storefront',
                     reference_code: referenceCode,
                 })
-                .select('id')
-                .single()
 
             if (orderErr || !order) {
                 console.error('[shop/afa/initialize] Order creation failed:', orderErr)

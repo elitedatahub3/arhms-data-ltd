@@ -9,7 +9,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { sendHubtelSMS } from '@/lib/hubtel-sms-service'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { creditShopRcProfit } from '@/lib/shop-service'
+import { computeShopProfit, creditOrderProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
 
 const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -108,34 +108,52 @@ export async function fulfillUSSDRCBySession(params: {
     // 3. Create a pending order record (upsert to handle retries)
     const orderId = existingOrder?.id || crypto.randomUUID()
 
-    // What the shop earned: its own selling price less what the platform pays for
-    // the voucher. The cost basis is `cost_price`, matching the web storefront
-    // (app/api/shop/rc/initialize) exactly — using `customer_price` here would
-    // measure the margin against main-site retail instead, which shops price at or
-    // below, so USSD sales would have earned the owner little or nothing.
-    let shopMarkup = 0
-    let platformCost = 0
+    // What the shop earned, by the same rule as the web storefront: the price the
+    // caller was charged, less what the owner pays (their role price, or their
+    // upline's price for a sub), with a sub's sale split up the chain. It used to
+    // be measured against the platform's cost_price and paid wholly to the seller.
+    // See lib/shop-profit.ts.
+    let split: ProfitSplit | null = null
     if (shopId) {
-        const { data: checkerType } = await supabaseAdmin
-            .from('results_checker_types')
-            .select('cost_price')
-            .eq('id', selectedCheckerId)
+        const { data: shopRow } = await supabaseAdmin
+            .from('shop_profiles')
+            .select('owner_id')
+            .eq('id', shopId)
             .maybeSingle()
-        platformCost = parseFloat(String(checkerType?.cost_price ?? 0))
-        shopMarkup = Math.max(0, expectedPrice - platformCost)
+        if (shopRow?.owner_id) {
+            split = await computeShopProfit(supabaseAdmin, {
+                kind: 'rc',
+                ownerId: shopRow.owner_id,
+                itemId: selectedCheckerId,
+                unitPrice: expectedPrice,
+                qty: 1,
+            })
+        }
+        if (!split || split.totalMargin <= 0) {
+            // The caller has paid; deliver regardless, but nobody should be
+            // credited a margin that does not exist.
+            console.error('[USSD-RC Fulfill] No positive margin on a paid shop sale:', clientReference)
+            deferredWork.push(() =>
+                sendPushToAdmins({
+                    title: '⚠️ USSD RC sold at or below cost',
+                    body: `${selectedCheckerName} at GHS ${expectedPrice}. Ref: ${clientReference}`,
+                    url: '/admin/vouchers',
+                }).catch(() => {})
+            )
+        }
     }
+    const shopMarkup = split && split.totalMargin > 0 ? split.sellerProfit : 0
 
     if (!existingOrder) {
-        const { error: insertErr } = await supabaseAdmin
-            .from('results_checker_orders')
-            .insert({
+        const { error: insertErr } = await insertOrderWithSplit(supabaseAdmin, 'results_checker_orders', {
                 id: orderId,
                 user_id: null,
                 shop_id: shopId,
                 shop_name: shopName,
+                ...(split && split.totalMargin > 0 ? profitColumns(split) : {}),
                 shop_markup: shopMarkup,
                 merchant_commission: shopMarkup,
-                cost_price_at_time: platformCost,
+                cost_price_at_time: split?.unitCost ?? 0,
                 customer_phone: recipientMobile || payerMobile,
                 type_id: selectedCheckerId,
                 type_name: selectedCheckerName,
@@ -206,20 +224,16 @@ export async function fulfillUSSDRCBySession(params: {
     // 6b. Credit the shop's markup. Runs before the SMS so a crash in delivery
     // still leaves the shop paid for a voucher that was genuinely sold; the
     // helper is idempotent on the reference, so a retry cannot double-credit.
-    if (shopId && shopMarkup > 0) {
-        const { data: shopRow } = await supabaseAdmin
-            .from('shop_profiles')
-            .select('owner_id')
-            .eq('id', shopId)
+    // Pays the legs stored on the row, so a retry after a crash pays what the
+    // first attempt recorded rather than re-deriving it.
+    if (shopId) {
+        const { data: paidOrder } = await supabaseAdmin
+            .from('results_checker_orders')
+            .select('*')
+            .eq('id', orderId)
             .maybeSingle()
-
-        if (shopRow?.owner_id) {
-            await creditShopRcProfit({
-                ownerId: shopRow.owner_id,
-                amount: shopMarkup,
-                description: `USSD RC sale: ${selectedCheckerName}`,
-                reference: clientReference,
-            })
+        if (paidOrder) {
+            await creditOrderProfit(supabaseAdmin, paidOrder, clientReference, `USSD RC sale: ${selectedCheckerName}`)
         }
     }
 

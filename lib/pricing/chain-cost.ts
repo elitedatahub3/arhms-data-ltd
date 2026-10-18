@@ -16,8 +16,9 @@
  * the entire chain margin and the root Lead nothing at all.
  */
 
-import { resolveOwnerCost, type PricingTiers } from './cost-basis'
+import type { PricingTiers } from './cost-basis'
 import type { SubAgentAncestor } from '../sub-agents'
+import { ownerCostPrice } from '../shop-price-limits'
 
 export interface ChainLevel extends SubAgentAncestor {
     /** What this level charges the level below it. Null when they price nothing. */
@@ -58,38 +59,62 @@ export async function resolveChainCosts(
     packageId: string,
     pricing: PricingTiers
 ): Promise<ChainLevel[]> {
-    if (chain.length === 0) return []
-
-    const [{ data: priceRows }, { data: ownerRows }] = await Promise.all([
-        db
+    return resolveChainCostsWith(db, chain, async (shopIds) => {
+        const { data: priceRows } = await db
             .from('shop_pricing')
             .select('shop_id, selling_price, sub_price')
-            .in('shop_id', chain.map((a) => a.shopId))
-            .eq('package_id', packageId),
+            .in('shop_id', shopIds)
+            .eq('package_id', packageId)
+
+        // sub_price is the explicit wholesale price once a level sets one; until
+        // then their retail price stands in, which is what the two-level split
+        // has always done.
+        return new Map<string, number | null>(
+            (priceRows || []).map((row: any) => [
+                row.shop_id,
+                asFiniteNumber(row.sub_price ?? row.selling_price),
+            ])
+        )
+    }, pricing)
+}
+
+/**
+ * The same walk for any product. `loadWholesale` answers "what does each of these
+ * shops charge the level below it for this item" — shop_pricing for data,
+ * shop_rc_pricing for checkers, shop_afa_pricing for AFA — and the root pays the
+ * platform its role price from `pricing`.
+ *
+ * The root's cost is the role price ALONE (ownerCostPrice), not resolveOwnerCost's
+ * expiry-weighted one. The dashboard charges a dealer dealer_price by role, the
+ * pricing pages floor on it, and settlement pays on it; costing the root here at a
+ * different number would split a sub's sale against a price the Lead never pays.
+ * Most dealers carry no dealer_expires_at at all, so the difference is not academic.
+ */
+export async function resolveChainCostsWith(
+    db: any,
+    chain: SubAgentAncestor[],
+    loadWholesale: (shopIds: string[]) => Promise<Map<string, number | null>>,
+    pricing: PricingTiers
+): Promise<ChainLevel[]> {
+    if (chain.length === 0) return []
+
+    const [wholesaleByShop, { data: ownerRows }] = await Promise.all([
+        loadWholesale(chain.map((a) => a.shopId)),
         db
             .from('users')
-            .select('id, role, agent_expires_at, dealer_expires_at')
+            .select('id, role')
             .in('id', chain.map((a) => a.ownerId)),
     ])
 
-    const priceByShop = new Map<string, any>(
-        (priceRows || []).map((row: any) => [row.shop_id, row])
-    )
     const ownerById = new Map<string, any>(
         (ownerRows || []).map((row: any) => [row.id, row])
     )
 
-    // sub_price is the explicit wholesale price once a level sets one; until
-    // then their retail price stands in, which is what the two-level split has
-    // always done.
-    const levels: ChainLevel[] = chain.map((ancestor) => {
-        const row = priceByShop.get(ancestor.shopId)
-        return {
-            ...ancestor,
-            wholesale: asFiniteNumber(row?.sub_price ?? row?.selling_price),
-            cost: null,
-        }
-    })
+    const levels: ChainLevel[] = chain.map((ancestor) => ({
+        ...ancestor,
+        wholesale: wholesaleByShop.get(ancestor.shopId) ?? null,
+        cost: null,
+    }))
 
     // Cost flows down from the root: each level pays the wholesale of the level
     // above it, and the root pays the platform.
@@ -101,11 +126,10 @@ export async function resolveChainCosts(
         }
 
         const owner = ownerById.get(level.ownerId)
-        level.cost = resolveOwnerCost(pricing, {
-            role: owner?.role || 'customer',
-            agentExpiresAt: owner?.agent_expires_at ?? null,
-            dealerExpiresAt: owner?.dealer_expires_at ?? null,
-        })
+        level.cost = ownerCostPrice(
+            { price: pricing.price, agent_price: pricing.agentPrice, dealer_price: pricing.dealerPrice },
+            owner?.role || 'customer'
+        )
     })
 
     return levels

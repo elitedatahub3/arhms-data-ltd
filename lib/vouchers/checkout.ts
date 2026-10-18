@@ -7,7 +7,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { calculateRCPrice, getRCTypeById } from '@/lib/vouchers/pricing'
-import { creditShopRcProfit } from '@/lib/shop-service'
+import { computeShopProfit, creditOrderProfit, insertOrderWithSplit, profitColumns, type ProfitSplit } from '@/lib/shop-profit'
 
 export interface RCVoucher {
     id: string
@@ -76,6 +76,7 @@ export async function purchaseWithWallet(params: {
     // checked here.
     let breakdown: Awaited<ReturnType<typeof calculateRCPrice>>
     let shopMarkup = 0
+    let subSplit: ProfitSplit | null = null
 
     if (unitPriceOverride != null) {
         if (!(unitPriceOverride > 0) || unitPriceOverride < type.cost_price) {
@@ -91,7 +92,21 @@ export async function purchaseWithWallet(params: {
             paystackFee: 0,
             total: subtotal,
         }
-        shopMarkup = parseFloat(((unitPriceOverride - type.cost_price) * quantity).toFixed(2))
+        // A sub buying through their upline is, in money terms, the upline's sale
+        // at the upline's price: the upline keeps what it adds over its own cost,
+        // and on a level-2 network the root Lead keeps theirs. Measuring it against
+        // the platform's cost_price and paying the direct upline alone used to give
+        // the root nothing. See lib/shop-profit.ts.
+        if (shopOwnerId) {
+            subSplit = await computeShopProfit(supabase, {
+                kind: 'rc',
+                ownerId: shopOwnerId,
+                itemId: typeId,
+                unitPrice: unitPriceOverride,
+                qty: quantity,
+            })
+        }
+        shopMarkup = subSplit ? subSplit.sellerProfit : 0
     } else {
         breakdown = await calculateRCPrice({ type, quantity, userRole, apiUser: !!apiPricing })
     }
@@ -121,9 +136,7 @@ export async function purchaseWithWallet(params: {
     // outright; now it also keys the Lead's credit, where a collision would
     // silently drop the second payment as "already credited".
     const referenceCode = clientReference || `RC-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const { data: order, error: orderError } = await (supabase
-        .from('results_checker_orders') as any)
-        .insert({
+    const { data: order, error: orderError } = await insertOrderWithSplit(supabase, 'results_checker_orders', {
             user_id: userId,
             user_role: userRole,
             customer_name: customerName,
@@ -139,14 +152,13 @@ export async function purchaseWithWallet(params: {
             shop_id: shopId ?? null,
             shop_name: shopName ?? null,
             shop_markup: shopMarkup,
+            ...(subSplit ? profitColumns(subSplit) : {}),
             merchant_commission: shopMarkup,
             status: 'pending',
             payment_status: 'pending',
             reference_code: referenceCode,
             api_key_id: apiKeyId ?? null,
-        })
-        .select()
-        .single()
+        }, '*')
 
     if (orderError || !order) {
         // Refund immediately if order insertion fails
@@ -198,14 +210,16 @@ export async function purchaseWithWallet(params: {
         // 7. Credit the Lead on a sub purchase. Idempotent on the reference, and
         //    deliberately after the order is completed — a wallet write must
         //    never be what stops a paid-for voucher being handed over.
-        if (shopOwnerId && shopMarkup > 0) {
+        //    Pays every leg the row carries — the upline, and the root Lead on a
+        //    level-2 network — each under its own reference.
+        if (shopId && subSplit) {
             try {
-                await creditShopRcProfit({
-                    ownerId: shopOwnerId,
-                    amount: shopMarkup,
-                    description: `RC Voucher sale by sub-agent: ${type.name} x${quantity}`,
-                    reference: referenceCode,
-                })
+                await creditOrderProfit(
+                    supabase,
+                    { shop_id: shopId, ...profitColumns(subSplit) },
+                    referenceCode,
+                    `RC Voucher sale by sub-agent: ${type.name} x${quantity}`
+                )
             } catch (err) {
                 console.error('[RC Wallet] Parent credit error:', err)
             }
@@ -316,20 +330,15 @@ export async function finalizeRCGatewayOrder(params: {
     //
     // creditShopRcProfit is idempotent on the reference, so the two paths racing
     // each other still credits exactly once.
-    if (order.shop_id && Number(order.shop_markup) > 0) {
-        const { data: shop } = await (supabase.from('shop_profiles') as any)
-            .select('owner_id')
-            .eq('id', order.shop_id)
-            .maybeSingle()
-
-        if (shop?.owner_id) {
-            await creditShopRcProfit({
-                ownerId: shop.owner_id,
-                amount: Number(order.shop_markup),
-                description: `RC Voucher sale: ${order.type_name} x${order.quantity}`,
-                reference,
-            })
-        }
+    // Every leg on the row is paid: the selling shop and, on a sub's sale, each
+    // upline (lib/shop-profit.ts). Each leg is idempotent on its own reference.
+    if (order.shop_id) {
+        await creditOrderProfit(
+            supabase,
+            order,
+            reference,
+            `RC Voucher sale: ${order.type_name} x${order.quantity}`
+        )
     }
 
     // 5. Deliver vouchers asynchronously (await to prevent serverless function cutoff)

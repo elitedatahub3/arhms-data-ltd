@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { computeShopProfit, insertOrderWithSplit, profitColumns } from '@/lib/shop-profit'
 import { Redis } from '@upstash/redis'
 import { initiatePayment, MOOLRE_PAYMENT_CHANNEL_MAP } from '@/lib/moolre-payment-service'
 import { initiatePayment as hubtelInitiatePayment, HUBTEL_CHANNEL_MAP } from '@/lib/hubtel-payment-service'
@@ -127,9 +128,24 @@ export async function POST(request: NextRequest) {
         }
 
         const sellingPrice = parseFloat(shopPricing.selling_price)
-        const costPrice = parseFloat(rcType.cost_price)
-        const shopMarkup = (sellingPrice - costPrice) * qty
         const totalAmount = sellingPrice * qty
+
+        // The owner's profit is measured against what THEY pay (their role price,
+        // or their upline's price for a sub), and a sub's sale is split up the chain.
+        // It used to be selling − the platform's cost_price, paid wholly to the
+        // seller, which handed every sub their uplines' share. See lib/shop-profit.ts.
+        const split = await computeShopProfit(db, {
+            kind: 'rc',
+            ownerId: shop.owner_id,
+            itemId: rcTypeId,
+            unitPrice: sellingPrice,
+            qty,
+        })
+        if (!split || split.totalMargin <= 0) {
+            return NextResponse.json({ error: 'This voucher type is not available in this shop' }, { status: 404 })
+        }
+        const costPrice = split.unitCost
+        const shopMarkup = split.sellerProfit
 
         // ── 5. Reserve vouchers ───────────────────────────────────────────────────
         let tempOrderId = crypto.randomUUID()
@@ -163,14 +179,12 @@ export async function POST(request: NextRequest) {
             // ── 6. Create pending order ───────────────────────────────────────────
             const referenceCode = `RC-SHOP-${shop.id.slice(0, 8)}-${Date.now()}`
 
-            const { data: order, error: orderErr } = await db
-                .from('results_checker_orders')
-                .insert({
+            const { data: order, error: orderErr } = await insertOrderWithSplit(db, 'results_checker_orders', {
                     user_id: null,
                     user_role: 'customer',
                     shop_id: shop.id,
                     shop_name: shop.shop_name,
-                    shop_markup: shopMarkup,
+                    ...profitColumns(split),
                     customer_name: customerName || 'Guest',
                     customer_email: validEmail,
                     customer_phone: cleanPhone,
@@ -186,8 +200,6 @@ export async function POST(request: NextRequest) {
                     payment_status: 'pending_payment',
                     reference_code: referenceCode,
                 })
-                .select('id')
-                .single()
 
             if (orderErr || !order) {
                 console.error('[shop/rc/initialize] Order creation failed:', orderErr)

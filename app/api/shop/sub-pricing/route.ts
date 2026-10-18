@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { createServerClient } from '@/lib/supabase'
-import { resolveOwnerCost, isSubPriceValid } from '@/lib/pricing/cost-basis'
+import { isSubPriceValid } from '@/lib/pricing/cost-basis'
+import { ownerCostPrice } from '@/lib/shop-price-limits'
 import {
     resolveSubAgentContext,
     canRecruit,
@@ -106,14 +107,10 @@ async function resolveOwnCosts(
     for (const pkg of packages) {
         costs.set(
             pkg.id,
-            resolveOwnerCost(
-                {
-                    price: Number(pkg.price) || 0,
-                    agentPrice: pkg.agent_price != null ? Number(pkg.agent_price) : null,
-                    dealerPrice: pkg.dealer_price != null ? Number(pkg.dealer_price) : null,
-                },
-                ctx.owner
-            )
+            // Role price alone — the same cost settlement splits the sub's sale
+            // against (lib/pricing/chain-cost.ts), so the floor shown here is the
+            // one the Lead is actually paid on.
+            ownerCostPrice(pkg, ctx.owner.role)
         )
     }
     return costs
