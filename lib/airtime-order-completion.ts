@@ -181,7 +181,17 @@ export async function finalizeAirtimeOrder(
                 })
                 .catch(err => console.error('[AirtimeCompletion] Shop SMS failed:', err))
         } else {
-            sendAirtimeCompletedSMS(existing.beneficiary_phone, amount)
+            // Main-site airtime: the house message, or the buyer's own sender ID
+            // when they switched that on in the SMS Platform.
+            import('@/lib/sms/platform-order-sms')
+                .then(({ sendPlatformOrderSms }) => sendPlatformOrderSms({
+                    userId: existing.user_id,
+                    isShopOrder: false,
+                    recipient: existing.beneficiary_phone,
+                    body: `Dear customer, your airtime order of GH${amount.toFixed(2)} has been credited successfully. Kindly dial *124# to check your balance thank you.`,
+                    reference: `airtime:${existing.id}:completed`,
+                    houseSend: () => sendAirtimeCompletedSMS(existing.beneficiary_phone, amount),
+                }))
                 .catch(err => console.error('[AirtimeCompletion] Completed SMS failed:', err))
         }
     }

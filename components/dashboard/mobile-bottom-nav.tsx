@@ -200,7 +200,7 @@ const NAV_VARIANTS = {
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
                 { href: '/dashboard/upgrade', label: 'Role Upgrade', icon: Crown },
-                { href: '/dashboard/sms', label: 'ARHMS SMS', icon: Send },
+                { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
             ],
             wallet: [

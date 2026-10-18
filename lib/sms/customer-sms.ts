@@ -45,7 +45,7 @@ export interface SmsAccount {
  * The caller's SMS account, created on first sight so every later query has a
  * row to hang off.
  *
- * There is no unlock fee any more (dropped when the ARHMS SMS platform opened):
+ * There is no unlock fee any more (dropped when the SMS Platform opened):
  * a new account starts active, and an old 'locked' one is opened the first
  * time its owner is seen. Only 'suspended' — an admin decision — still blocks.
  *
