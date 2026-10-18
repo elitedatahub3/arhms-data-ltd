@@ -360,7 +360,7 @@ function SenderIdSection({ info }: { info: SmsPlatformAccount }) {
             </CardHeader>
             <CardContent>
                 {info.account.status !== 'active' ? (
-                    <p className="text-sm text-muted-foreground">Activate SMS on the SMS Platform page to request a sender ID.</p>
+                    <p className="text-sm text-muted-foreground">Activate SMS on the main SMS page to request a sender ID.</p>
                 ) : (
                     <>
                         <p className="mb-3 text-xs text-muted-foreground">{live} of {info.senderCap} used</p>

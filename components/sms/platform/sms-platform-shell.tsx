@@ -106,7 +106,15 @@ export function SmsPlatformProvider({ children }: { children: ReactNode }) {
     )
 }
 
-export function SmsPageHeader({ title, description, icon: Icon, backHref = '/dashboard/sms', backLabel = 'SMS Platform', action, badge }: {
+/**
+ * What the product is called. Sub-agents work in a de-branded portal, so they
+ * never see the platform name.
+ */
+export function smsPlatformName(isSub: boolean | undefined): string {
+    return isSub ? 'SMS Platform' : 'ARHMS SMS'
+}
+
+export function SmsPageHeader({ title, description, icon: Icon, backHref = '/dashboard/sms', backLabel, action, badge }: {
     title: string
     /** Small pill after the title, e.g. the account mode. */
     badge?: ReactNode
@@ -116,12 +124,13 @@ export function SmsPageHeader({ title, description, icon: Icon, backHref = '/das
     backLabel?: string
     action?: ReactNode
 }) {
-    const { reload, reloadGroups } = useSmsPlatform()
+    const { info, reload, reloadGroups } = useSmsPlatform()
+    const back = backLabel ?? smsPlatformName(info?.isSub)
     return (
         <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
                 <Link href={backHref} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-                    <ArrowLeft className="w-4 h-4" /> {backLabel}
+                    <ArrowLeft className="w-4 h-4" /> {back}
                 </Link>
                 {action ?? (
                     <Button variant="outline" size="sm" className="gap-1" onClick={() => { reload(); reloadGroups() }}>
@@ -182,7 +191,7 @@ export function SmsActiveGate({ children, allowLocked = false }: { children: (in
                 <Lock className="w-10 h-10 mx-auto text-muted-foreground" />
                 <p className="font-bold">Activate SMS first</p>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto">Activate your SMS account to buy credits, request a sender ID and start sending.</p>
-                <Link href="/dashboard/sms"><Button className="mt-2">Go to SMS Platform</Button></Link>
+                <Link href="/dashboard/sms"><Button className="mt-2">Activate SMS</Button></Link>
             </CardContent></Card>
         )
     }
