@@ -141,12 +141,29 @@ export async function triggerFulfillment(orderId: string, network: string, user:
 
             // AirtelTigo via Agent Portal has no verification gate — it delivers quickly.
             // Reassure the recipient once that delivery is instant.
+            //
+            // Both go through sendPlatformOrderSms: a buyer who switched on "use my
+            // sender ID" in the SMS Platform sends it under their own name, from
+            // their credits; everyone else (and every storefront order) gets the
+            // house message exactly as before.
+            const { sendPlatformOrderSms } = await import('@/lib/sms/platform-order-sms')
+            const recipientDisplay = String((order as any).phone_number || '').replace(/^233/, '0')
+            const smsBase = {
+                userId: (order as any).user_id,
+                isShopOrder: !!(order as any).shop_order_id,
+                recipient: (order as any).phone_number,
+                reference: `data:${orderId}:received`,
+            }
             if (supplierLabel === 'agentportal' && /^AT/i.test(network)) {
                 const { sendAtInstantDeliverySMS } = await import('@/lib/sms-service')
-                await sendAtInstantDeliverySMS((order as any).phone_number, {
-                    network: (order as any).network,
-                    size: (order as any).size,
-                }).catch(err => console.error('[Fulfillment] AT instant SMS failed:', err))
+                await sendPlatformOrderSms({
+                    ...smsBase,
+                    body: `Your ${(order as any).network} ${(order as any).size} data order for ${recipientDisplay} has been received and will be delivered instantly. Thank you.`,
+                    houseSend: () => sendAtInstantDeliverySMS((order as any).phone_number, {
+                        network: (order as any).network,
+                        size: (order as any).size,
+                    }),
+                })
             } else {
                 // EVERY other network — the order is with the supplier now, so confirm
                 // receipt once without quoting a delivery time. The retry cron must
@@ -161,10 +178,14 @@ export async function triggerFulfillment(orderId: string, network: string, user:
                 // interpolates details.network and says only "received and is being
                 // processed".
                 const { sendMtnOrderReceivedSMS } = await import('@/lib/sms-service')
-                await sendMtnOrderReceivedSMS((order as any).phone_number, {
-                    network: (order as any).network,
-                    size: (order as any).size,
-                }).catch(err => console.error('[Fulfillment] order-received SMS failed:', err))
+                await sendPlatformOrderSms({
+                    ...smsBase,
+                    body: `Your ${(order as any).network} ${(order as any).size} data order for ${recipientDisplay} has been received and is being processed. Thank you.`,
+                    houseSend: () => sendMtnOrderReceivedSMS((order as any).phone_number, {
+                        network: (order as any).network,
+                        size: (order as any).size,
+                    }),
+                })
             }
         } else {
             // Failure — keep order as pending (do not update orders table status)

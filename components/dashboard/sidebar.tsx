@@ -70,7 +70,7 @@ const userNavItems = [
     { href: '/dashboard/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/dashboard/profile', label: 'Profile', icon: User },
     { href: '/dashboard/install', label: 'Download App', icon: Download },
-    { href: '/dashboard/sms', label: 'ARHMS SMS', icon: Send },
+    { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
     { href: '/dashboard/developer-api', label: 'Developer API', icon: Code2 },
     { href: '/dashboard/commission-wallet', label: 'Commission Wallet', icon: Percent },
 ]
@@ -296,8 +296,6 @@ export function DashboardSidebar() {
         .map(item => (isSubAgent && SUB_AGENT_HREF_OVERRIDES[item.href])
             ? { ...item, href: SUB_AGENT_HREF_OVERRIDES[item.href] }
             : item)
-        // The sub portal is de-branded: no platform name on the SMS link.
-        .map(item => (isSubAgent && item.href === '/dashboard/sms') ? { ...item, label: 'SMS Platform' } : item)
 
     // Sub-Agents lives in the Main Menu for everyone, so the sub's My Shop
     // copy is dropped here (the mobile Shop sheet still keeps it).

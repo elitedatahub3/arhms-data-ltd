@@ -37,7 +37,7 @@ export interface SmsPlatformAccount {
     stats30d?: { campaigns: number; recipients: number; creditsUsed: number }
     recentActivity?: { kind: 'send' | 'purchase'; credits: number; label: string; at: string }[]
     limits?: { perSend: number }
-    orderSms?: { data: boolean; airtime: boolean; lastSkip?: string | null }
+    platformOrderSms?: { enabled: boolean; lastSkip: string | null }
     account: {
         status: 'locked' | 'active' | 'suspended'
         credits: number
@@ -106,12 +106,9 @@ export function SmsPlatformProvider({ children }: { children: ReactNode }) {
     )
 }
 
-/**
- * What the product is called. Sub-agents work in a de-branded portal, so they
- * never see the platform name.
- */
-export function smsPlatformName(isSub: boolean | undefined): string {
-    return isSub ? 'SMS Platform' : 'ARHMS SMS'
+/** What the product is called, for owners and sub-agents alike. */
+export function smsPlatformName(_isSub?: boolean): string {
+    return 'SMS Platform'
 }
 
 export function SmsPageHeader({ title, description, icon: Icon, backHref = '/dashboard/sms', backLabel, action, badge }: {

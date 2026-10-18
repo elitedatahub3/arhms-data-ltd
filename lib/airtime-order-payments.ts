@@ -173,8 +173,17 @@ export async function processAirtimeDirectOrder(
     }).catch(() => {})
 
     if (resolvedType !== 'mashup') {
-        await sendAirtimeBeneficiarySMS(order.beneficiary_phone, Number(order.airtime_amount))
-            .catch((err: any) => console.error('[AirtimeSettle] Beneficiary SMS failed:', err))
+        // Under the buyer's own sender ID when they switched that on in the
+        // SMS Platform; the house message otherwise.
+        const { sendPlatformOrderSms } = await import('@/lib/sms/platform-order-sms')
+        await sendPlatformOrderSms({
+            userId: payment.user_id,
+            isShopOrder: false,
+            recipient: order.beneficiary_phone,
+            body: `Your order for GH ${Number(order.airtime_amount).toFixed(2)} airtime has been received and is being processed. You will receive the confirmation sms very soon.`,
+            reference: `airtime:${order.id}:received`,
+            houseSend: () => sendAirtimeBeneficiarySMS(order.beneficiary_phone, Number(order.airtime_amount)),
+        })
     }
 
     await triggerAirtimeFulfillment(order.id)

@@ -546,7 +546,7 @@ export default function ShopOverviewPage() {
                             <Send className="w-5 h-5" />
                         </div>
                         <div className="flex-1 min-w-0">
-                            <p className="font-black text-sm">{isSubAgent ? 'SMS Platform' : 'ARHMS SMS'}</p>
+                            <p className="font-black text-sm">SMS Platform</p>
                             <p className="text-xs text-emerald-50/90 mt-0.5">Bulk SMS under your own sender name — contact groups, delivery reports and an SMS API.</p>
                         </div>
                         <ArrowRight className="w-4 h-4 flex-shrink-0" />

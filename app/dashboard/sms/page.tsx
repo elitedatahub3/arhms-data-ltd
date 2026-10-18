@@ -129,7 +129,7 @@ function Hub({ info }: { info: SmsPlatformAccount }) {
                 </div>
             </div>
 
-            {info.hasShop && <OrderConfirmationToggle info={info} />}
+            <OrderConfirmationToggle info={info} />
 
             <div className="grid grid-cols-3 gap-2">
                 {[
@@ -203,13 +203,14 @@ function Hub({ info }: { info: SmsPlatformAccount }) {
 }
 
 /**
- * The shop's storefront order confirmations, under its own sender ID. One
- * switch drives both the data and the airtime toggles behind Customer SMS.
+ * SMS Platform order confirmations: the data and airtime this user buys on the
+ * platform are confirmed to the recipient under their own sender ID. Separate
+ * from the shop's storefront confirmations, which live in Customer SMS.
  */
 function OrderConfirmationToggle({ info }: { info: SmsPlatformAccount }) {
     const { reload } = useSmsPlatform()
     const [saving, setSaving] = useState(false)
-    const on = !!(info.orderSms?.data || info.orderSms?.airtime)
+    const on = !!info.platformOrderSms?.enabled
     const hasOwnSender = info.allowedSenders.some((x) => x.type === 'own')
 
     const toggle = async (next: boolean) => {
@@ -222,11 +223,11 @@ function OrderConfirmationToggle({ info }: { info: SmsPlatformAccount }) {
             const res = await fetch('/api/sms/account', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: next, airtime: next }),
+                body: JSON.stringify({ platform: next }),
             })
             const data = await res.json()
             if (!res.ok || !data?.success) { toast.error(data?.error || 'Could not save'); return }
-            toast.success(next ? 'Order confirmations will use your sender ID' : 'Order confirmations switched off')
+            toast.success(next ? 'Your purchases will be confirmed under your sender ID' : 'Confirmations go back to the default sender')
             reload()
         } finally {
             setSaving(false)
@@ -243,11 +244,11 @@ function OrderConfirmationToggle({ info }: { info: SmsPlatformAccount }) {
                     <p className="text-sm font-bold">Use my sender ID for order confirmations</p>
                     <p className="text-xs text-muted-foreground">
                         {hasOwnSender
-                            ? 'Your storefront data and airtime buyers get their confirmation from your approved sender ID, paid from these credits. When off, they get no confirmation SMS.'
-                            : 'Once your sender ID is approved, your storefront data and airtime buyers can get their confirmation from it.'}
+                            ? "When you buy data or airtime here, the recipient's confirmation SMS comes from your approved sender ID instead of the default sender, paid from these credits."
+                            : 'Once your sender ID is approved, the confirmation SMS for data and airtime you buy here can come from it.'}
                     </p>
-                    {on && info.orderSms?.lastSkip && (
-                        <p className="mt-1 text-[11px] text-amber-600">Last one not sent: {info.orderSms.lastSkip}</p>
+                    {on && info.platformOrderSms?.lastSkip && (
+                        <p className="mt-1 text-[11px] text-amber-600">Last confirmation: {info.platformOrderSms.lastSkip}</p>
                     )}
                 </div>
                 <Switch checked={on} disabled={saving || (!on && !hasOwnSender)} onCheckedChange={toggle} aria-label="Use my sender ID for order confirmations" />
