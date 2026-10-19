@@ -22,7 +22,6 @@ import {
     Phone,
     Zap,
     Receipt,
-    Gift,
 } from 'lucide-react'
 import { RoleGreetingBox } from '@/components/dashboard/RoleGreetingBox'
 import { PromoHeroCarousel } from '@/components/dashboard/PromoHeroCarousel'
@@ -385,7 +384,6 @@ export default function DashboardPage() {
                                 { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
                                 { href: '/dashboard/data-packages', label: 'Buy Data Bundles', icon: Package },
                                 { href: '/dashboard/wallet', label: 'Wallet History', icon: Wallet },
-                                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                                 { href: '/dashboard/complaints', label: 'Help & Support', icon: AlertCircle },
                                 { href: isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop', label: 'Store Settings', icon: Store },
                             ].map((link, i) => (

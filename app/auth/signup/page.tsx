@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Eye, EyeOff, Loader2, UserPlus, Mail, Lock, User, Phone, Store, ExternalLink, AlertCircle, Gift } from 'lucide-react'
+import { Eye, EyeOff, Loader2, UserPlus, Mail, Lock, User, Phone, Store, ExternalLink, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
 import { BackgroundBubbles } from '@/components/background-bubbles'
@@ -24,12 +24,7 @@ export default function SignupPage() {
         phoneNumber: '',
         password: '',
         confirmPassword: '',
-        referralCode: '',
     })
-    const [referrerName, setReferrerName] = useState<string | null>(null)
-    // True when the visitor arrived through a /r/<code> link: the code is already
-    // applied, so the manual Referral Code field is hidden.
-    const [codeFromLink, setCodeFromLink] = useState(false)
     const [showPassword, setShowPassword] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState('')
@@ -46,35 +41,6 @@ export default function SignupPage() {
                 setGuestUrl(data.guestStorefrontUrl)
             }
         }).catch(console.error)
-    }, [])
-
-    // Referral code, read from the cookie the middleware stashed on link click.
-    //
-    // Deliberately document.cookie and NOT useSearchParams: this page is
-    // statically prerendered, and useSearchParams would force a Suspense boundary
-    // and change the build output. The middleware has also already stripped ?ref=
-    // from the URL by the time this renders, so there is nothing to read there.
-    useEffect(() => {
-        const match = document.cookie.match(/(?:^|;\s*)arhms_ref=([^;]+)/)
-        const code = match ? decodeURIComponent(match[1]).toUpperCase() : ''
-        if (!code) return
-
-        setFormData(prev => (prev.referralCode ? prev : { ...prev, referralCode: code }))
-        setCodeFromLink(true)
-
-        fetch(`/api/referrals/resolve?code=${encodeURIComponent(code)}`)
-            .then(r => (r.ok ? r.json() : null))
-            .then(data => {
-                if (data?.valid && data.referrerName) setReferrerName(data.referrerName)
-                // A dead link: drop its code and give the manual field back. Only
-                // on an explicit valid:false — a failed or rate-limited lookup
-                // keeps the link's code, since the claim re-validates server-side.
-                if (data?.valid === false) {
-                    setCodeFromLink(false)
-                    setFormData(prev => (prev.referralCode === code ? { ...prev, referralCode: '' } : prev))
-                }
-            })
-            .catch(() => { /* a broken lookup must never block signup */ })
     }, [])
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -145,20 +111,6 @@ export default function SignupPage() {
 
             if (data?.session) {
                 toast.success('Account created! logging in...')
-                // Attribute the referral while a session is in hand. Awaited rather
-                // than fired off, because navigation would cancel it — but a failure
-                // must never block signup, and ReferralClaimOnMount retries from the
-                // cookie on the dashboard.
-                const code = formData.referralCode.trim().toUpperCase()
-                if (code) {
-                    try {
-                        await fetch('/api/referrals/claim', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ code }),
-                        })
-                    } catch { /* the dashboard mount effect will retry */ }
-                }
                 // Keep the spinner up while /dashboard loads — clearing it here
                 // makes a successful sign-up look like the button did nothing.
                 router.push('/dashboard')
@@ -247,15 +199,6 @@ export default function SignupPage() {
                                     <AlertCircle className="h-4 w-4" />
                                     <AlertDescription className="text-xs font-bold uppercase tracking-tight">{error}</AlertDescription>
                                 </Alert>
-                            )}
-
-                            {referrerName && (
-                                <div className="flex items-center gap-3 rounded-xl border border-green-500/20 bg-green-500/10 px-4 py-3">
-                                    <Gift className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
-                                    <p className="text-xs font-bold text-green-700 dark:text-green-300">
-                                        Referred by {referrerName}
-                                    </p>
-                                </div>
                             )}
 
                             <div className="grid grid-cols-2 gap-4">
@@ -366,26 +309,6 @@ export default function SignupPage() {
                                     </div>
                                 </div>
                             </div>
-
-                            {!codeFromLink && (
-                                <div className="space-y-2">
-                                    <Label htmlFor="referralCode" className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">
-                                        Referral Code <span className="opacity-50">(Optional)</span>
-                                    </Label>
-                                    <div className="relative">
-                                        <Gift className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                        <Input
-                                            id="referralCode"
-                                            name="referralCode"
-                                            placeholder="KWAME7F2Q"
-                                            value={formData.referralCode}
-                                            onChange={handleChange}
-                                            autoCapitalize="characters"
-                                            className="h-12 pl-12 bg-background/50 border-border/50 focus:border-primary/50 rounded-2xl text-sm font-medium uppercase tracking-wider"
-                                        />
-                                    </div>
-                                </div>
-                            )}
 
                             <Button
                                 type="submit"

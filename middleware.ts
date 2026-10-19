@@ -231,8 +231,7 @@ export async function middleware(request: NextRequest) {
     // === RETIRED: MARKETPLACE SUBDOMAIN ===
     // marketplace.arhmsgh.com used to serve the classifieds app. That product was removed,
     // so the whole subdomain now sends visitors to the main site instead of a dead page.
-    // The query string is kept so a ?ref= referral link still attributes: the main domain's
-    // own run of this middleware captures it. /auth/* keeps its old behaviour of going to
+    // /auth/* keeps its old behaviour of going to
     // the same path on the main domain, so an old login link still lands somewhere useful.
     if (isMarketplace) {
         const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
@@ -240,53 +239,6 @@ export async function middleware(request: NextRequest) {
             ? new URL(pathname + request.nextUrl.search, mainDomain)
             : new URL('/' + request.nextUrl.search, mainDomain)
         return NextResponse.redirect(target)
-    }
-
-    // === REFERRAL LINK CAPTURE ===
-    // ?ref=CODE is stashed into a cookie and stripped from the URL, ABOVE every
-    // guard below. This is the ONLY place in the app that writes this cookie.
-    //
-    // It has to run first, for three reasons:
-    //   * An already-signed-in visitor tapping a friend's link is bounced to
-    //     /dashboard by the /auth/* guard further down. Capturing here means the
-    //     code survives that bounce instead of being silently eaten.
-    //   * Google OAuth loses query params entirely — Supabase matches redirectTo
-    //     against an allow-list, so a query string breaks the exact match (see the
-    //     mkt_oauth_next cookie in components/google-sign-in-button.tsx). A
-    //     first-party cookie is the established workaround in this codebase.
-    //   * /auth/signup is statically prerendered, so the page reads this cookie via
-    //     document.cookie rather than useSearchParams — which would force a
-    //     Suspense boundary and change the build output.
-    //
-    // Redirecting to the same URL minus ?ref also stops a user who re-shares the
-    // page they landed on from leaking someone else's code.
-    //
-    // Not httpOnly: the signup page reads it to render "Referred by X". A user can
-    // therefore forge it, but all that does is attribute THEMSELVES to a referrer
-    // of their choosing — identical to typing a code into the form. Zero privilege.
-    //
-    // The name is duplicated from REFERRAL_COOKIE in lib/referrals.ts rather than
-    // imported: that module pulls in node:crypto for IP hashing, which must not be
-    // dragged into the edge middleware bundle.
-    const refParam = request.nextUrl.searchParams.get('ref')
-    if (refParam && !pathname.startsWith('/api') && /^[A-Z0-9]{5,24}$/i.test(refParam)) {
-        const cleanUrl = new URL(request.url)
-        cleanUrl.searchParams.delete('ref')
-        const stash = NextResponse.redirect(cleanUrl)
-        stash.cookies.set('arhms_ref', refParam.toUpperCase(), {
-            path: '/',
-            maxAge: 60 * 60 * 24 * 30,
-            sameSite: 'lax',
-            httpOnly: false,
-            secure: process.env.NODE_ENV === 'production',
-            // Shared across subdomains in prod, mirroring the auth cookie domain in
-            // lib/supabase.ts, so a link opened on one subdomain still attributes when
-            // the user signs up on another.
-            ...(request.nextUrl.hostname.endsWith('arhmsgh.com')
-                ? { domain: '.arhmsgh.com' }
-                : {}),
-        })
-        return addNoCacheHeaders(stash)
     }
 
     // === RETIRED: CLASSIFIEDS AND MARKETPLACE PATHS ===

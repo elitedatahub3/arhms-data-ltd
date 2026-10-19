@@ -43,7 +43,6 @@ import {
     CreditCard,
     Loader2,
     Receipt,
-    Gift,
     UserPlus,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
@@ -65,7 +64,6 @@ const userNavItems = [
     { href: '/dashboard/my-orders', label: 'Orders', icon: ShoppingCart },
     { href: '/dashboard/shop/sub-agents', label: 'Sub-Agents', icon: UserPlus },
     { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
-    { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
     { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
     { href: '/dashboard/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/dashboard/profile', label: 'Profile', icon: User },
@@ -80,7 +78,7 @@ const userNavItems = [
  * live under /dashboard/sub/* — separate implementations (own wallet debit,
  * upline-resolved pricing floor, owner-approved withdrawals) from the shared
  * customer pages `userNavItems` otherwise points at. Everything not listed
- * here (Data Packages, Buy Airtime, Wallet, Refer & Earn,
+ * here (Data Packages, Buy Airtime, Wallet,
  * Transactions, Complaints, Profile, Download App, Developer API, Commission
  * Wallet) is genuinely shared and needs no remap.
  */
@@ -102,7 +100,6 @@ const adminNavItems = [
     { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
     { href: '/admin/airtime', label: 'Airtime', icon: Phone },
     { href: '/admin/utilities', label: 'Utility Bills', icon: Receipt },
-    { href: '/admin/referrals', label: 'Referrals', icon: Gift },
     { href: '/admin/mashup-orders', label: 'Special MTN Mashup', icon: Zap },
     { href: '/admin/express-orders', label: 'EXPRESS MTN', icon: Zap },
     { href: '/admin/shops', label: 'Shops', icon: Store },

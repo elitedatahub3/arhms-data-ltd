@@ -11,7 +11,6 @@ import { MobileBottomNav } from '@/components/dashboard/mobile-bottom-nav'
 import { PageAccessGuard } from '@/components/dashboard/page-access-guard'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PushNotificationManager } from '@/components/PushNotificationManager'
-import { ReferralClaimOnMount } from '@/components/dashboard/ReferralClaimOnMount'
 import { cn } from '@/lib/utils'
 import { useUI } from '@/contexts/ui-context'
 // import { SupportChatWidget } from '@/components/dashboard/support-chat-widget'
@@ -183,7 +182,6 @@ export default function DashboardLayout({
     return (
         <div className="min-h-screen relative">
             <PushNotificationManager />
-            <ReferralClaimOnMount />
             <AgentExpiryModal />
             <DashboardSidebar />
             <div className={cn(

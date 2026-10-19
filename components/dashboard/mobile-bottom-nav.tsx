@@ -31,7 +31,6 @@ import {
     Code2,
     Settings,
     Receipt,
-    Gift,
 } from 'lucide-react'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useUI } from '@/contexts/ui-context'
@@ -196,7 +195,6 @@ const NAV_VARIANTS = {
         subItems: {
             home: [
                 { href: '/dashboard/profile', label: 'Profile', icon: User },
-                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
                 { href: '/dashboard/upgrade', label: 'Role Upgrade', icon: Crown },
@@ -225,8 +223,8 @@ const NAV_VARIANTS = {
     // live under /dashboard/sub/* — separate implementations (own wallet debit,
     // upline-resolved pricing floor, owner-approved withdrawals) from the
     // customer pages the `dashboard` variant above points at. Everything not
-    // remapped here (Data Packages, Buy Airtime, Wallet, Refer &
-    // Earn, Transactions, Complaints, Profile, Download App, Developer API,
+    // remapped here (Data Packages, Buy Airtime, Wallet,
+    // Transactions, Complaints, Profile, Download App, Developer API,
     // Commission Wallet) is genuinely shared with the customer nav.
     'dashboard-sub': {
         root: '/dashboard',
@@ -240,7 +238,6 @@ const NAV_VARIANTS = {
         subItems: {
             home: [
                 { href: '/dashboard/profile', label: 'Profile', icon: User },
-                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
                 { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
@@ -285,7 +282,6 @@ const NAV_VARIANTS = {
                 { href: '/admin/sms-businesses', label: 'SMS Businesses', icon: Store },
                 { href: '/admin/email-broadcast', label: 'Email', icon: Send },
                 { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
-                { href: '/admin/referrals', label: 'Referrals', icon: Gift },
                 { href: '/admin/settings', label: 'Settings', icon: Settings },
             ],
             orders: [
