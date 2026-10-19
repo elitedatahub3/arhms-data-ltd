@@ -16,7 +16,9 @@ export async function GET(request: Request) {
 
         const { supabaseAdmin, account } = ctx
 
-        const audience = bundleAudienceFor(new URL(request.url).searchParams.get('portal'))
+        // The platform account sells the platform price list; the shop account the
+        // shop list. ?portal=platform is still honoured for older clients.
+        const audience = ctx.scope === 'platform' ? 'platform' : bundleAudienceFor(new URL(request.url).searchParams.get('portal'))
         const bundles = await fetchBundles(supabaseAdmin, audience)
 
         const { data: purchases } = await supabaseAdmin

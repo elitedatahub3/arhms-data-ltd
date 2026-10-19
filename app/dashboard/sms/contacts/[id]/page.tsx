@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { parseContactsText, formatGhanaPhone } from '@/components/sms/sms-contacts'
 import { SmsActiveGate, SmsPageHeader, useSmsPlatform } from '@/components/sms/platform/sms-platform-shell'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface Member {
     id: string
@@ -37,7 +38,7 @@ export default function SmsContactGroupPage() {
 
     const load = useCallback(async () => {
         try {
-            const res = await fetch(`/api/sms/contacts?groupId=${id}&page=${page}`, { cache: 'no-store' })
+            const res = await smsFetch(`/api/sms/contacts?groupId=${id}&page=${page}`, { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) {
                 setMembers(data.contacts)
@@ -61,7 +62,7 @@ export default function SmsContactGroupPage() {
         if (!contacts.length) { toast.error('Paste at least one number'); return }
         setAdding(true)
         try {
-            const res = await fetch('/api/sms/contacts', {
+            const res = await smsFetch('/api/sms/contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contacts, source: 'import', groupId: id }),
@@ -86,7 +87,7 @@ export default function SmsContactGroupPage() {
     const removeMember = async (member: Member) => {
         setRemovingId(member.id)
         try {
-            const res = await fetch('/api/sms/groups', {
+            const res = await smsFetch('/api/sms/groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ groupId: id, removeContactIds: [member.id] }),

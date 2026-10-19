@@ -9,6 +9,7 @@
  */
 
 import { NextResponse } from 'next/server'
+import { headers } from 'next/headers'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { generateReferenceCode } from '@/lib/utils'
 import { initiatePayment as hubtelInitiatePayment, HUBTEL_CHANNEL_MAP } from '@/lib/hubtel-payment-service'
@@ -22,6 +23,7 @@ import { resolveSubAgentContext, type SubAgentContext } from '@/lib/sub-agents'
 import { resolveSmsAccount, type SmsAccount } from '@/lib/sms/customer-sms'
 import { getAccountMode, SMS_PLATFORM_SETTING_KEYS } from '@/lib/sms/platform'
 import type { SmsMode } from '@/lib/sms/sms-rules'
+import { SMS_SCOPE_HEADER, type SmsScope } from '@/lib/sms/sms-fetch'
 
 export const SMS_PROVIDER_KEY = SCOPE_SETTING_KEY.sms
 
@@ -93,6 +95,12 @@ export interface SmsContext {
     userStatus: string
     /** Platform Mode until a business registration is approved. */
     mode: SmsMode
+    /**
+     * Which SMS account this request is about. The SMS Platform and the shop's
+     * Customer SMS are separate products with separate accounts; the page says
+     * which through the x-sms-scope header (lib/sms/sms-fetch.ts).
+     */
+    scope: SmsScope
 }
 
 export type SmsPortal = 'shop' | 'sub' | 'platform'
@@ -145,7 +153,12 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
     const sub = await resolveSubAgentContext(supabaseAdmin, authUser.id)
     const role = (dbUser as any)?.role || 'customer'
 
-    const account = await resolveSmsAccount(supabaseAdmin, authUser.id, (shop as any)?.id ?? null)
+    let scope: SmsScope = 'shop'
+    try {
+        scope = (await headers()).get(SMS_SCOPE_HEADER) === 'platform' ? 'platform' : 'shop'
+    } catch { /* outside a request: the shop, as before */ }
+
+    const account = await resolveSmsAccount(supabaseAdmin, authUser.id, (shop as any)?.id ?? null, scope)
     if (!account) return { error: 'Could not load your SMS account', status: 500 }
 
     const priceKey = unlockPriceKeyForRole(role, sub.isSub)
@@ -169,9 +182,10 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
         settingsMap,
         unlockPrice,
         freeActivation,
-        portal: sub.isSub ? 'sub' : 'shop',
+        portal: scope === 'platform' ? 'platform' : sub.isSub ? 'sub' : 'shop',
         userStatus: (dbUser as any)?.status || 'active',
         mode,
+        scope,
     }
 }
 

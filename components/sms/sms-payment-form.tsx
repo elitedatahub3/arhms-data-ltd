@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { Loader2, Wallet, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 // Values must match the gateway channel maps, which key AirtelTigo as 'AT'.
 const NETWORKS = [
@@ -106,7 +107,7 @@ export function SmsPaymentForm({
         }
         setSubmitting(true)
         try {
-            const res = await fetch(endpoint, {
+            const res = await smsFetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -133,7 +134,7 @@ export function SmsPaymentForm({
         if (!otp.trim() || !reference) return
         setSubmitting(true)
         try {
-            const res = await fetch(endpoint, {
+            const res = await smsFetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ otp: otp.trim(), reference }),

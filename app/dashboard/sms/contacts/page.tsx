@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { parseContactsText, type SmsGroup } from '@/components/sms/sms-contacts'
 import { SmsActiveGate, SmsPageHeader, useSmsPlatform } from '@/components/sms/platform/sms-platform-shell'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 /**
  * Contact groups for the SMS Platform: reusable recipient lists, each opened
@@ -133,7 +134,7 @@ function CreateGroupDialog({ open, onOpenChange, onCreated }: {
     const create = async () => {
         setSaving(true)
         try {
-            const res = await fetch('/api/sms/groups', {
+            const res = await smsFetch('/api/sms/groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: name.trim() }),
@@ -143,7 +144,7 @@ function CreateGroupDialog({ open, onOpenChange, onCreated }: {
 
             const contacts = parseContactsText(numbers)
             if (contacts.length) {
-                const addRes = await fetch('/api/sms/contacts', {
+                const addRes = await smsFetch('/api/sms/contacts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ contacts, source: 'import', groupId: data.group.id }),
@@ -205,7 +206,7 @@ function RenameGroupDialog({ group, onClose, onSaved }: { group: SmsGroup | null
         if (!group) return
         setSaving(true)
         try {
-            const res = await fetch('/api/sms/groups', {
+            const res = await smsFetch('/api/sms/groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ groupId: group.id, name: name.trim() }),
@@ -241,7 +242,7 @@ function DeleteGroupDialog({ group, onClose, onDeleted }: { group: SmsGroup | nu
         if (!group) return
         setBusy(true)
         try {
-            const res = await fetch(`/api/sms/groups?id=${group.id}`, { method: 'DELETE' })
+            const res = await smsFetch(`/api/sms/groups?id=${group.id}`, { method: 'DELETE' })
             const data = await res.json()
             if (!res.ok || !data?.success) { toast.error(data?.error || 'Could not delete'); return }
             toast.success('Group deleted')

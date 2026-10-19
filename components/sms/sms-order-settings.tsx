@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Wifi, Phone, Info, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 export function SmsOrderSettings({
     dataEnabled,
@@ -46,7 +47,7 @@ export function SmsOrderSettings({
         }
         setSaving(kind)
         try {
-            const res = await fetch('/api/sms/account', {
+            const res = await smsFetch('/api/sms/account', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ [kind]: value }),

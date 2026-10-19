@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { AlertTriangle, ArrowRight, X } from 'lucide-react'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 const DISMISS_KEY = 'order_sms_banner_dismissed'
 
@@ -32,7 +33,7 @@ export function OrderSmsBanner({ href = '/dashboard/shop/sms?tab=orders' }: { hr
             } catch { /* private window — carry on */ }
 
             try {
-                const res = await fetch('/api/sms/account', { cache: 'no-store' })
+                const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
                 if (!res.ok) return
                 const data = await res.json()
                 if (cancelled || !data?.success) return

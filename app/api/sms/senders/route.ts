@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext, smsBlockReason, isCustomerSmsEnabled, SMS_DISABLED_MESSAGE } from '@/lib/sms/sms-purchase'
-import { validateSenderId, getAllowedSenders, SENDER_ID_TIPS } from '@/lib/sms/customer-sms'
+import { validateSenderId, getAllowedSenders, SENDER_ID_TIPS, senderClaimedByOtherUser } from '@/lib/sms/customer-sms'
 import { senderCapFor, getSmsBusiness } from '@/lib/sms/platform'
 
 /**
@@ -87,6 +87,15 @@ export async function POST(request: Request) {
                     needsBusinessMode: ctx.mode !== 'business',
                 },
                 { status: 400 }
+            )
+        }
+
+        // Someone else's name is refused up front. The caller's own name on their
+        // other SMS account (shop or platform) is allowed.
+        if (await senderClaimedByOtherUser(supabaseAdmin, sender, ctx.authUser.id)) {
+            return NextResponse.json(
+                { error: 'That sender ID is already taken. Please choose a different name.' },
+                { status: 409 }
             )
         }
 

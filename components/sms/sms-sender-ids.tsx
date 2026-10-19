@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Loader2, XCircle, CheckCircle2, Clock, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { validateSenderId, SENDER_ID_MAX } from '@/lib/sms/sms-rules'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 export interface SenderIdRow {
     id: string
@@ -74,7 +75,7 @@ export function SmsSenderIds({
         }
         setSubmitting(true)
         try {
-            const res = await fetch('/api/sms/senders', {
+            const res = await smsFetch('/api/sms/senders', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sender: sender.trim(), businessName: businessName.trim() }),

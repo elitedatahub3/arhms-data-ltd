@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { SenderIdRow } from '@/components/sms/sms-sender-ids'
 import type { AllowedSender } from '@/components/sms/sms-compose'
 import type { SmsGroup } from '@/components/sms/sms-contacts'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 export interface SmsPlatformAccount {
     enabled: boolean
@@ -73,7 +74,7 @@ export function SmsPlatformProvider({ children }: { children: ReactNode }) {
 
     const reload = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/account', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) {
                 setInfo(data)
@@ -91,7 +92,7 @@ export function SmsPlatformProvider({ children }: { children: ReactNode }) {
 
     const reloadGroups = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/groups', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/groups', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) setGroups(data.groups)
         } catch { /* groups are optional to every page */ }

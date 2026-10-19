@@ -27,6 +27,7 @@ import { SmsContacts, type SmsGroup } from '@/components/sms/sms-contacts'
 import { SmsCompose, type AllowedSender } from '@/components/sms/sms-compose'
 import { SmsHistory } from '@/components/sms/sms-history'
 import { SmsOrderSettings } from '@/components/sms/sms-order-settings'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface AccountInfo {
     enabled: boolean
@@ -71,7 +72,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
     const loadAccount = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/account', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) setInfo(data)
             else toast.error(data?.error || 'Could not load Customer SMS')
@@ -86,7 +87,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
     const loadGroups = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/groups', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/groups', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) setGroups(data.groups)
         } catch { /* groups are optional to the page */ }
@@ -107,7 +108,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
     const refreshAll = useCallback(() => { loadAccount(); loadGroups() }, [loadAccount, loadGroups])
 
     const isUnlocked = useCallback(async () => {
-        const res = await fetch('/api/sms/account', { cache: 'no-store' })
+        const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
         const data = await res.json()
         return data?.account?.status === 'active'
     }, [])
@@ -122,7 +123,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
     const activateFree = useCallback(async () => {
         setActivating(true)
         try {
-            const res = await fetch('/api/sms/unlock', {
+            const res = await smsFetch('/api/sms/unlock', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({}),

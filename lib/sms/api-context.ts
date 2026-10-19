@@ -82,7 +82,8 @@ export async function loadSmsApiContext(
         .eq('owner_id', auth.userId)
         .maybeSingle()
 
-    const account = await resolveSmsAccount(db, auth.userId, (shop as any)?.id ?? null)
+    // The SMS API spends the SMS PLATFORM account.
+    const account = await resolveSmsAccount(db, auth.userId, (shop as any)?.id ?? null, 'platform')
     if (!account) {
         log(500, 'No SMS account')
         return apiError(500, 'Could not load your SMS account')

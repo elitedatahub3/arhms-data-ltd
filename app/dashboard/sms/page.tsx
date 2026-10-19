@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { SmsActiveGate, SmsPageHeader, useSmsPlatform, smsPlatformName, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 const BUSINESS_BADGE: Record<string, { label: string; className: string }> = {
     approved: { label: 'Approved', className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' },
@@ -220,7 +221,7 @@ function OrderConfirmationToggle({ info }: { info: SmsPlatformAccount }) {
         }
         setSaving(true)
         try {
-            const res = await fetch('/api/sms/account', {
+            const res = await smsFetch('/api/sms/account', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ platform: next }),

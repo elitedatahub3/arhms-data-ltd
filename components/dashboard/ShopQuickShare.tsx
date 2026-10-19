@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { shopUrl as buildShopUrl } from '@/lib/shop-url'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface ShopQuickShareProps {
     shopSlug: string
@@ -43,7 +44,7 @@ export function ShopQuickShare({ shopSlug, shopName, variant = 'full', smsHref =
         let cancelled = false
         ;(async () => {
             try {
-                const res = await fetch('/api/sms/account', { cache: 'no-store' })
+                const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
                 const data = res.ok ? await res.json() : null
                 if (cancelled) return
                 if (!data?.success || !data.enabled || !data.eligible) return setSmsState('hidden')

@@ -25,6 +25,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { countSegments, checkMessageContent, SMS_MESSAGE_MAX, SMS_MESSAGE_MIN, type SmsMode } from '@/lib/sms/sms-rules'
 import type { SmsGroup } from '@/components/sms/sms-contacts'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 export interface AllowedSender {
     sender: string
@@ -111,7 +112,7 @@ export function SmsCompose({
     const send = async () => {
         setSending(true)
         try {
-            const res = await fetch('/api/sms/send', {
+            const res = await smsFetch('/api/sms/send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

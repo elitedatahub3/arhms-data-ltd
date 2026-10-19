@@ -68,7 +68,7 @@ export async function POST(request: Request) {
         // Each price list is sold only where it is shown: a shop bundle id
         // posted from the SMS Platform (or the reverse) would buy credits at the
         // other list's price.
-        if (bundleAudienceOf(bundle as any) !== bundleAudienceFor(body.portal)) {
+        if (bundleAudienceOf(bundle as any) !== (ctx.scope === 'platform' ? 'platform' : bundleAudienceFor(body.portal))) {
             return NextResponse.json({ error: 'That bundle is not available here' }, { status: 400 })
         }
 

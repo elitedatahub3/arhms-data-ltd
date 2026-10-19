@@ -41,32 +41,58 @@ export interface SmsAccount {
     default_sender: string | null
 }
 
+/** Which product an account belongs to: the shop's Customer SMS or the SMS Platform. */
+export type SmsAccountScope = 'shop' | 'platform'
+
+const ACCOUNT_COLUMNS = 'id, user_id, shop_id, status, credits, total_purchased, total_used, default_sender'
+
 /**
- * The caller's SMS account, created on first sight so every later query has a
- * row to hang off.
+ * The caller's SMS account for one product, created on first sight so every
+ * later query has a row to hang off.
  *
- * There is no unlock fee any more (dropped when the SMS Platform opened):
- * a new account starts active, and an old 'locked' one is opened the first
- * time its owner is seen. Only 'suspended' — an admin decision — still blocks.
+ * The shop's Customer SMS and the SMS Platform are separate products: each
+ * user has one account per scope, with its own credits, sender IDs, contacts
+ * and records (migration 20261019010000_sms_separate_accounts.sql).
+ *
+ * Activation differs by product. A platform account is always open — the
+ * platform has no unlock fee. A shop account follows the shop's own unlock
+ * (paid, or free while admin waives it with sms_free_activation).
+ *
+ * On a database that has not run the migration yet there is no scope column:
+ * one account per user serves both products, opened on sight as it has been
+ * since the platform launched.
  *
  * @param db A service-role client — sms_accounts is insert-only to the service
  *           role, since an account is an entitlement and not self-serve.
  */
-export async function resolveSmsAccount(db: any, userId: string, shopId?: string | null): Promise<SmsAccount | null> {
+export async function resolveSmsAccount(
+    db: any,
+    userId: string,
+    shopId?: string | null,
+    scope: SmsAccountScope = 'shop',
+): Promise<SmsAccount | null> {
     if (!userId) return null
 
-    const { data: existing } = await db
-        .from('sms_accounts')
-        .select('id, user_id, shop_id, status, credits, total_purchased, total_used, default_sender')
-        .eq('user_id', userId)
-        .maybeSingle()
+    let scoped = true
+    const read = () => {
+        const q = db.from('sms_accounts').select(ACCOUNT_COLUMNS).eq('user_id', userId)
+        return scoped ? q.eq('scope', scope).maybeSingle() : q.maybeSingle()
+    }
+
+    let { data: existing, error: readError } = await read()
+    if (readError?.code === '42703') {
+        scoped = false
+        ;({ data: existing } = await read())
+    }
+
+    const openOnSight = scope === 'platform' || !scoped
 
     if (existing) {
         // A shop created after the SMS account was first touched still needs
         // linking, otherwise "import from my orders" finds nothing.
         const patch: Record<string, any> = {}
         if (!existing.shop_id && shopId) patch.shop_id = shopId
-        if (existing.status === 'locked') {
+        if (openOnSight && existing.status === 'locked') {
             patch.status = 'active'
             patch.unlocked_at = new Date().toISOString()
             patch.unlock_amount = 0
@@ -82,24 +108,68 @@ export async function resolveSmsAccount(db: any, userId: string, shopId?: string
         return existing as SmsAccount
     }
 
+    const row: Record<string, any> = { user_id: userId, shop_id: shopId ?? null }
+    if (scoped) row.scope = scope
+    if (openOnSight) {
+        row.status = 'active'
+        row.unlocked_at = new Date().toISOString()
+        row.unlock_amount = 0
+    }
+
     const { data: created, error } = await db
         .from('sms_accounts')
-        .insert({ user_id: userId, shop_id: shopId ?? null, status: 'active', unlocked_at: new Date().toISOString(), unlock_amount: 0 })
-        .select('id, user_id, shop_id, status, credits, total_purchased, total_used, default_sender')
+        .insert(row)
+        .select(ACCOUNT_COLUMNS)
         .single()
 
     if (error) {
-        // Lost a race with a concurrent request; the unique on user_id means the
-        // other one won and its row is the right one.
-        const { data: raced } = await db
-            .from('sms_accounts')
-            .select('id, user_id, shop_id, status, credits, total_purchased, total_used, default_sender')
-            .eq('user_id', userId)
-            .maybeSingle()
+        // Lost a race with a concurrent request; the unique on (user_id, scope)
+        // means the other one won and its row is the right one.
+        const { data: raced } = await read()
         return (raced as SmsAccount) ?? null
     }
 
     return created as SmsAccount
+}
+
+/**
+ * Reads (never creates) a user's account for one product. Before the
+ * per-product migration there is one account per user, which is returned for
+ * either scope.
+ */
+export async function findSmsAccountByUser(db: any, userId: string, scope: SmsAccountScope, columns = '*'): Promise<any | null> {
+    if (!userId) return null
+    const { data, error } = await db.from('sms_accounts').select(columns).eq('user_id', userId).eq('scope', scope).maybeSingle()
+    if (!error) return data ?? null
+    if (error.code !== '42703') {
+        console.error('[CustomerSMS] account lookup failed:', error.message)
+        return null
+    }
+    const { data: legacy } = await db.from('sms_accounts').select(columns).eq('user_id', userId).maybeSingle()
+    return legacy ?? null
+}
+
+/**
+ * Whether a sender name is already held (submitted to the networks or approved)
+ * by a DIFFERENT person. A sender ID belongs to one business at the network,
+ * but the same owner may use their name on both their shop's Customer SMS and
+ * their SMS Platform account, so the owner's own accounts never block it.
+ */
+export async function senderClaimedByOtherUser(db: any, sender: string, userId: string): Promise<boolean> {
+    const name = String(sender || '').trim()
+    if (!name) return false
+    // Sender IDs are letters, digits and spaces only, so ilike here is an exact,
+    // case-insensitive match with no wildcards to escape.
+    const { data, error } = await db
+        .from('sms_sender_ids')
+        .select('id, account:sms_accounts!inner(user_id)')
+        .ilike('sender', name)
+        .in('status', ['submitted', 'approved'])
+    if (error) {
+        console.error('[CustomerSMS] sender claim check failed:', error.message)
+        return false
+    }
+    return (data || []).some((row: any) => row.account?.user_id && row.account.user_id !== userId)
 }
 
 /** Pool senders any unlocked account may send under, from admin_settings. */

@@ -6,6 +6,7 @@ import { randomBytes } from 'crypto'
 import bcrypt from 'bcryptjs'
 import { COMMISSION_KEY_TAG, SMS_KEY_TAG } from '@/lib/api-auth'
 import { isSmsBusinessApproved, SMS_API_NEEDS_BUSINESS } from '@/lib/sms/platform'
+import { findSmsAccountByUser } from '@/lib/sms/customer-sms'
 
 // GET    — key metadata (prefix, status, last_used_at) for every kind. Never the full key.
 // POST   — generate a key of one kind. Returns the full key ONCE.
@@ -107,10 +108,7 @@ export async function POST(request: NextRequest) {
         // An SMS key needs an approved business. Refused before the delete below,
         // so asking for one early never destroys a key the owner already has.
         if (kind === 'sms') {
-            const { data: smsAccount } = await (supabase.from('sms_accounts') as any)
-                .select('id')
-                .eq('user_id', user.id)
-                .maybeSingle()
+            const smsAccount = await findSmsAccountByUser(supabase, user.id, 'platform', 'id')
             if (!smsAccount || !(await isSmsBusinessApproved(supabase, (smsAccount as any).id))) {
                 return NextResponse.json({ error: SMS_API_NEEDS_BUSINESS }, { status: 403 })
             }

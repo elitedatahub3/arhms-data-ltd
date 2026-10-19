@@ -20,7 +20,7 @@
 import { getActiveSmsProvider, normalizeGhanaPhone } from '@/lib/sms-service'
 import { isKingFlexySmsConfigured } from '@/lib/kingflexy-sms-service'
 import { countSegments } from '@/lib/sms/sms-rules'
-import { getAllowedSenders, dispatchCampaignBatch, settleCampaignIfDone } from '@/lib/sms/customer-sms'
+import { getAllowedSenders, dispatchCampaignBatch, settleCampaignIfDone, findSmsAccountByUser } from '@/lib/sms/customer-sms'
 
 export type OrderSmsKind = 'data' | 'airtime' | 'afa' | 'utility' | 'voucher'
 
@@ -161,11 +161,13 @@ export async function sendShopOrderConfirmation(
 
         if (!shop?.owner_id) return { sent: false, skipped: 'shop not found' }
 
-        const { data: account } = await db
-            .from('sms_accounts')
-            .select(`id, user_id, status, credits${TOGGLE_COLUMN[params.kind] ? `, ${TOGGLE_COLUMN[params.kind]}` : ''}`)
-            .eq('user_id', shop.owner_id)
-            .maybeSingle()
+        // The SHOP's Customer SMS account — never the owner's SMS Platform account.
+        const account = await findSmsAccountByUser(
+            db,
+            shop.owner_id,
+            'shop',
+            `id, user_id, status, credits${TOGGLE_COLUMN[params.kind] ? `, ${TOGGLE_COLUMN[params.kind]}` : ''}`,
+        )
 
         if (!account) return { sent: false, skipped: 'no sms account' }
         if (account.status !== 'active') return { sent: false, skipped: `account ${account.status}` }

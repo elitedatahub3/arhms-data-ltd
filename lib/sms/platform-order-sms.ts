@@ -22,7 +22,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getActiveSmsProvider, normalizeGhanaPhone } from '@/lib/sms-service'
 import { isKingFlexySmsConfigured } from '@/lib/kingflexy-sms-service'
 import { countSegments } from '@/lib/sms/sms-rules'
-import { getAllowedSenders, dispatchCampaignBatch, settleCampaignIfDone } from '@/lib/sms/customer-sms'
+import { getAllowedSenders, dispatchCampaignBatch, settleCampaignIfDone, findSmsAccountByUser } from '@/lib/sms/customer-sms'
 
 export interface PlatformOrderSmsParams {
     /** The buyer — whose sender ID and credits would be used. */
@@ -58,7 +58,8 @@ async function sendUnderBuyerSender(params: PlatformOrderSmsParams): Promise<boo
 
     // * rather than naming the column, so a database without
     // 20261018010000_sms_platform_order_sms.sql simply reads it as off.
-    const { data: account } = await db.from('sms_accounts').select('*').eq('user_id', params.userId).maybeSingle()
+    // The buyer's SMS PLATFORM account — never their shop's Customer SMS account.
+    const account = await findSmsAccountByUser(db, params.userId, 'platform')
     if (!account || account.platform_order_sms_enabled !== true) return false
     if (account.status !== 'active') {
         await noteSkip(db, account.id, `Your SMS account is ${account.status}.`)

@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { cn } from '@/lib/utils'
 import { SmsPaymentForm } from '@/components/sms/sms-payment-form'
 import { SmsActiveGate, SmsPageHeader, useSmsPlatform, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface Bundle {
     id: string
@@ -51,7 +52,7 @@ function Credits({ info }: { info: SmsPlatformAccount }) {
 
     const load = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/credits?portal=platform', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/credits?portal=platform', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) {
                 setBundles(data.bundles || [])
@@ -75,7 +76,7 @@ function Credits({ info }: { info: SmsPlatformAccount }) {
     }, [bundles])
 
     const isSettled = useCallback(async () => {
-        const res = await fetch('/api/sms/credits?portal=platform', { cache: 'no-store' })
+        const res = await smsFetch('/api/sms/credits?portal=platform', { cache: 'no-store' })
         const data = await res.json()
         return Number(data?.credits) > startCredits
     }, [startCredits])

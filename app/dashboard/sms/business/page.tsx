@@ -21,6 +21,7 @@ import {
     BUSINESS_DESCRIPTION_MIN,
     BUSINESS_DESCRIPTION_MAX,
 } from '@/lib/sms/sms-rules'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface Business {
     id: string
@@ -58,7 +59,7 @@ function BusinessAndSenders({ info }: { info: SmsPlatformAccount }) {
 
     const load = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/business', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/business', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) {
                 setBusiness(data.business)
@@ -248,7 +249,7 @@ function BusinessForm({ business, docsWhatsApp, onSaved }: {
     const save = async (submit: boolean) => {
         setSaving(submit ? 'submit' : 'draft')
         try {
-            const res = await fetch('/api/sms/business', {
+            const res = await smsFetch('/api/sms/business', {
                 method: submit ? 'POST' : 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ businessName: name, description, domain, ghanaCard: card, whatsapp }),
