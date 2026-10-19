@@ -580,6 +580,14 @@ function SmsSettings() {
                         <Switch checked={settings.sms_customer_enabled !== 'false'}
                             onCheckedChange={(v) => setField('sms_customer_enabled', v ? 'true' : 'false')} />
                     </div>
+                    <div className="flex items-center justify-between gap-4">
+                        <div>
+                            <Label>Free activation</Label>
+                            <p className="text-[11px] text-muted-foreground">Waives the one-time unlock fee: locked accounts activate in one tap. Credits and sender IDs are still paid for and approved as usual.</p>
+                        </div>
+                        <Switch checked={settings.sms_free_activation === 'true'}
+                            onCheckedChange={(v) => setField('sms_free_activation', v ? 'true' : 'false')} />
+                    </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                         <div className="space-y-2">
                             <Label>Pool sender IDs</Label>

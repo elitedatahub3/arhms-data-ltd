@@ -29,6 +29,7 @@ export interface SmsPlatformAccount {
     contactCount: number
     isSub: boolean
     unlockPrice: number
+    freeActivation?: boolean
     mode: 'platform' | 'business'
     businessStatus: 'draft' | 'pending' | 'approved' | 'rejected' | null
     dailyLimit: number

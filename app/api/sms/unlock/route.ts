@@ -8,6 +8,7 @@ import {
     submitSmsPurchaseOtp,
     SMS_DISABLED_MESSAGE,
 } from '@/lib/sms/sms-purchase'
+import { activateSmsAccountFree } from '@/lib/payments'
 
 /**
  * The one-time Customer SMS unlock.
@@ -59,6 +60,20 @@ export async function POST(request: Request) {
                 { error: 'Your Customer SMS access is suspended. Please contact support.' },
                 { status: 403 }
             )
+        }
+
+        // Fee waived by the admin: activate without a payment. Must come before
+        // startSmsPurchase, which refuses a zero amount.
+        if (ctx.freeActivation) {
+            const result = await activateSmsAccountFree({
+                accountId: account.id,
+                userId: authUser.id,
+                portal: withPortal(ctx, body.portal).portal,
+            })
+            if (!result.success) {
+                return NextResponse.json({ error: result.error || 'Could not activate Customer SMS' }, { status: 500 })
+            }
+            return NextResponse.json({ success: true, free: true })
         }
 
         return startSmsPurchase({

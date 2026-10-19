@@ -77,6 +77,7 @@ export async function GET() {
             portal,
             role,
             unlockPrice,
+            freeActivation: ctx.freeActivation,
             orderSms: {
                 data: !!(account as any).order_sms_data_enabled,
                 airtime: !!(account as any).order_sms_airtime_enabled,

@@ -62,6 +62,16 @@ export function isCustomerSmsEnabled(settings: Record<string, any>): boolean {
     return String(raw).replace(/^"+|"+$/g, '').trim().toLowerCase() !== 'false'
 }
 
+/**
+ * Free activation: fails CLOSED. A missing row is OFF, so the fee only goes away
+ * when an admin deliberately turns it on.
+ */
+export function isFreeActivation(settings: Record<string, any>): boolean {
+    const raw = settings?.sms_free_activation
+    if (raw === undefined || raw === null) return false
+    return String(raw).replace(/^"+|"+$/g, '').trim().toLowerCase() === 'true'
+}
+
 export interface SmsContext {
     authUser: any
     supabaseAdmin: any
@@ -71,6 +81,8 @@ export interface SmsContext {
     sub: SubAgentContext
     settingsMap: Record<string, any>
     unlockPrice: number
+    /** Admin has waived the unlock fee; unlockPrice is 0 while this is true. */
+    freeActivation: boolean
     /**
      * Which portal the caller is in, so redirects and notifications land right.
      * Resolved as shop or sub here; a route serving the SMS Platform pages sets
@@ -125,7 +137,7 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
     const { data: settings } = await supabaseAdmin
         .from('admin_settings')
         .select('key, value')
-        .in('key', [...SMS_UNLOCK_PRICE_KEYS, 'sms_customer_enabled', 'sms_inline_send_max', 'sms_pool_senders', SMS_PROVIDER_KEY, ...SMS_PLATFORM_SETTING_KEYS])
+        .in('key', [...SMS_UNLOCK_PRICE_KEYS, 'sms_customer_enabled', 'sms_free_activation', 'sms_inline_send_max', 'sms_pool_senders', SMS_PROVIDER_KEY, ...SMS_PLATFORM_SETTING_KEYS])
 
     const settingsMap: Record<string, any> = {}
     for (const row of (settings || [])) settingsMap[(row as any).key] = (row as any).value
@@ -138,9 +150,12 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
 
     const priceKey = unlockPriceKeyForRole(role, sub.isSub)
     const rawPrice = settingsMap[priceKey]
-    const unlockPrice = rawPrice !== undefined && rawPrice !== ''
-        ? Number(String(rawPrice).replace(/^"+|"+$/g, ''))
-        : DEFAULT_UNLOCK_PRICE
+    const freeActivation = isFreeActivation(settingsMap)
+    const unlockPrice = freeActivation
+        ? 0
+        : rawPrice !== undefined && rawPrice !== ''
+            ? Number(String(rawPrice).replace(/^"+|"+$/g, ''))
+            : DEFAULT_UNLOCK_PRICE
 
     const mode = await getAccountMode(supabaseAdmin, account.id)
 
@@ -153,6 +168,7 @@ export async function loadSmsContext(): Promise<SmsContext | { error: string; st
         sub,
         settingsMap,
         unlockPrice,
+        freeActivation,
         portal: sub.isSub ? 'sub' : 'shop',
         userStatus: (dbUser as any)?.status || 'active',
         mode,

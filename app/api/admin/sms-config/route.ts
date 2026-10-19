@@ -26,6 +26,8 @@ const SETTING_KEYS = [
     'sms_inline_send_max',
     SMS_PROVIDER_KEY,
     ...SMS_UNLOCK_PRICE_KEYS,
+    // 'true' waives the one-time unlock fee. Credits and sender IDs stay as they are.
+    'sms_free_activation',
     // SMS Platform: daily limits and sender caps per mode, and the documents WhatsApp.
     ...SMS_PLATFORM_SETTING_KEYS,
 ]

@@ -579,6 +579,52 @@ export async function processCompletedSmsUnlock(reference: string, providerMetad
 }
 
 /**
+ * Free activation: the admin has waived the unlock fee, so the account goes
+ * locked -> active with no payment row. Same conditional update as the paid path,
+ * so a suspended account stays suspended and a repeat call changes nothing.
+ */
+export async function activateSmsAccountFree(params: { accountId: string; userId: string; portal?: string }) {
+    const { accountId, userId, portal } = params
+    const supabase = createServerClient()
+
+    const { data: updated, error } = await (supabase.from('sms_accounts') as any)
+        .update({
+            status: 'active',
+            unlocked_at: new Date().toISOString(),
+            unlock_reference: 'free_activation',
+            unlock_amount: 0,
+            updated_at: new Date().toISOString(),
+        })
+        .eq('id', accountId)
+        .eq('status', 'locked')
+        .select('id')
+
+    if (error) {
+        console.error('[SmsFreeActivation] Account update error:', error)
+        return { success: false, error: 'Could not activate Customer SMS' }
+    }
+    // Nothing matched: already active (a double tap) or suspended. Not an error here;
+    // the route has already rejected suspended accounts.
+    if (!updated || updated.length === 0) return { success: true, alreadyProcessed: true }
+
+    const { data: subRow } = await supabase
+        .from('sub_agents')
+        .select('id')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+    await (supabase.from('notifications') as any).insert({
+        user_id: userId,
+        title: 'Customer SMS Unlocked 💬',
+        message: 'You can now request your sender ID, buy SMS credits and message your customers.',
+        type: 'system',
+        action_url: portal === 'platform' ? '/dashboard/sms' : subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+    })
+
+    return { success: true }
+}
+
+/**
  * Settles an SMS credit bundle purchase: marks the payment completed and adds
  * the bought credits to the account balance.
  *

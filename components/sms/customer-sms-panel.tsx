@@ -37,6 +37,7 @@ interface AccountInfo {
     contactCount: number
     isSub: boolean
     unlockPrice: number
+    freeActivation?: boolean
     mode?: 'platform' | 'business'
     account: {
         status: 'locked' | 'active' | 'suspended'
@@ -117,6 +118,25 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
         setTab('senders')
     }, [loadAccount])
 
+    const [activating, setActivating] = useState(false)
+    const activateFree = useCallback(async () => {
+        setActivating(true)
+        try {
+            const res = await fetch('/api/sms/unlock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            })
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) { toast.error(data?.error || 'Could not activate Customer SMS'); return }
+            await onUnlocked()
+        } catch {
+            toast.error('Could not activate Customer SMS. Please try again.')
+        } finally {
+            setActivating(false)
+        }
+    }, [onUnlocked])
+
     const back = (
         <Link href={backHref}><Button variant="ghost" className="gap-2"><ArrowLeft className="w-4 h-4" /> {backLabel}</Button></Link>
     )
@@ -196,8 +216,14 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
                         Send SMS to your customers under your own business name — new stock, promos, order updates.
                     </p>
                     <div className="mt-6 flex items-baseline gap-2">
-                        <span className="text-4xl font-black">GHS {Number(info.unlockPrice).toFixed(2)}</span>
-                        <span className="text-emerald-100/80 text-sm">one time</span>
+                        {info.freeActivation ? (
+                            <span className="text-4xl font-black">FREE</span>
+                        ) : (
+                            <>
+                                <span className="text-4xl font-black">GHS {Number(info.unlockPrice).toFixed(2)}</span>
+                                <span className="text-emerald-100/80 text-sm">one time</span>
+                            </>
+                        )}
                     </div>
                 </div>
 
@@ -230,14 +256,20 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <SmsPaymentForm
-                                endpoint="/api/sms/unlock"
-                                amount={info.unlockPrice}
-                                payLabel="Unlock"
-                                deBranded={deBranded}
-                                isSettled={isUnlocked}
-                                onSettled={onUnlocked}
-                            />
+                            {info.freeActivation ? (
+                                <Button className="w-full" onClick={activateFree} disabled={activating}>
+                                    {activating ? 'Activating…' : 'Activate free'}
+                                </Button>
+                            ) : (
+                                <SmsPaymentForm
+                                    endpoint="/api/sms/unlock"
+                                    amount={info.unlockPrice}
+                                    payLabel="Unlock"
+                                    deBranded={deBranded}
+                                    isSettled={isUnlocked}
+                                    onSettled={onUnlocked}
+                                />
+                            )}
                         </CardContent>
                     </Card>
                 )}
