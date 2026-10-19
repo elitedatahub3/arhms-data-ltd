@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SmsActiveGate, SmsPageHeader, type SmsPlatformAccount } from '@/components/sms/platform/sms-platform-shell'
+import { AdminApprovalDialog, WhatsAppAdminButton, useAdminWhatsApp } from '@/components/sms/platform/admin-approval-dialog'
+import { useAuth } from '@/contexts/auth-context'
 
 interface KeyRow {
     kind: string
@@ -81,6 +83,10 @@ function KeyCard() {
     const [loading, setLoading] = useState(true)
     const [busy, setBusy] = useState(false)
     const [fullKey, setFullKey] = useState<string | null>(null)
+    const [approvalOpen, setApprovalOpen] = useState(false)
+    const adminWhatsApp = useAdminWhatsApp()
+    const { dbUser } = useAuth()
+    const approvalText = `Hi, I just generated my SMS API key and need admin approval to activate it. Name: ${[dbUser?.first_name, dbUser?.last_name].filter(Boolean).join(' ')}, Email: ${dbUser?.email ?? ''}.`
 
     const load = useCallback(async () => {
         try {
@@ -109,6 +115,8 @@ function KeyCard() {
             if (!res.ok || !data?.success) { toast.error(data?.error || 'Could not generate a key'); return }
             setFullKey(data.key)
             toast.success('Key generated — copy it now, it will not be shown again')
+            // A new key waits for the admin; tell the owner how to get it approved.
+            if (data.status === 'pending') setApprovalOpen(true)
             load()
         } finally {
             setBusy(false)
@@ -134,7 +142,7 @@ function KeyCard() {
         <Card>
             <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2"><KeyRound className="w-4 h-4 text-emerald-600" /> Your SMS API key</CardTitle>
-                <CardDescription>This key can only send SMS and read SMS reports — it cannot touch your wallet or place orders.</CardDescription>
+                <CardDescription>This key can only send SMS and read SMS reports — it cannot touch your wallet or place orders. New keys need admin approval before they work.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
                 {loading ? <Skeleton className="h-16 w-full" /> : (
@@ -156,9 +164,21 @@ function KeyCard() {
                                 <div>
                                     <p className="font-mono text-sm">{key.key_prefix}••••••••</p>
                                     <p className="text-[11px] text-muted-foreground">
-                                        {key.status === 'active' ? <span className="inline-flex items-center gap-1 text-emerald-600"><Check className="w-3 h-3" /> Active</span> : key.status}
+                                        {key.status === 'active'
+                                            ? <span className="inline-flex items-center gap-1 text-emerald-600"><Check className="w-3 h-3" /> Active</span>
+                                            : key.status === 'pending'
+                                                ? <span className="rounded-full bg-yellow-100 px-2 py-0.5 font-bold text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">Pending approval</span>
+                                                : key.status}
                                         {' · '}{key.last_used_at ? `last used ${new Date(key.last_used_at).toLocaleString()}` : 'never used'}
                                     </p>
+                                    {key.status === 'pending' && (
+                                        <div className="mt-2 space-y-1.5">
+                                            <p className="text-[11px] text-muted-foreground">This key works once the admin approves it.</p>
+                                            {adminWhatsApp
+                                                ? <WhatsAppAdminButton number={adminWhatsApp} text={approvalText} size="sm" />
+                                                : <p className="text-[11px] text-muted-foreground">Contact support to get it approved.</p>}
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="flex gap-2">
                                     <Button size="sm" variant="outline" className="gap-1" disabled={busy} onClick={generate}><RefreshCw className="w-3.5 h-3.5" /> Regenerate</Button>
@@ -173,6 +193,14 @@ function KeyCard() {
                     </>
                 )}
             </CardContent>
+            <AdminApprovalDialog
+                open={approvalOpen}
+                onOpenChange={setApprovalOpen}
+                title="Admin approval required"
+                body="Your SMS API key has been generated but is pending approval. Chat the admin on WhatsApp to get it activated."
+                whatsappNumber={adminWhatsApp}
+                whatsappText={approvalText}
+            />
         </Card>
     )
 }
@@ -281,7 +309,7 @@ const { success, data, error } = await res.json()
                                 <tr><td>400</td><td>Invalid message, recipients or sender, or the content is not allowed (links in Platform Mode, scam wording).</td></tr>
                                 <tr><td>401</td><td>Missing or invalid API key.</td></tr>
                                 <tr><td>402</td><td>Not enough SMS credits.</td></tr>
-                                <tr><td>403</td><td>The key is not an SMS key, or the account is suspended.</td></tr>
+                                <tr><td>403</td><td>The key is still pending admin approval, is not an SMS key, or the account is suspended.</td></tr>
                                 <tr><td>409</td><td>A send with this reference is already in progress.</td></tr>
                                 <tr><td>429</td><td>Too many requests, or the send would pass your daily limit.</td></tr>
                                 <tr><td>503</td><td>SMS is temporarily unavailable.</td></tr>

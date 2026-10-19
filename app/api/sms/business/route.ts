@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext, smsBlockReason } from '@/lib/sms/sms-purchase'
 import { getSmsBusiness, SMS_BUSINESS_COLUMNS, type SmsBusinessRow } from '@/lib/sms/platform'
+import { sendPushToAdmins } from '@/lib/web-push'
 import {
     businessSubmitErrors,
     normaliseDomain,
@@ -31,6 +32,20 @@ function present(row: SmsBusinessRow | null) {
     return { ...rest, ghana_card_masked: maskGhanaCard(ghana_card_last4), has_ghana_card: !!ghana_card_last4 }
 }
 
+const unquote = (v: unknown) => String(v ?? '').replace(/^"+|"+$/g, '').trim()
+
+/**
+ * Where the owner chats the admin about their registration: the documents
+ * number when one is set, otherwise the general WhatsApp Admin Number from
+ * Admin → Settings. Null only when neither is set.
+ */
+async function businessWhatsApp(db: any, settingsMap: Record<string, any>): Promise<string | null> {
+    const docs = unquote(settingsMap.sms_business_docs_whatsapp)
+    if (docs) return docs
+    const { data } = await db.from('admin_settings').select('value').eq('key', 'whatsapp_admin_number').maybeSingle()
+    return unquote((data as any)?.value).replace(/D/g, '') || null
+}
+
 export async function GET() {
     try {
         const ctx = await loadSmsContext()
@@ -41,7 +56,7 @@ export async function GET() {
             success: true,
             mode: ctx.mode,
             business: present(business),
-            documentsWhatsApp: String(ctx.settingsMap.sms_business_docs_whatsapp ?? '').replace(/^"+|"+$/g, '') || null,
+            documentsWhatsApp: await businessWhatsApp(ctx.supabaseAdmin, ctx.settingsMap),
         })
     } catch (error: any) {
         console.error('[SmsBusiness] GET error:', error)
@@ -146,6 +161,17 @@ async function save(request: Request, submit: boolean) {
                 return NextResponse.json({ error: 'Business registration is not available yet. Please try again later.' }, { status: 503 })
             }
             return NextResponse.json({ error: 'Could not save your registration' }, { status: 500 })
+        }
+
+        // Tell the admins there is something to review. Fire-and-forget: a push
+        // that fails must never fail the submit.
+        if (submit) {
+            sendPushToAdmins({
+                title: 'New SMS business to review',
+                body: `${businessName} submitted their business for SMS approval.`,
+                url: '/admin/sms-businesses',
+                tag: `sms-business-${account.id}`,
+            }).catch((err) => console.error('[SmsBusiness] admin push failed:', err))
         }
 
         return NextResponse.json({

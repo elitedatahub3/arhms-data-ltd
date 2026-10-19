@@ -22,6 +22,8 @@ import {
     BUSINESS_DESCRIPTION_MAX,
 } from '@/lib/sms/sms-rules'
 import { smsFetch } from '@/lib/sms/sms-fetch'
+import { AdminApprovalDialog, WhatsAppAdminButton } from '@/components/sms/platform/admin-approval-dialog'
+import { useAuth } from '@/contexts/auth-context'
 
 interface Business {
     id: string
@@ -55,6 +57,10 @@ function BusinessAndSenders({ info }: { info: SmsPlatformAccount }) {
     const { reload } = useSmsPlatform()
     const [business, setBusiness] = useState<Business | null>(null)
     const [docsWhatsApp, setDocsWhatsApp] = useState<string | null>(null)
+    const [approvalOpen, setApprovalOpen] = useState(false)
+    const { dbUser } = useAuth()
+    const approvalText = (businessName: string) =>
+        `Hi, I just submitted my business${businessName ? ` "${businessName}"` : ''} for SMS approval. Name: ${[dbUser?.first_name, dbUser?.last_name].filter(Boolean).join(' ')}, Email: ${dbUser?.email ?? ''}.`
     const [loading, setLoading] = useState(true)
 
     const load = useCallback(async () => {
@@ -118,14 +124,29 @@ function BusinessAndSenders({ info }: { info: SmsPlatformAccount }) {
             {status === 'approved' && business ? (
                 <ApprovedBusiness business={business} />
             ) : status === 'pending' && business ? (
-                <PendingBusiness business={business} docsWhatsApp={docsWhatsApp} />
+                <PendingBusiness business={business} docsWhatsApp={docsWhatsApp} whatsappText={approvalText(business.business_name)} />
             ) : (
                 <BusinessForm
                     business={business}
                     docsWhatsApp={docsWhatsApp}
-                    onSaved={(b) => { setBusiness(b); reload() }}
+                    onSaved={(b, submitted) => {
+                        setBusiness(b)
+                        reload()
+                        // Submitted for review: the admin has to approve it, so say
+                        // so and hand the owner a one-tap WhatsApp chat.
+                        if (submitted) setApprovalOpen(true)
+                    }}
                 />
             )}
+
+            <AdminApprovalDialog
+                open={approvalOpen}
+                onOpenChange={setApprovalOpen}
+                title="Waiting for admin approval"
+                body="Your business has been submitted. The admin must approve it before Business Mode and the SMS API unlock. Chat the admin on WhatsApp and send a photo of your Ghana Card and business registration certificate."
+                whatsappNumber={docsWhatsApp ?? ''}
+                whatsappText={approvalText(business?.business_name ?? '')}
+            />
 
             <SenderIdSection info={info} />
         </div>
@@ -202,7 +223,7 @@ function DocsBox({ docsWhatsApp }: { docsWhatsApp: string | null }) {
     )
 }
 
-function PendingBusiness({ business, docsWhatsApp }: { business: Business; docsWhatsApp: string | null }) {
+function PendingBusiness({ business, docsWhatsApp, whatsappText }: { business: Business; docsWhatsApp: string | null; whatsappText: string }) {
     return (
         <Card className="border-amber-200 dark:border-amber-900">
             <CardHeader className="pb-3">
@@ -216,7 +237,15 @@ function PendingBusiness({ business, docsWhatsApp }: { business: Business; docsW
             </CardHeader>
             <CardContent className="space-y-4">
                 <BusinessDetails business={business} />
-                <DocsBox docsWhatsApp={docsWhatsApp} />
+                <div className="rounded-2xl border border-dashed border-emerald-300 bg-emerald-50/60 p-3 dark:border-emerald-800 dark:bg-emerald-950/20 space-y-2">
+                    <p className="text-sm font-bold flex items-center gap-1.5"><MessageCircle className="w-4 h-4 text-emerald-600" /> The admin must approve your business</p>
+                    <p className="text-xs text-muted-foreground">
+                        {docsWhatsApp
+                            ? 'Chat the admin on WhatsApp and send a photo of your Ghana Card and business registration certificate to speed it up.'
+                            : 'Contact support with a photo of your Ghana Card and business registration certificate to speed it up.'}
+                    </p>
+                    {docsWhatsApp && <WhatsAppAdminButton number={docsWhatsApp} text={whatsappText} size="sm" />}
+                </div>
             </CardContent>
         </Card>
     )
@@ -225,7 +254,7 @@ function PendingBusiness({ business, docsWhatsApp }: { business: Business; docsW
 function BusinessForm({ business, docsWhatsApp, onSaved }: {
     business: Business | null
     docsWhatsApp: string | null
-    onSaved: (b: Business) => void
+    onSaved: (b: Business, submitted: boolean) => void
 }) {
     const [name, setName] = useState(business?.business_name ?? '')
     const [description, setDescription] = useState(business?.description ?? '')
@@ -261,7 +290,7 @@ function BusinessForm({ business, docsWhatsApp, onSaved }: {
             }
             toast.success(data.message)
             setCard('')
-            onSaved(data.business)
+            onSaved(data.business, submit)
         } catch {
             toast.error('Could not save — check your connection')
         } finally {

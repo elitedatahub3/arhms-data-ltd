@@ -121,10 +121,10 @@ export async function POST(request: NextRequest) {
             .single()
         const userRole = (userData as any)?.role ?? 'customer'
         const isAdmin = userRole === 'admin' || userRole === 'sub-admin'
-        // SMS keys go live at once: every send is prepaid from SMS credits and
-        // still passes the content rules and daily limit, so there is nothing
-        // for an approval to protect that the send path does not already.
-        const keyStatus = isAdmin || kind === 'sms' ? 'active' : 'pending'
+        // Every kind, SMS included, waits for admin approval (the owner is told to
+        // chat the admin on WhatsApp). An SMS key additionally needed an approved
+        // business before it could be generated at all.
+        const keyStatus = isAdmin ? 'active' : 'pending'
 
         // Replace only this kind. Regenerating is how a key is rotated, so the old
         // row for the SAME kind must go — but the other kind is left alone.
