@@ -90,8 +90,6 @@ export default function AdminMembershipsPage() {
         dealer_6m: { price: '299.99', enabled: true },
     })
     const [isSavingDealerPrice, setIsSavingDealerPrice] = useState(false)
-    const [autoUpgradeExpiredDealers, setAutoUpgradeExpiredDealers] = useState(false)
-    const [isSavingAutoUpgrade, setIsSavingAutoUpgrade] = useState(false)
     const [extendDealerUser, setExtendDealerUser] = useState<any>(null)
     const [extendDealerDays, setExtendDealerDays] = useState('30')
     const [isExtendingDealer, setIsExtendingDealer] = useState(false)
@@ -158,8 +156,6 @@ export default function AdminMembershipsPage() {
                     }
                     return next
                 })
-                const autoUpgrade = settingsData.find((s: any) => s.key === 'auto_upgrade_expired_dealers')?.value === 'true'
-                setAutoUpgradeExpiredDealers(autoUpgrade)
             }
 
         } catch (error: any) {
@@ -215,21 +211,6 @@ export default function AdminMembershipsPage() {
         }
     }
 
-    const handleAutoUpgradeToggle = async (checked: boolean) => {
-        setIsSavingAutoUpgrade(true)
-        try {
-            await (supabase as any)
-                .from('admin_settings')
-                .upsert({ key: 'auto_upgrade_expired_dealers', value: checked ? 'true' : 'false' }, { onConflict: 'key' })
-            setAutoUpgradeExpiredDealers(checked)
-            toast.success(checked ? 'Auto-upgrade enabled' : 'Auto-upgrade disabled')
-        } catch {
-            toast.error('Failed to update setting')
-        } finally {
-            setIsSavingAutoUpgrade(false)
-        }
-    }
-
     const handleExtendDealer = async () => {
         if (!extendDealerUser || !extendDealerDays) return
         const days = parseInt(extendDealerDays)
@@ -258,7 +239,7 @@ export default function AdminMembershipsPage() {
     }
 
     const handleRevokeDealer = async (dealer: any) => {
-        if (!confirm(`Revoke dealership for ${dealer.first_name} ${dealer.last_name}? They will become a customer.`)) return
+        if (!confirm(`Revoke dealership for ${dealer.first_name} ${dealer.last_name}? They will go back to what they were before (customer, or their agent plan).`)) return
         try {
             const response = await fetch('/api/admin/dealers', {
                 method: 'POST',
@@ -268,7 +249,7 @@ export default function AdminMembershipsPage() {
             const result = await response.json()
             if (!response.ok) throw new Error(result.error || 'Failed to revoke')
             setDealers(dealers.filter(d => d.id !== dealer.id))
-            toast.success(`${dealer.first_name}'s dealership revoked`)
+            toast.success(`${dealer.first_name}'s dealership revoked — now ${result.newRole === 'agent' ? 'an agent' : 'a customer'}`)
         } catch (error: any) {
             toast.error(error.message)
         }
@@ -788,28 +769,13 @@ export default function AdminMembershipsPage() {
                             Save Dealer Plans
                         </Button>
 
-                        <div className="pt-4 border-t space-y-3">
-                            <div className="flex items-center justify-between gap-3">
-                                <div>
-                                    <p className="text-sm font-bold text-slate-800">Auto-upgrade expired dealers</p>
-                                    <p className="text-xs text-muted-foreground mt-0.5">
-                                        When ON, expired unsubscribed dealers become Agents within 3 days.
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={autoUpgradeExpiredDealers}
-                                    onCheckedChange={handleAutoUpgradeToggle}
-                                    disabled={isSavingAutoUpgrade}
-                                />
-                            </div>
-                            {autoUpgradeExpiredDealers && (
-                                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                                    <Zap className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                                    <p className="text-xs text-amber-700 font-medium">
-                                        Expired dealers will be auto-promoted to Agent in 3 days via cron job.
-                                    </p>
-                                </div>
-                            )}
+                        <div className="pt-4 border-t">
+                            <p className="text-sm font-bold text-slate-800">When a dealer plan ends</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                                The user goes back to what they were before: a customer stays a customer,
+                                and an agent gets their agent plan back (3 days, 2 weeks, 1 month or lifetime)
+                                with the agent days they had left when they became a dealer.
+                            </p>
                         </div>
                     </CardContent>
                 </Card>

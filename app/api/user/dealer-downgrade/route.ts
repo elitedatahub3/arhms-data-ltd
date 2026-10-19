@@ -1,11 +1,13 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
-import { cookies } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { restoreFromDealer } from '@/lib/dealer-role-history'
 
+// Called by the client (contexts/auth-context.tsx) once the dealer plan has
+// expired. The user goes back to what they were before: a customer, or their
+// agent plan with the agent time they had left.
 export async function POST(request: NextRequest) {
     try {
-        const cookieStore = await cookies()
         const supabaseUserClient = await createRouteHandlerClient()
 
         const { data: { user: authUser }, error: authError } = await supabaseUserClient.auth.getUser()
@@ -14,37 +16,23 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        const supabase = createServerClient()
+        const result = await restoreFromDealer(createServerClient() as any, authUser.id, { requireExpired: true })
 
-        const { data: dbUser } = await supabase
-            .from('users')
-            .select('role, dealer_expires_at')
-            .eq('id', authUser.id)
-            .single()
-
-        if (!dbUser || (dbUser as any).role !== 'dealer') {
-            return NextResponse.json({ error: 'User is not a dealer' }, { status: 400 })
+        if (!result.restored) {
+            switch (result.reason) {
+                case 'not_dealer':
+                case 'race':
+                    // Already restored (e.g. by the cron) — nothing left to do
+                    return NextResponse.json({ error: 'User is not a dealer' }, { status: 400 })
+                case 'still_active':
+                    return NextResponse.json({ error: 'Dealer subscription is still active' }, { status: 400 })
+                default:
+                    console.error('[DealerDowngrade] Restore failed:', result)
+                    return NextResponse.json({ error: 'Failed to downgrade' }, { status: 500 })
+            }
         }
 
-        const expiresAt = (dbUser as any).dealer_expires_at
-        if (expiresAt && new Date(expiresAt) > new Date()) {
-            return NextResponse.json({ error: 'Dealer subscription is still active' }, { status: 400 })
-        }
-
-        const { error: updateError } = await (supabase
-            .from('users') as any)
-            .update({
-                role: 'customer',
-                updated_at: new Date().toISOString(),
-            })
-            .eq('id', authUser.id)
-
-        if (updateError) {
-            console.error('[DealerDowngrade] Update error:', updateError)
-            return NextResponse.json({ error: 'Failed to downgrade' }, { status: 500 })
-        }
-
-        return NextResponse.json({ success: true })
+        return NextResponse.json({ success: true, newRole: result.newRole, agentExpiresAt: result.agentExpiresAt })
     } catch (error: any) {
         console.error('[DealerDowngrade] Exception:', error)
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

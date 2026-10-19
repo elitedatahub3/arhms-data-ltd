@@ -2,6 +2,7 @@ import { createServerClient } from './supabase'
 import { sendWalletTopupSuccessEmail, sendPermanentAgentUpgradeSuccessEmail } from './email-service'
 import { sendWalletTopupSuccessSMS, sendAgentUpgradeSuccessSMS, sendAgentExtensionSuccessSMS, sendPermanentAgentUpgradeSuccessSMS, sendDealerUpgradeSuccessSMS, sendUssdActivationSMS } from './sms-service'
 import { sendPushToUser, sendPushToAdmins } from './web-push'
+import { snapshotBeforeDealer } from './dealer-role-history'
 
 /**
  * Processes a completed payment by updating the status, 
@@ -784,7 +785,7 @@ export async function processCompletedDealerSubscription(reference: string, prov
     // 3. Load the user
     const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('role, dealer_expires_at, dealer_claimed_at, first_name, phone_number')
+        .select('role, dealer_expires_at, dealer_claimed_at, agent_expires_at, first_name, phone_number')
         .eq('id', payment.user_id)
         .single()
 
@@ -810,6 +811,8 @@ export async function processCompletedDealerSubscription(reference: string, prov
             role: 'dealer',
             dealer_expires_at: newExpiry.toISOString(),
             dealer_claimed_at: user.dealer_claimed_at ?? now.toISOString(),
+            // What to go back to when the dealership ends ({} on a renewal)
+            ...snapshotBeforeDealer(user, now),
             updated_at: now.toISOString(),
         })
         .eq('id', payment.user_id)

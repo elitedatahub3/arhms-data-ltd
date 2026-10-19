@@ -61,6 +61,9 @@ export async function POST(request: NextRequest) {
                 role: 'dealer',
                 dealer_claimed_at: now.toISOString(),
                 dealer_expires_at: expiresAt.toISOString(),
+                // Only customers can claim, so the trial ends back at customer
+                pre_dealer_role: 'customer',
+                pre_dealer_agent_seconds_left: null,
                 updated_at: now.toISOString(),
             })
             .eq('id', authUser.id)
