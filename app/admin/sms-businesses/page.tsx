@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Building2, Check, X, Globe, MessageCircle, Loader2, RefreshCw, User } from 'lucide-react'
+import { Building2, Check, X, Globe, MessageCircle, Loader2, RefreshCw, User, Settings } from 'lucide-react'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { SmsSettings } from '@/components/admin/sms-settings'
 
 type Status = 'pending' | 'approved' | 'rejected' | 'draft'
 
@@ -45,6 +46,8 @@ const FILTERS: { id: Status; label: string }[] = [
 
 export default function AdminSmsBusinessesPage() {
     const [status, setStatus] = useState<Status>('pending')
+    // The Settings pill swaps the queue for the SMS settings panel.
+    const [showSettings, setShowSettings] = useState(false)
     const [rows, setRows] = useState<Registration[]>([])
     const [counts, setCounts] = useState<Record<string, number>>({})
     const [loading, setLoading] = useState(true)
@@ -100,15 +103,22 @@ export default function AdminSmsBusinessesPage() {
 
             <div className="flex flex-wrap gap-2">
                 {FILTERS.map((f) => (
-                    <button key={f.id} type="button" onClick={() => setStatus(f.id)}
+                    <button key={f.id} type="button" onClick={() => { setStatus(f.id); setShowSettings(false) }}
                         className={cn('rounded-full border px-3 py-1 text-sm font-semibold transition-colors',
-                            status === f.id ? 'border-emerald-600 bg-emerald-600 text-white' : 'hover:bg-muted')}>
+                            !showSettings && status === f.id ? 'border-emerald-600 bg-emerald-600 text-white' : 'hover:bg-muted')}>
                         {f.label}{counts[f.id] ? ` · ${counts[f.id]}` : ''}
                     </button>
                 ))}
+                <button type="button" onClick={() => setShowSettings(true)}
+                    className={cn('flex items-center gap-1 rounded-full border px-3 py-1 text-sm font-semibold transition-colors',
+                        showSettings ? 'border-emerald-600 bg-emerald-600 text-white' : 'hover:bg-muted')}>
+                    <Settings className="w-3.5 h-3.5" /> Settings
+                </button>
             </div>
 
-            {loading ? (
+            {showSettings ? (
+                <SmsSettings />
+            ) : loading ? (
                 <div className="space-y-3"><Skeleton className="h-40 w-full" /><Skeleton className="h-40 w-full" /></div>
             ) : rows.length === 0 ? (
                 <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">Nothing here.</CardContent></Card>
