@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
+import { DEALER_PLANS, type DealerPlanId } from '@/lib/dealer-plans'
 import {
     Users,
     Clock,
@@ -80,8 +81,14 @@ export default function AdminMembershipsPage() {
     const [dealers, setDealers] = useState<any[]>([])
     const [dealersLoading, setDealersLoading] = useState(true)
     const [dealerSearchTerm, setDealerSearchTerm] = useState('')
-    const [dealerPrice6m, setDealerPrice6m] = useState('299.99')
-    const [dealerPrice3m, setDealerPrice3m] = useState('169.99')
+    // Price (as typed) and on/off switch for every dealer plan, saved together
+    const [dealerPlanForm, setDealerPlanForm] = useState<Record<DealerPlanId, { price: string; enabled: boolean }>>({
+        dealer_3d: { price: '', enabled: false },
+        dealer_2w: { price: '', enabled: false },
+        dealer_1m: { price: '', enabled: false },
+        dealer_3m: { price: '169.99', enabled: true },
+        dealer_6m: { price: '299.99', enabled: true },
+    })
     const [isSavingDealerPrice, setIsSavingDealerPrice] = useState(false)
     const [autoUpgradeExpiredDealers, setAutoUpgradeExpiredDealers] = useState(false)
     const [isSavingAutoUpgrade, setIsSavingAutoUpgrade] = useState(false)
@@ -140,10 +147,17 @@ export default function AdminMembershipsPage() {
 
             // Dealer price and auto-upgrade toggle
             if (settingsData) {
-                const dp6m = settingsData.find((s: any) => s.key === 'dealer_subscription_price_6m')?.value
-                if (dp6m) setDealerPrice6m(String(dp6m))
-                const dp3m = settingsData.find((s: any) => s.key === 'dealer_subscription_price_3m')?.value
-                if (dp3m) setDealerPrice3m(String(dp3m))
+                setDealerPlanForm(prev => {
+                    const next = { ...prev }
+                    for (const plan of DEALER_PLANS) {
+                        const price = settingsData.find((s: any) => s.key === plan.priceKey)?.value
+                        next[plan.id] = {
+                            price: price ? String(price) : prev[plan.id].price,
+                            enabled: settingsData.find((s: any) => s.key === plan.enabledKey)?.value !== 'false',
+                        }
+                    }
+                    return next
+                })
                 const autoUpgrade = settingsData.find((s: any) => s.key === 'auto_upgrade_expired_dealers')?.value === 'true'
                 setAutoUpgradeExpiredDealers(autoUpgrade)
             }
@@ -171,16 +185,29 @@ export default function AdminMembershipsPage() {
     }
 
     const handleSaveDealerPrice = async () => {
+        // A plan switched on needs a price, otherwise it would be hidden from buyers anyway
+        const noPrice = DEALER_PLANS.find(p => dealerPlanForm[p.id].enabled && !(parseFloat(dealerPlanForm[p.id].price) > 0))
+        if (noPrice) {
+            toast.error(`Set a price for the ${noPrice.shortLabel} plan or switch it off`)
+            return
+        }
         setIsSavingDealerPrice(true)
         try {
+            const dealerPlans: Record<string, { price?: number; enabled: boolean }> = {}
+            for (const plan of DEALER_PLANS) {
+                const form = dealerPlanForm[plan.id]
+                const price = parseFloat(form.price)
+                dealerPlans[plan.id] = { enabled: form.enabled, ...(price > 0 ? { price } : {}) }
+            }
             const response = await fetch('/api/admin/update-prices', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dealerPrice6m, dealerPrice3m })
+                body: JSON.stringify({ dealerPlans })
             })
             const data = await response.json()
-            if (!response.ok) throw new Error(data.error || 'Failed to update dealer price')
-            toast.success('Dealer subscription price updated!')
+            if (!response.ok) throw new Error(data.error || 'Failed to update dealer plans')
+            clearPricingCache()
+            toast.success('Dealer plans updated!')
         } catch (error: any) {
             toast.error(error.message)
         } finally {
@@ -718,25 +745,39 @@ export default function AdminMembershipsPage() {
                         <CardDescription>Subscription pricing and auto-upgrade behaviour.</CardDescription>
                     </CardHeader>
                     <CardContent className="pt-6 space-y-6">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label>3-Month Subscription Price (GHS)</Label>
-                                <Input
-                                    type="number"
-                                    value={dealerPrice3m}
-                                    onChange={(e) => setDealerPrice3m(e.target.value)}
-                                    className="font-bold text-lg"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>6-Month Subscription Price (GHS)</Label>
-                                <Input
-                                    type="number"
-                                    value={dealerPrice6m}
-                                    onChange={(e) => setDealerPrice6m(e.target.value)}
-                                    className="font-bold text-lg"
-                                />
-                            </div>
+                        <div className="space-y-3">
+                            {DEALER_PLANS.map(plan => {
+                                const form = dealerPlanForm[plan.id]
+                                return (
+                                    <div key={plan.id} className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label>{plan.shortLabel} Price (GHS)</Label>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-xs font-bold ${form.enabled ? 'text-green-600' : 'text-muted-foreground'}`}>
+                                                    {form.enabled ? 'On' : 'Off'}
+                                                </span>
+                                                <Switch
+                                                    checked={form.enabled}
+                                                    onCheckedChange={(checked) =>
+                                                        setDealerPlanForm(prev => ({ ...prev, [plan.id]: { ...prev[plan.id], enabled: checked } }))
+                                                    }
+                                                    aria-label={`${plan.shortLabel} dealer plan on or off`}
+                                                />
+                                            </div>
+                                        </div>
+                                        <Input
+                                            type="number"
+                                            value={form.price}
+                                            placeholder="Not set"
+                                            disabled={!form.enabled}
+                                            onChange={(e) =>
+                                                setDealerPlanForm(prev => ({ ...prev, [plan.id]: { ...prev[plan.id], price: e.target.value } }))
+                                            }
+                                            className="font-bold text-lg"
+                                        />
+                                    </div>
+                                )
+                            })}
                         </div>
                         <Button
                             className="w-full bg-violet-700 hover:bg-violet-800 h-11 font-black"
@@ -744,7 +785,7 @@ export default function AdminMembershipsPage() {
                             disabled={isSavingDealerPrice}
                         >
                             {isSavingDealerPrice ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-                            Save Dealer Price
+                            Save Dealer Plans
                         </Button>
 
                         <div className="pt-4 border-t space-y-3">

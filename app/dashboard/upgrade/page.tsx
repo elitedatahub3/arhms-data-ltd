@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/contexts/auth-context'
 import { getCachedPricing } from '@/lib/pricing-cache'
+import { DEALER_PLANS, buildDealerPlanConfig, isDealerPlanAvailable, type DealerPlanConfig, type DealerPlanId } from '@/lib/dealer-plans'
 import { Button } from '@/components/ui/button'
 import { Crown, Sparkles, Zap, CheckCircle, Store, Calendar } from 'lucide-react'
 import { toast } from 'sonner'
@@ -69,8 +70,8 @@ export default function UpgradePage() {
         'permanent': true
     })
 
-    const [dealerPrice6m, setDealerPrice6m] = useState(0)
-    const [dealerPrice3m, setDealerPrice3m] = useState(0)
+    // Nothing is for sale until prices load: price 0 means unavailable
+    const [dealerPlans, setDealerPlans] = useState<DealerPlanConfig>(() => buildDealerPlanConfig([]))
     const [showStrikethrough, setShowStrikethrough] = useState(false)
     const [isLoading, setIsLoading] = useState(true)
     const [isProcessing, setIsProcessing] = useState<string | null>(null)
@@ -106,8 +107,7 @@ export default function UpgradePage() {
                 setOldPrices(data.oldPrices || { '3d': 0, '14d': 0, '30d': 0, 'permanent': 0 })
                 setShowStrikethrough(data.showStrikethrough || false)
                 if (data.enabledPlans) setEnabledPlans(data.enabledPlans)
-                setDealerPrice6m(data.dealerPrice6m ?? 0)
-                setDealerPrice3m(data.dealerPrice3m ?? 0)
+                if (data.dealerPlans) setDealerPlans(data.dealerPlans)
                 setIsLoading(false)
             } catch (err) {
                 console.error('Failed to fetch upgrade prices:', err)
@@ -202,7 +202,7 @@ export default function UpgradePage() {
         setShowPaymentModal(true)
     }
 
-    const handleDealerSubscribeClick = (plan: 'dealer_3m' | 'dealer_6m' = 'dealer_6m') => {
+    const handleDealerSubscribeClick = (plan: DealerPlanId) => {
         setSelectedPlan(plan)
         setIsDealerPaymentFlow(true)
         setShowPaymentModal(true)
@@ -530,7 +530,7 @@ export default function UpgradePage() {
                                 <span className="ml-auto px-3 py-1 rounded-full bg-violet-100 text-violet-700 text-xs font-black">DEALER</span>
                             </div>
                             <div className="space-y-2 mb-5">
-                                {['Exclusive dealer pricing on all bundles', 'Priority order processing', '3-month or 6-month plans available', dealerPromoEnabled ? 'Free 1-month trial for new users' : 'Flexible subscription options'].map((f) => (
+                                {['Exclusive dealer pricing on all bundles', 'Priority order processing', 'Flexible plans from days to months', dealerPromoEnabled ? 'Free 1-month trial for new users' : 'Flexible subscription options'].map((f) => (
                                     <div key={f} className="flex items-center gap-2.5">
                                         <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
                                         <span className="text-xs font-bold text-gray-700">{f}</span>
@@ -756,95 +756,61 @@ export default function UpgradePage() {
                             </div>
                         )}
 
-                        {/* 3-month subscription card */}
-                        {dealerPrice3m > 0 && (
-                            <div className="w-full rounded-2xl bg-white/90 backdrop-blur border-2 border-violet-300 shadow-xl p-6 relative">
-                                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                                    <span className="px-4 py-1.5 rounded-full bg-gradient-to-r from-violet-500 to-purple-500 text-white text-xs font-black shadow-lg">
-                                        {isDealer && !isExpired ? 'EXTEND' : 'SUBSCRIBE'}
-                                    </span>
-                                </div>
-                                <div className="relative pt-2">
-                                    <div className="flex items-center gap-3 mb-4">
-                                        <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center">
-                                            <Store className="w-5 h-5 text-violet-600" />
-                                        </div>
-                                        <div>
-                                            <p className="font-black text-gray-900 text-sm">3-Month Dealer Subscription</p>
-                                            <p className="text-xs text-gray-500">90 days of dealer pricing</p>
-                                        </div>
+                        {/* One card per dealer plan an admin has switched on and priced */}
+                        {DEALER_PLANS.filter(plan => isDealerPlanAvailable(dealerPlans, plan.id)).map((plan) => {
+                            const price = dealerPlans[plan.id].price
+                            const long = plan.id === 'dealer_6m'
+                            return (
+                                <div
+                                    key={plan.id}
+                                    className={`w-full rounded-2xl bg-white/90 backdrop-blur border-2 shadow-xl p-6 relative ${long ? 'border-amber-300' : 'border-violet-300'}`}
+                                >
+                                    <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                                        <span className={`px-4 py-1.5 rounded-full text-white text-xs font-black shadow-lg bg-gradient-to-r ${long ? 'from-amber-500 to-yellow-500' : 'from-violet-500 to-purple-500'}`}>
+                                            {isDealer && !isExpired ? 'RENEW / EXTEND' : 'SUBSCRIBE'}
+                                        </span>
                                     </div>
-
-                                    <div className="text-center py-3 mb-4">
-                                        <span className="text-4xl font-black text-violet-700">GHS {dealerPrice3m.toFixed(2)}</span>
-                                        <p className="text-xs text-gray-500 mt-1">One-time payment</p>
-                                    </div>
-
-                                    <div className="space-y-2 mb-5">
-                                        {['Exclusive dealer pricing on all bundles', 'Priority order processing', '90 days of access'].map((f) => (
-                                            <div key={f} className="flex items-center gap-2.5">
-                                                <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
-                                                <span className="text-xs font-bold text-gray-700">{f}</span>
+                                    <div className="relative pt-2">
+                                        <div className="flex items-center gap-3 mb-4">
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${long ? 'bg-amber-100' : 'bg-violet-100'}`}>
+                                                {long ? <Crown className="w-5 h-5 text-amber-600" /> : <Store className="w-5 h-5 text-violet-600" />}
                                             </div>
-                                        ))}
-                                    </div>
+                                            <div>
+                                                <p className="font-black text-gray-900 text-sm">{plan.label}</p>
+                                                <p className="text-xs text-gray-500">{plan.days} days of dealer pricing</p>
+                                            </div>
+                                        </div>
 
-                                    <Button
-                                        onClick={() => handleDealerSubscribeClick('dealer_3m')}
-                                        disabled={isProcessing !== null || pollingRef !== null}
-                                        className="w-full bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-black h-11 rounded-xl shadow-lg"
-                                    >
-                                        {isProcessing === 'dealer_3m' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</> : 'Subscribe — 3 Months'}
-                                    </Button>
+                                        <div className="text-center py-3 mb-4">
+                                            <span className={`text-4xl font-black ${long ? 'text-amber-700' : 'text-violet-700'}`}>GHS {price.toFixed(2)}</span>
+                                            <p className="text-xs text-gray-500 mt-1">One-time payment</p>
+                                        </div>
+
+                                        <div className="space-y-2 mb-5">
+                                            {['Exclusive dealer pricing on all bundles', 'Priority order processing', `${plan.days} days of access`].map((f) => (
+                                                <div key={f} className="flex items-center gap-2.5">
+                                                    <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                                    <span className="text-xs font-bold text-gray-700">{f}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <Button
+                                            onClick={() => handleDealerSubscribeClick(plan.id)}
+                                            disabled={isProcessing !== null || pollingRef !== null}
+                                            className={`w-full text-white font-black h-11 rounded-xl shadow-lg bg-gradient-to-r ${long ? 'from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600' : 'from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600'}`}
+                                        >
+                                            {isProcessing === plan.id ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</> : `Subscribe — ${plan.shortLabel}`}
+                                        </Button>
+                                    </div>
                                 </div>
+                            )
+                        })}
+                        {!isLoading && !DEALER_PLANS.some(plan => isDealerPlanAvailable(dealerPlans, plan.id)) && (
+                            <div className="w-full rounded-2xl bg-white/90 p-6 text-center text-gray-500 text-sm font-bold">
+                                Dealer plans are not available right now — please check back soon.
                             </div>
                         )}
-
-                        {/* 6-month subscription card */}
-                        <div className="w-full rounded-2xl bg-white/90 backdrop-blur border-2 border-amber-300 shadow-xl p-6">
-                            <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                                <span className="px-4 py-1.5 rounded-full bg-gradient-to-r from-amber-500 to-yellow-500 text-white text-xs font-black shadow-lg">
-                                    {isDealer && !isExpired ? 'RENEW / EXTEND' : 'SUBSCRIBE'}
-                                </span>
-                            </div>
-                            <div className="relative pt-2">
-                                <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
-                                        <Crown className="w-5 h-5 text-amber-600" />
-                                    </div>
-                                    <div>
-                                        <p className="font-black text-gray-900 text-sm">6-Month Dealer Subscription</p>
-                                        <p className="text-xs text-gray-500">180 days of dealer pricing</p>
-                                    </div>
-                                </div>
-
-                                {dealerPrice6m > 0 ? (
-                                    <div className="text-center py-3 mb-4">
-                                        <span className="text-4xl font-black text-amber-700">GHS {dealerPrice6m.toFixed(2)}</span>
-                                        <p className="text-xs text-gray-500 mt-1">One-time payment</p>
-                                    </div>
-                                ) : (
-                                    <div className="text-center py-3 mb-4 text-gray-400 text-sm font-bold">Price not set — contact admin</div>
-                                )}
-
-                                <div className="space-y-2 mb-5">
-                                    {['Exclusive dealer pricing on all bundles', 'Priority order processing', '180 days of access'].map((f) => (
-                                        <div key={f} className="flex items-center gap-2.5">
-                                            <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
-                                            <span className="text-xs font-bold text-gray-700">{f}</span>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                <Button
-                                    onClick={() => handleDealerSubscribeClick('dealer_6m')}
-                                    disabled={isProcessing !== null || pollingRef !== null || dealerPrice6m <= 0}
-                                    className="w-full bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-black h-11 rounded-xl shadow-lg"
-                                >
-                                    {isProcessing === 'dealer_6m' ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</> : 'Subscribe — 6 Months'}
-                                </Button>
-                            </div>
-                        </div>
 
                         <div className="mt-8 flex flex-col items-center gap-2">
                             {isCustomer && (
@@ -1051,7 +1017,7 @@ export default function UpgradePage() {
                             </div>
 
                             {/* Dealer Subscription Section — available to agents */}
-                            {dbUser?.role === 'agent' && (
+                            {dbUser?.role === 'agent' && DEALER_PLANS.some(plan => isDealerPlanAvailable(dealerPlans, plan.id)) && (
                                 <div className="w-full max-w-3xl mb-8">
                                     <div className="w-full rounded-2xl bg-white/90 backdrop-blur border-2 border-violet-300 shadow-xl p-6 relative overflow-hidden">
                                         <div className="absolute -top-3 left-6">
@@ -1064,27 +1030,28 @@ export default function UpgradePage() {
                                                 <Store className="w-5 h-5 text-violet-600" />
                                             </div>
                                             <div>
-                                                <p className="font-black text-gray-900 text-sm">Dealer Subscription — 6 Months</p>
+                                                <p className="font-black text-gray-900 text-sm">Dealer Subscription</p>
                                                 <p className="text-xs text-gray-500">Unlock exclusive dealer pricing for your shop</p>
                                             </div>
-                                            {dealerPrice6m > 0 && (
-                                                <span className="ml-auto text-xl font-black text-violet-700">
-                                                    GH₵{dealerPrice6m.toFixed(2)}
-                                                </span>
-                                            )}
                                         </div>
                                         <div className="space-y-2 mb-4 text-sm text-gray-600">
                                             <div className="flex items-center gap-2"><CheckCircle className="w-4 h-4 text-violet-500 flex-shrink-0" /> Access dealer cost prices on all data packages</div>
-                                            <div className="flex items-center gap-2"><CheckCircle className="w-4 h-4 text-violet-500 flex-shrink-0" /> Your shop earns from dealer-tier rates for 6 months</div>
-                                            <div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-violet-400 flex-shrink-0" /> 180 days of dealer access from payment date</div>
+                                            <div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-violet-400 flex-shrink-0" /> Dealer access starts from payment date</div>
                                         </div>
-                                        <Button
-                                            onClick={() => handleDealerSubscribeClick('dealer_6m')}
-                                            disabled={isLoading || dealerPrice6m <= 0}
-                                            className="w-full bg-violet-600 hover:bg-violet-700 text-white font-black h-11 rounded-xl"
-                                        >
-                                            {dealerPrice6m > 0 ? `Subscribe — GH₵${dealerPrice6m.toFixed(2)}` : 'Loading price...'}
-                                        </Button>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            {DEALER_PLANS.filter(plan => isDealerPlanAvailable(dealerPlans, plan.id)).map(plan => (
+                                                <Button
+                                                    key={plan.id}
+                                                    onClick={() => handleDealerSubscribeClick(plan.id)}
+                                                    disabled={isLoading || isProcessing !== null || pollingRef !== null}
+                                                    className="w-full bg-violet-600 hover:bg-violet-700 text-white font-black h-11 rounded-xl"
+                                                >
+                                                    {isProcessing === plan.id
+                                                        ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing...</>
+                                                        : `${plan.shortLabel} — GH₵${dealerPlans[plan.id].price.toFixed(2)}`}
+                                                </Button>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                             )}

@@ -2,6 +2,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
+import { DEALER_PLAN_SETTING_KEYS, buildDealerPlanConfig } from '@/lib/dealer-plans'
 
 export async function GET(request: NextRequest) {
     try {
@@ -39,7 +40,8 @@ export async function GET(request: NextRequest) {
                 'show_price_strikethrough', 'guest_storefront_url',
                 'whatsapp_group_link', 'whatsapp_channel_link', 'whatsapp_admin_number', 'whatsapp_community_link',
                 'dealer_subscription_price_6m',
-                'dealer_subscription_price_3m'
+                'dealer_subscription_price_3m',
+                ...DEALER_PLAN_SETTING_KEYS
             ])
 
         if (error) {
@@ -93,6 +95,7 @@ export async function GET(request: NextRequest) {
             whatsappCommunityLink,
             dealerPrice6m,
             dealerPrice3m,
+            dealerPlans: buildDealerPlanConfig(data),
         })
 
     } catch (error: any) {

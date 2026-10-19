@@ -5,6 +5,7 @@ import { cookies } from 'next/headers'
 import { revalidateTag } from 'next/cache'
 import { PUBLIC_CONFIG_CACHE_TAG } from '@/lib/cache-tags'
 import { z } from 'zod'
+import { DEALER_PLANS } from '@/lib/dealer-plans'
 
 export async function POST(request: NextRequest) {
     try {
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
 
         // 3. CONTINUE WITH PRICE UPDATE LOGIC
         const body = await request.json()
-        const { prices, showStrikethrough, dealerPrice6m, dealerPrice3m, planEnabled } = body
+        const { prices, showStrikethrough, dealerPrice6m, dealerPrice3m, planEnabled, dealerPlans } = body
 
         // Handle a single agent plan being switched on or off: { planEnabled: { plan: '3d', enabled: false } }
         if (planEnabled !== undefined) {
@@ -56,6 +57,44 @@ export async function POST(request: NextRequest) {
 
             revalidateTag(PUBLIC_CONFIG_CACHE_TAG)
             return NextResponse.json({ success: true, plan: toggleResult.data.plan, enabled: toggleResult.data.enabled })
+        }
+
+        // Handle every dealer plan's price and on/off switch in one save:
+        // { dealerPlans: { dealer_3d: { price: 20, enabled: true }, ... } }
+        // Validated whole before any write, so a bad value can't leave the save half-applied.
+        if (dealerPlans !== undefined) {
+            const planEntry = z.object({
+                price: z.coerce.number().min(1).max(100000).optional(),
+                enabled: z.boolean().optional(),
+            })
+            const shape = Object.fromEntries(DEALER_PLANS.map(p => [p.id, planEntry.optional()]))
+            const parsed = z.object(shape).strict().safeParse(dealerPlans)
+            if (!parsed.success) {
+                const details = parsed.error.errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)
+                return NextResponse.json({ error: 'Invalid dealer plan values', details }, { status: 400 })
+            }
+
+            const rows: { key: string; value: string }[] = []
+            for (const plan of DEALER_PLANS) {
+                const entry = (parsed.data as Record<string, { price?: number; enabled?: boolean } | undefined>)[plan.id]
+                if (!entry) continue
+                if (entry.price !== undefined) rows.push({ key: plan.priceKey, value: String(entry.price) })
+                if (entry.enabled !== undefined) rows.push({ key: plan.enabledKey, value: String(entry.enabled) })
+            }
+
+            const supabaseAdmin = createClient(
+                process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                process.env.SUPABASE_SERVICE_ROLE_KEY!,
+                { auth: { autoRefreshToken: false, persistSession: false } }
+            )
+            for (const { key, value } of rows) {
+                await supabaseAdmin.from('admin_settings').delete().eq('key', key)
+                const { error } = await supabaseAdmin.from('admin_settings').insert({ key, value } as any)
+                if (error) return NextResponse.json({ error: `Failed to update ${key}: ${error.message}` }, { status: 500 })
+            }
+
+            revalidateTag(PUBLIC_CONFIG_CACHE_TAG)
+            return NextResponse.json({ success: true, message: 'Dealer plans updated' })
         }
 
         if (!prices && dealerPrice6m === undefined && dealerPrice3m === undefined) {
