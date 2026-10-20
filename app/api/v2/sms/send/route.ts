@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
         db: ctx.db,
         account: ctx.account,
         mode: ctx.mode,
+        scope: 'platform',
         settingsMap: ctx.settingsMap,
         shopId: ctx.shopId,
         source: 'api',

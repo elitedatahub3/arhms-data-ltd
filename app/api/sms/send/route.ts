@@ -53,6 +53,7 @@ export async function POST(request: Request) {
             db: supabaseAdmin,
             account,
             mode,
+            scope: ctx.scope,
             settingsMap,
             shopId: shop?.id ?? null,
             source: 'dashboard',

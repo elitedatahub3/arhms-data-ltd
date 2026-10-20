@@ -38,6 +38,13 @@ export interface SendCampaignInput {
     db: any
     account: SmsAccount
     mode: SmsMode
+    /**
+     * Which product is sending. Platform Mode / Business Mode — links only in
+     * Business Mode, and the per-mode daily limit — are SMS Platform rules. The
+     * shop's Customer SMS has never had them: links are allowed and there is
+     * no daily cap. Scam and fake-alert blocking applies to both.
+     */
+    scope: 'shop' | 'platform'
     settingsMap: Record<string, any>
     shopId: string | null
     source: 'dashboard' | 'api'
@@ -98,7 +105,9 @@ export async function sendCampaign(input: SendCampaignInput): Promise<SendCampai
         }
     }
 
-    const content = checkMessageContent(message, mode)
+    const platformRules = input.scope === 'platform'
+    // 'business' is the mode with no link restriction; the shop gets it always.
+    const content = checkMessageContent(message, platformRules ? mode : 'business')
     if (content.spoofedAlert) {
         // Fake network/MoMo alerts are refused before any credits move, and
         // admins are told who tried.
@@ -169,7 +178,7 @@ export async function sendCampaign(input: SendCampaignInput): Promise<SendCampai
     }
 
     // ── Daily limit ──────────────────────────────────────────────────────────
-    const dailyLimit = dailyLimitFor(mode, settingsMap)
+    const dailyLimit = platformRules ? dailyLimitFor(mode, settingsMap) : 0
     if (dailyLimit > 0) {
         const sentToday = await countSentToday(db, account.id)
         if (sentToday + recipients.length > dailyLimit) {

@@ -359,7 +359,9 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
                 <TabsContent value="send" className="mt-4">
                     <SmsCompose
-                        mode={info.mode}
+                        // Shop Customer SMS has no Platform/Business modes: links are
+                        // allowed, as they always were. Scam warnings still show.
+                        mode="business"
                         credits={account.credits}
                         allowedSenders={info.allowedSenders}
                         groups={groups}
