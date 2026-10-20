@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { sendAgentUpgradeSuccessSMS, sendDealerUpgradeSuccessSMS } from '@/lib/sms-service'
+import { snapshotBeforeDealer, CLEARED_PRE_DEALER } from '@/lib/dealer-role-history'
 
 export async function POST(request: NextRequest) {
     try {
@@ -50,14 +51,16 @@ export async function POST(request: NextRequest) {
         // -----------------------------------------------------------------
         const { data: currentUser } = await (supabase
             .from('users') as any)
-            .select('role, dealer_claimed_at, dealer_expires_at')
+            .select('role, dealer_claimed_at, dealer_expires_at, agent_expires_at')
             .eq('id', userId)
             .single()
 
         const oldRole: string = currentUser?.role ?? 'customer'
 
         // Calculate expiration based on new role
-        const updateData: any = { role }
+        // A role set directly by an admin is final: drop any "restore to" snapshot.
+        // The dealer branch below replaces it with a fresh one.
+        const updateData: any = { role, ...CLEARED_PRE_DEALER }
         if (role === 'agent') {
             const expiresAt = new Date()
             expiresAt.setDate(expiresAt.getDate() + 3) // 3-day agent subscription
@@ -78,7 +81,16 @@ export async function POST(request: NextRequest) {
             // burn a user's free-trial eligibility record.
             updateData.dealer_claimed_at = currentUser?.dealer_claimed_at ?? now.toISOString()
             updateData.dealer_expires_at = expiresAt.toISOString()
-            updateData.agent_expires_at = null
+            // Remember what they were so they go back to it when the dealership
+            // ends. agent_expires_at is left alone; the paused agent time lives
+            // in the snapshot. On a renewal (already dealer) the snapshot is kept.
+            const snapshot = snapshotBeforeDealer(currentUser ?? {}, now)
+            if (oldRole === 'dealer') {
+                delete updateData.pre_dealer_role
+                delete updateData.pre_dealer_agent_seconds_left
+            } else {
+                Object.assign(updateData, snapshot)
+            }
         } else {
             updateData.agent_expires_at = null
         }

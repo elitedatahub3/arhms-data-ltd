@@ -229,11 +229,24 @@ export default function AFAOrdersPage() {
         const timeout = setTimeout(() => controller.abort(), 8000)
         try {
             const res = await fetch(
-                `/api/admin-settings?keys=afa_price_customer,afa_price_agent,afa_price_dealer&t=${Date.now()}`,
+                `/api/admin-settings?keys=afa_price_customer,afa_price_agent,afa_price_dealer,afa_price_api&t=${Date.now()}`,
                 { cache: 'no-store', signal: controller.signal }
             )
             if (!res.ok) throw new Error(`Settings API returned ${res.status}`)
             const json = await res.json()
+
+            // API users pay the admin-set API price when one is set — mirrors
+            // /api/user/afa-registration. Read with '*' so a database without the
+            // is_api_user column reads as "not an API user" rather than failing.
+            if (dbUser?.id && parseFloat(json?.afa_price_api) > 0) {
+                const { data: me } = await (supabase.from('users') as any).select('*').eq('id', dbUser.id).maybeSingle()
+                if (me?.is_api_user === true) {
+                    setApplicationPrice(parseFloat(json.afa_price_api))
+                    setHasPricingError(false)
+                    return
+                }
+            }
+
             // Must match afaPriceKeyForRole() in lib/afa-pricing.ts, which is what
             // the server actually charges. Omitting the dealer branch showed
             // dealers the customer price while their wallet was debited the
@@ -257,7 +270,7 @@ export default function AFAOrdersPage() {
             clearTimeout(timeout)
             setLoadingPrice(false)
         }
-    }, [dbUser?.role])
+    }, [dbUser?.role, dbUser?.id])
 
     const fetchWalletBalance = useCallback(async () => {
         if (!dbUser?.id) return

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { areCronJobsEnabled, cronDisabledResponse, isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
+import { areCronJobsEnabled, cronDisabledResponse } from '@/lib/cron-control'
+import {
+    parseFulfillmentSettings, resolveRoute, fulfillWithFallback, ordersStamp, shopOrdersStamp,
+    optionalStampKeys, describeAttempts, failureReason, type FulfillmentConfig,
+} from '@/lib/supplier-router'
+import { updateOrderWithColumnFallback } from '@/lib/order-update-fallback'
 
 const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -44,18 +49,8 @@ export async function GET(request: NextRequest) {
     const delayMinutes = Math.max(1, parseInt(s.cron_auto_refulfill_delay_minutes || '5'))
     const cutoff = new Date(Date.now() - delayMinutes * 60 * 1000).toISOString()
 
-    // Parse supplier network routing
-    const dbFulfillmentSettings = typeof s.fulfillment_settings === 'string'
-        ? JSON.parse(s.fulfillment_settings)
-        : s.fulfillment_settings || {}
-    const networkSettings: Record<string, boolean> = dbFulfillmentSettings.networks || {}
-    const codecraftNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.codecraft_networks || {}
-    const kingflexyNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.kingflexy_networks || {}
-    const eazydataNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.eazydata_networks || {}
-    const agentportalNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.agentportal_networks || {}
-    const netpulseNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.netpulse_networks || {}
-    const hendylinksNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.hendylinks_networks || {}
-    const bundleportalNetworkSettings: Record<string, boolean> = dbFulfillmentSettings.bundleportal_networks || {}
+    // Routing (primary + fallback per network). The global switch was checked above.
+    const config: FulfillmentConfig = { globalEnabled: true, settings: parseFulfillmentSettings(s.fulfillment_settings) }
 
     // ── Fetch pending orders older than the configured delay (max 50) ─────────
     const { data: pendingOrders, error: fetchError } = await supabaseAdmin
@@ -80,36 +75,21 @@ export async function GET(request: NextRequest) {
     let failed = 0
 
     const { sendAdminNewOrderAlert } = await import('@/lib/email-service')
-    const { fulfillOrder } = await import('@/lib/fulfillment-service')
-    const { fulfillOrder: ccFulfillOrder } = await import('@/lib/codecraft-service')
-    const { fulfillOrder: kfFulfillOrder } = await import('@/lib/kingflexy-service')
-    const { fulfillOrder: edFulfillOrder } = await import('@/lib/eazydata-service')
-    const { fulfillOrder: apFulfillOrder } = await import('@/lib/agentportal-service')
-    const { fulfillOrder: npFulfillOrder } = await import('@/lib/netpulse-service')
-    const { fulfillOrder: hlFulfillOrder } = await import('@/lib/hendylinks-service')
-    const { fulfillOrder: bpFulfillOrder } = await import('@/lib/bundleportal-service')
     const { syncShopOrderStatus } = await import('@/lib/shop-service')
 
     for (const order of pendingOrders) {
-        const isDataKazinaEnabled = networkSettings[order.network] === true
-        const isCodeCraftEnabled = codecraftNetworkSettings[order.network] === true
-        const isKingFlexyEnabled = kingflexyNetworkSettings[order.network] === true
-        const isEazyDataEnabled = eazydataNetworkSettings[order.network] === true
-        const isAgentPortalEnabled = agentportalNetworkSettings[order.network] === true
-        const isNetPulseEnabled = netpulseNetworkSettings[order.network] === true
-        const isHendyLinksEnabled = hendylinksNetworkSettings[order.network] === true
-        const isBundlePortalEnabled = bundleportalNetworkSettings[order.network] === true
+        // Checked before taking the lock; the router re-checks the same config.
+        const route = resolveRoute(config.settings, order.network)
 
         // No supplier active → skip
-        if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && !isHendyLinksEnabled && !isBundlePortalEnabled) {
+        if (route.kind === 'none') {
             console.log(`[CronRefulfill] No active supplier for ${order.network} — skipping ${order.id}`)
             skipped++
             continue
         }
 
         // More than one active → conflict — skip and alert
-        const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled, isAgentPortalEnabled, isNetPulseEnabled, isHendyLinksEnabled, isBundlePortalEnabled].filter(Boolean).length
-        if (activeCount > 1) {
+        if (route.kind === 'conflict') {
             console.error(`[CronRefulfill] CONFLICT: Multiple suppliers active for ${order.network} on ${order.id}`)
             await sendAdminNewOrderAlert({
                 referenceCode: order.reference_code || order.id,
@@ -127,8 +107,6 @@ export async function GET(request: NextRequest) {
             continue
         }
 
-        const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : isAgentPortalEnabled ? 'agentportal' : isNetPulseEnabled ? 'netpulse' : isHendyLinksEnabled ? 'hendylinks' : isBundlePortalEnabled ? 'bundleportal' : 'datakazina'
-
         // ── ATOMIC LOCK: claim the order ─────────────────────────────────────
         const { data: lockedOrder, error: lockError } = await supabaseAdmin
             .from('orders')
@@ -144,51 +122,43 @@ export async function GET(request: NextRequest) {
             continue
         }
 
-        // Stamp fulfilled_by on shop_orders
-        if (order.shop_order_id) {
-            await supabaseAdmin
-                .from('shop_orders')
-                .update({ fulfilled_by: supplierLabel })
-                .eq('id', order.shop_order_id)
-        }
-
-        // webhookRef is set by the Dakazina path only (see lib/fulfillment-service).
-        const result: { success: boolean; reference?: string; transactionId?: string; webhookRef?: string; error?: string; apiResponse?: any; alreadySubmitted?: boolean } = isCodeCraftEnabled
-            ? await ccFulfillOrder(order.network, order.phone_number, order.size, order.id)
-            : isKingFlexyEnabled
-                ? await kfFulfillOrder(order.network, order.phone_number, order.size, order.id)
-                : isEazyDataEnabled
-                    ? await edFulfillOrder(order.network, order.phone_number, order.size, order.id)
-                    : isAgentPortalEnabled
-                        ? await apFulfillOrder(order.network, order.phone_number, order.size, order.id)
-                        : isNetPulseEnabled
-                            ? await npFulfillOrder(order.network, order.phone_number, order.size, order.id)
-                            : isHendyLinksEnabled
-                                // isRetry: HendyLinks accepts no idempotency key, so a request
-                                // that timed out may already have created an order. This makes
-                                // the service check their history before placing another.
-                                ? await hlFulfillOrder(order.network, order.phone_number, order.size, order.id, { isRetry: true })
-                                : isBundlePortalEnabled
-                                    // order_id is BundlePortal's idempotency key; storefront orders were
-                                    // first placed under shop_orders.id, so retry with that same id.
-                                    ? await bpFulfillOrder(order.network, order.phone_number, order.size, order.shop_order_id || order.id, { isRetry: true })
-                                    : await fulfillOrder(order.network, order.phone_number, order.size, order.id)
+        const outcome = await fulfillWithFallback({
+            db: supabaseAdmin,
+            network: order.network,
+            phone: order.phone_number,
+            size: order.size,
+            orderId: order.id,
+            match: { column: 'id', value: order.id },
+            // HendyLinks checks its history first; BundlePortal reuses shop_orders.id.
+            mode: 'retry',
+            shopOrderId: order.shop_order_id,
+            config,
+            // Stamp fulfilled_by on shop_orders before each supplier call
+            onBeforeAttempt: order.shop_order_id
+                ? async (supplier) => {
+                    await supabaseAdmin.from('shop_orders').update({ fulfilled_by: supplier.id }).eq('id', order.shop_order_id)
+                }
+                : undefined,
+        })
 
         // An idempotency collision (alreadySubmitted) is not a fresh success, but
-        // the order already exists at the supplier — keep it in 'processing' (locked
-        // above) rather than reverting to pending and looping forever.
-        const alreadySubmitted = !result.success && result.alreadySubmitted === true
-        if (result.success || alreadySubmitted) {
-            console.log(`[CronRefulfill] ${alreadySubmitted ? '↺ already submitted — kept processing' : '✅ fulfilled'} ${order.id} via ${supplierLabel}`)
+        // the order already exists at the supplier — the router reports it as placed,
+        // so it stays in 'processing' (locked above) rather than reverting to pending
+        // and looping forever.
+        if (outcome.status === 'placed') {
+            const supplierLabel = outcome.supplier.id
+            const alreadySubmitted = !outcome.result.success
+            console.log(`[CronRefulfill] ${alreadySubmitted ? '↺ already submitted — kept processing' : '✅ fulfilled'} ${order.id}: ${describeAttempts(outcome.attempts)}`)
 
             await supabaseAdmin.from('mtn_fulfillment_tracking').insert({
                 order_id: order.id,
                 status: alreadySubmitted ? 'processing' : 'success',
                 api_response: {
-                    ...result.apiResponse,
+                    ...outcome.result.apiResponse,
                     note: alreadySubmitted
                         ? `Cron Auto-Refulfill: order already submitted at ${supplierLabel} (idempotency) — kept processing`
                         : `Cron Auto-Refulfill Success via ${supplierLabel}`,
+                    ...(outcome.fellBack ? { fallback: describeAttempts(outcome.attempts) } : {}),
                 },
             })
 
@@ -196,56 +166,24 @@ export async function GET(request: NextRequest) {
             // per-supplier status-sync crons (which filter on these) can later move
             // this order from processing → completed/failed. Without this, a direct
             // (non-shop) order fulfilled here stays stuck in 'processing' forever.
-            // Reference columns are unconstrained → stamp them first so they always
-            // apply, even on a DB where the eazydata fulfillment_method migration
-            // hasn't run yet.
-            const refUpdate: Record<string, any> = {}
-            if (result.transactionId) {
-                if (isCodeCraftEnabled) refUpdate.codecraft_reference = result.transactionId
-                else if (isKingFlexyEnabled) refUpdate.kingflexy_reference = result.transactionId
-                else if (isEazyDataEnabled) refUpdate.eazydata_reference = result.transactionId
-                else if (isAgentPortalEnabled) refUpdate.agentportal_reference = result.transactionId
-                else if (isNetPulseEnabled) refUpdate.netpulse_reference = result.transactionId
-                else if (isHendyLinksEnabled) refUpdate.hendylinks_reference = result.transactionId
-                else if (isBundlePortalEnabled) refUpdate.bundleportal_reference = result.transactionId
-                else refUpdate.dakazina_reference = result.transactionId
-            }
-            // See the matching note in app/api/admin/fulfillment/refulfill.
-            if (result.webhookRef) refUpdate.dakazina_reference = result.webhookRef
-            if (Object.keys(refUpdate).length > 0) {
-                await supabaseAdmin.from('orders').update(refUpdate).eq('id', order.id)
-            }
-            // fulfillment_method is guarded by orders_fulfillment_method_check
-            // (requires migration 20260713_add_eazydata_fulfillment_method.sql).
-            await supabaseAdmin.from('orders').update({ fulfillment_method: supplierLabel }).eq('id', order.id)
+            // The reference sheds first, then fulfillment_method (guarded by
+            // orders_fulfillment_method_check), if the DB is behind the code.
+            const ordersUpdate = ordersStamp(outcome.supplier, outcome.reference)
+            await updateOrderWithColumnFallback(
+                supabaseAdmin, 'orders', { column: 'id', value: order.id },
+                ordersUpdate, optionalStampKeys(ordersUpdate), '[CronRefulfill]'
+            )
 
             if (order.shop_order_id) {
                 const shopOrderUpdate: Record<string, any> = {
                     status: 'processing',
                     updated_at: new Date().toISOString(),
+                    ...shopOrdersStamp(outcome.supplier, outcome.reference),
                 }
-                if (isCodeCraftEnabled && result.transactionId) {
-                    shopOrderUpdate.codecraft_reference_id = result.transactionId
-                }
-                if (isKingFlexyEnabled && result.transactionId) {
-                    shopOrderUpdate.kingflexy_reference = result.transactionId
-                }
-                if (isEazyDataEnabled && result.transactionId) {
-                    shopOrderUpdate.eazydata_reference = result.transactionId
-                }
-                if (isAgentPortalEnabled && result.transactionId) {
-                    shopOrderUpdate.agentportal_reference = result.transactionId
-                }
-                if (isNetPulseEnabled && result.transactionId) {
-                    shopOrderUpdate.netpulse_reference = result.transactionId
-                }
-                if (isHendyLinksEnabled && result.transactionId) {
-                    shopOrderUpdate.hendylinks_reference = result.transactionId
-                }
-                if (isBundlePortalEnabled && result.transactionId) {
-                    shopOrderUpdate.bundleportal_reference = result.transactionId
-                }
-                await supabaseAdmin.from('shop_orders').update(shopOrderUpdate).eq('id', order.shop_order_id)
+                await updateOrderWithColumnFallback(
+                    supabaseAdmin, 'shop_orders', { column: 'id', value: order.shop_order_id },
+                    shopOrderUpdate, optionalStampKeys(shopOrderUpdate), '[CronRefulfill]'
+                )
             }
 
             await syncShopOrderStatus(order.id, 'processing').catch(err =>
@@ -254,12 +192,15 @@ export async function GET(request: NextRequest) {
 
             fulfilled++
         } else {
-            console.error(`[CronRefulfill] ❌ ${order.id} failed via ${supplierLabel}: ${result.error}`)
+            const reason = outcome.status === 'failed' ? failureReason(outcome) : `no supplier (${outcome.status})`
+            console.error(`[CronRefulfill] ❌ ${order.id} failed — ${reason}`)
 
             await supabaseAdmin.from('mtn_fulfillment_tracking').insert({
                 order_id: order.id,
                 status: 'failed',
-                api_response: { ...result.apiResponse, note: `Cron Auto-Refulfill Failed via ${supplierLabel}`, error: result.error },
+                api_response: outcome.status === 'failed'
+                    ? { ...outcome.result.apiResponse, note: `Cron Auto-Refulfill Failed — ${reason}`, error: outcome.result.error, attempts: outcome.attempts }
+                    : { note: `Cron Auto-Refulfill Failed — ${reason}` },
             })
 
             // Revert to pending so the next cron run can retry

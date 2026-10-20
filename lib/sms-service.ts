@@ -195,6 +195,8 @@ export async function sendMoolreBulkSMS(params: {
     message: string
     recipients: string[]
     refPrefix: string
+    /** Per-recipient text, same order as `recipients` — for "Hi {name}!" broadcasts. */
+    messages?: string[]
 }): Promise<{ ok: boolean; error?: string }> {
     const apiKey = process.env.MOOLRE_API_KEY
     const senderId = (process.env.MOOLRE_SENDER_ID || 'ArhmsTech').trim()
@@ -209,7 +211,7 @@ export async function sendMoolreBulkSMS(params: {
         senderid: senderId,
         messages: params.recipients.map((recipient, i) => ({
             recipient,
-            message: params.message,
+            message: params.messages?.[i] ?? params.message,
             ref: `${params.refPrefix}_${i}`.slice(0, 60),
         })),
     }

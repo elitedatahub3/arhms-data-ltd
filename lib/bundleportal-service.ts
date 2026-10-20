@@ -1,4 +1,5 @@
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 import { normaliseSupplierStatus } from '@/lib/order-status-display'
 
 // BundlePortal Fulfillment Service — mirrors lib/hendylinks-service.ts architecture.
@@ -49,6 +50,7 @@ interface FulfillmentResponse {
     // True when BundlePortal answered `duplicate: true` — the order was already
     // placed by an earlier attempt and this call did not create a new one.
     alreadySubmitted?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -189,29 +191,29 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[BundlePortal] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!BUNDLEPORTAL_API_KEY) {
-        return { success: false, error: 'BundlePortal API key not configured' }
+        return { success: false, error: 'BundlePortal API key not configured', failureKind: 'refused' }
     }
 
     try {
         const resolvedNetwork = resolveNetwork(network)
         if (!resolvedNetwork) {
-            return { success: false, error: `Unsupported network: ${network}` }
+            return { success: false, error: `Unsupported network: ${network}`, failureKind: 'refused' }
         }
 
         const gigVolume = parseGigabytes(dataSize)
         if (gigVolume === null) {
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
 
         const orderRef = toOrderRef(orderId)
         if (!orderRef) {
             // Without our own order_id there is no idempotency and no way to match
             // the webhook back to this order. Refuse rather than place blind.
-            return { success: false, error: `Order id not usable as a BundlePortal order_id: ${orderId}` }
+            return { success: false, error: `Order id not usable as a BundlePortal order_id: ${orderId}`, failureKind: 'refused' }
         }
 
         const requestBody = {
@@ -257,7 +259,7 @@ export async function fulfillOrder(
 
         if (!result) {
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to BundlePortal' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to BundlePortal', failureKind: 'unknown' }
         }
 
         const { status: httpStatus, ok, data, rawText } = result
@@ -265,7 +267,7 @@ export async function fulfillOrder(
         if (data === null) {
             console.error(`[BundlePortal] Non-JSON response (HTTP ${httpStatus}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${httpStatus})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${httpStatus})`, failureKind: 'unknown' }
         }
 
         const code: string | undefined = data?.code
@@ -298,7 +300,7 @@ export async function fulfillOrder(
 
         if (httpStatus === 429 || httpStatus === 503 || (code && RETRY_LATER_CODES.has(code))) {
             console.warn(`[BundlePortal] Order ${orderId}: retry later (HTTP ${httpStatus}${code ? ` ${code}` : ''}, retry-after ${result.retryAfter ?? data?.retry_after ?? '?'}). Kept pending.`)
-            return { success: false, error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`, isRateLimited: true, apiResponse: sanitizeForLog(data) }
+            return { success: false, error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`, isRateLimited: true, apiResponse: sanitizeForLog(data), failureKind: 'refused' }
         }
 
         if (httpStatus === 402) {
@@ -321,78 +323,146 @@ export async function fulfillOrder(
             success: false,
             error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`,
             apiResponse: sanitizeForLog(data),
+            // order_id is idempotent at BundlePortal (a repeat comes back as
+            // duplicate: true, a success), so an explicit rejection below 500 is a
+            // definite no even after a mid-flight error. The retry-later 429/503
+            // branch above is likewise a refusal to create anything yet.
+            failureKind: httpStatus >= 500 ? 'unknown' : 'refused',
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[BundlePortal] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 
 // ─── Batch Status Read ─────────────────────────────────────────────────────────
+// Why a scan stopped. Only 'all_found', 'end_of_history' and 'reached_cutoff'
+// mean the history was read far enough back to call a missing order missing;
+// every other reason means the scan simply did not get there.
+export type ScanStopReason =
+    | 'all_found'
+    | 'end_of_history'
+    | 'reached_cutoff'
+    | 'page_limit'
+    | 'offset_ignored'
+    | 'time_budget'
+    | 'fetch_failed'
+    | 'circuit_open'
+    | 'no_key'
+
+export interface OrderStatusScan {
+    statuses: Map<string, { status: MappedStatus; raw: string }>
+    stopReason: ScanStopReason
+    pagesRead: number
+    // created_at of the oldest transaction read, i.e. how far back the scan reached.
+    oldestSeenAt: string | null
+}
+
 /**
  * Resolve the current status of many orders in one pass, keyed by the order_id
  * WE sent (orders.id or shop_orders.id).
  *
- * v2 has no per-order status call, so this pages get_transactions (newest first)
- * and builds an order_id → status map. Stops as soon as every wanted id is
- * accounted for, the page budget is spent, or the time budget runs out.
+ * v2 has no per-order status call and get_transactions takes no filters, only
+ * limit/offset, so this pages it (newest first) and builds an order_id → status
+ * map. Pass `scanBackTo` (the oldest backlog order's created_at) and it keeps
+ * paging until it reaches transactions older than that, instead of giving up
+ * after a fixed few pages — a fixed window let busy-day orders fall out of
+ * reach within hours and get reported as "not found" while still undelivered.
  */
 export async function fetchRecentOrderStatuses(opts: {
     wantedOrderIds: string[]
     budgetMs?: number
     maxPages?: number
     pageSize?: number
-}): Promise<Map<string, { status: MappedStatus; raw: string }>> {
-    const resolved = new Map<string, { status: MappedStatus; raw: string }>()
+    scanBackTo?: string
+}): Promise<OrderStatusScan> {
+    const statuses = new Map<string, { status: MappedStatus; raw: string }>()
+    const result = (stopReason: ScanStopReason, pagesRead = 0, oldestSeenAt: string | null = null): OrderStatusScan =>
+        ({ statuses, stopReason, pagesRead, oldestSeenAt })
 
-    if (!BUNDLEPORTAL_API_KEY || opts.wantedOrderIds.length === 0) return resolved
+    if (!BUNDLEPORTAL_API_KEY) return result('no_key')
+    if (opts.wantedOrderIds.length === 0) return result('all_found')
     if (!checkCircuit()) {
         console.warn('[BundlePortal] Circuit breaker is OPEN — skipping status scan.')
-        return resolved
+        return result('circuit_open')
     }
 
     const wanted = new Set(opts.wantedOrderIds)
     const budgetMs = opts.budgetMs ?? 30_000
-    const maxPages = opts.maxPages ?? 10
+    const maxPages = opts.maxPages ?? (opts.scanBackTo ? 30 : 10)
     const pageSize = opts.pageSize ?? 100
+    const cutoffMs = opts.scanBackTo ? Date.parse(opts.scanBackTo) : NaN
     const deadline = Date.now() + budgetMs
+
+    let stopReason: ScanStopReason = 'page_limit'
+    let pagesRead = 0
+    let oldestSeenMs = Infinity
+    let offset = 0
+    let prevFirstKey: string | null = null
 
     try {
         for (let page = 0; page < maxPages; page++) {
-            if (Date.now() >= deadline || wanted.size === resolved.size) break
+            if (statuses.size === wanted.size) { stopReason = 'all_found'; break }
+            if (Date.now() >= deadline) { stopReason = 'time_budget'; break }
 
             const { status, ok, data, rawText } = await callApi(
                 'get_transactions',
-                { limit: pageSize, offset: page * pageSize },
+                { limit: pageSize, offset },
                 Math.max(2_000, deadline - Date.now())
             )
             if (!ok || data?.success !== true) {
-                console.error(`[BundlePortal] get_transactions failed (HTTP ${status}):`, data?.message || rawText.slice(0, 300))
+                console.error(`[BundlePortal] get_transactions failed (HTTP ${status}) at offset ${offset}:`, data?.message || rawText.slice(0, 300))
+                stopReason = 'fetch_failed'
                 break
             }
+            pagesRead++
 
             const rows: any[] = Array.isArray(data?.data?.transactions) ? data.data.transactions : []
-            if (rows.length === 0) break
+            if (page === 0) {
+                console.log(`[BundlePortal] get_transactions page shape: rows=${rows.length} count=${data?.data?.count} limit=${data?.data?.limit} (asked ${pageSize})`)
+            }
+            if (rows.length === 0) { stopReason = 'end_of_history'; break }
+
+            // If the server ignores offset, every page is the same page — stop
+            // rather than burn the budget re-reading it.
+            const firstKey = `${rows[0]?.order_id}|${rows[0]?.created_at}`
+            if (firstKey === prevFirstKey) { stopReason = 'offset_ignored'; break }
+            prevFirstKey = firstKey
 
             for (const row of rows) {
+                const createdMs = Date.parse(String(row?.created_at ?? ''))
+                if (Number.isFinite(createdMs) && createdMs < oldestSeenMs) oldestSeenMs = createdMs
+
                 const id = row?.order_id === undefined || row?.order_id === null ? null : String(row.order_id)
-                if (!id || !wanted.has(id) || resolved.has(id)) continue
+                if (!id || !wanted.has(id) || statuses.has(id)) continue
                 const raw = String(row?.status ?? '')
-                resolved.set(id, { status: mapBundlePortalStatus(raw), raw })
+                statuses.set(id, { status: mapBundlePortalStatus(raw), raw })
             }
 
-            // A short page means we reached the end of the history.
-            if (rows.length < pageSize) break
+            if (statuses.size === wanted.size) { stopReason = 'all_found'; break }
+            if (Number.isFinite(cutoffMs) && oldestSeenMs < cutoffMs) { stopReason = 'reached_cutoff'; break }
+
+            // Advance by what actually came back, NOT by the limit we asked for: the
+            // server caps page size below 100, so a short page is NOT the end of the
+            // history. Treating it as the end meant only ever reading page one.
+            offset += rows.length
+            // `count` only settles it when it is plainly a grand total; if it merely
+            // equals this page's length, keep going — an empty page ends the scan.
+            const total = Number(data?.data?.count)
+            if (Number.isFinite(total) && total > rows.length && offset >= total) { stopReason = 'end_of_history'; break }
         }
         recordSuccess()
     } catch (err: any) {
         recordFailure()
+        stopReason = 'fetch_failed'
         console.error('[BundlePortal] Status scan failed:', err?.message)
     }
 
-    return resolved
+    const oldestSeenAt = Number.isFinite(oldestSeenMs) ? new Date(oldestSeenMs).toISOString() : null
+    console.log(`[BundlePortal] Status scan: ${statuses.size}/${wanted.size} found, ${pagesRead} page(s), stop=${stopReason}, reached back to ${oldestSeenAt ?? 'n/a'}`)
+    return result(stopReason, pagesRead, oldestSeenAt)
 }
 
 /**
@@ -403,8 +473,8 @@ export async function checkOrderStatus(orderId: string): Promise<StatusResponse>
     if (!checkCircuit()) return { success: false, status: 'pending', message: 'Service unavailable (circuit open)' }
     if (!BUNDLEPORTAL_API_KEY) return { success: false, status: 'pending', message: 'API key not configured' }
 
-    const resolved = await fetchRecentOrderStatuses({ wantedOrderIds: [orderId], budgetMs: 10_000 })
-    const hit = resolved.get(orderId)
+    const { statuses } = await fetchRecentOrderStatuses({ wantedOrderIds: [orderId], budgetMs: 10_000 })
+    const hit = statuses.get(orderId)
     if (!hit) return { success: false, status: 'pending', message: 'Order not found in recent history' }
 
     return { success: true, status: hit.status, message: hit.raw }
@@ -439,8 +509,12 @@ export function mapBundlePortalStatus(status: string): MappedStatus {
  * `allowed` holds approved numbers; `inFlight` those approved but blocked by an
  * unfinished order (can_order false). A number whose lookup failed is in
  * neither set and is reported in `failed`.
+ *
+ * Also consulted by the MTN registration gate (lib/mtn-registration-gate.ts): a
+ * number accepted here is let through even if Agent Portal has not enabled it. The
+ * gate passes its own per-call `timeoutMs`, tighter than the checker page's default.
  */
-export async function verifyMtnNumbers(msisdns: string[], concurrency = 5): Promise<{
+export async function verifyMtnNumbers(msisdns: string[], concurrency = 5, options?: { timeoutMs?: number }): Promise<{
     success: boolean
     allowed: Set<string>
     inFlight: Set<string>
@@ -458,7 +532,7 @@ export async function verifyMtnNumbers(msisdns: string[], concurrency = 5): Prom
         while (next < msisdns.length) {
             const number = msisdns[next++]
             try {
-                const { ok, data, status } = await callApi('verify_number', { network: 'mtn', recipient: normalizePhone(number) }, 10_000)
+                const { ok, data, status } = await callApi('verify_number', { network: 'mtn', recipient: normalizePhone(number) }, options?.timeoutMs ?? 10_000)
                 if (ok && data?.success === true && data?.data) {
                     if (data.data.allowed === true) {
                         allowed.add(number)

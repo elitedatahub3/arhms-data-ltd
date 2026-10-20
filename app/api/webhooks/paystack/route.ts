@@ -45,6 +45,17 @@ export async function POST(request: NextRequest) {
 
         const event = JSON.parse(body)
 
+        // Heartbeat. The webhook went silent for days in October 2026 (the URL in
+        // the Paystack dashboard changed) and nothing noticed, because the cron
+        // quietly settled everything 5-15 minutes late. The admin payments page
+        // reads this and warns when deliveries stop.
+        await (supabase.from('admin_settings') as any)
+            .upsert({
+                key: 'paystack_webhook_last_received',
+                value: { at: new Date().toISOString(), event: String(event?.event ?? ''), reference: String(event?.data?.reference ?? '') },
+            }, { onConflict: 'key' })
+            .then(() => {}, (e: any) => console.error('[PaystackWebhook] heartbeat write failed:', e?.message))
+
         if (event.event === 'charge.success') {
             const { reference, amount: paidAmountKobo } = event.data
             const metadata = event.data.metadata
@@ -71,6 +82,85 @@ export async function POST(request: NextRequest) {
             if (reference && reference.startsWith('USSD-')) {
                 const { ensureUssdSession } = await import('@/lib/ussd-reference')
                 const { logCallback } = await import('@/lib/hubtel-payment-log')
+
+                // A utility bill: the payment record was written before the charge and
+                // settles through the website's own bill payer. Recognised by its record,
+                // because a USSD- reference that fell through to the wallet top-up path
+                // would credit a wallet instead of paying the bill.
+                const { findUssdUtilityPayment, settleUssdUtilityOrder } = await import('@/lib/ussd-utility-settle')
+                const utilityPayment = await findUssdUtilityPayment(supabase, reference)
+                if (utilityPayment) {
+                    const result = await settleUssdUtilityOrder(supabase, {
+                        payment: utilityPayment,
+                        reference,
+                        amountPaid: paidAmountKobo / 100,
+                    })
+                    await logCallback({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        transactionId: event.data.id ? String(event.data.id) : null,
+                        payerMsisdn: metadata?.payer_msisdn ?? null,
+                        message: result.success ? null : `Utility settle failed: ${result.error}`,
+                        raw: event.data,
+                    })
+                    if (result.success) {
+                        await supabase.from('hubtel_sessions').delete().eq('session_id', utilityPayment.metadata?.session_id ?? '')
+                    }
+                    return NextResponse.json({ received: true })
+                }
+
+                // Airtime: the same shape as a bill — recorded before the charge, settled by the
+                // website's own airtime buyer, never by the wallet top-up path.
+                const { findUssdAirtimePayment, settleUssdAirtimeOrder } = await import('@/lib/ussd-airtime-settle')
+                const airtimePayment = await findUssdAirtimePayment(supabase, reference)
+                if (airtimePayment) {
+                    const result = await settleUssdAirtimeOrder(supabase, {
+                        payment: airtimePayment,
+                        reference,
+                        amountPaid: paidAmountKobo / 100,
+                    })
+                    await logCallback({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        transactionId: event.data.id ? String(event.data.id) : null,
+                        payerMsisdn: metadata?.payer_msisdn ?? null,
+                        message: result.success ? null : `Airtime settle failed: ${result.error}`,
+                        raw: event.data,
+                    })
+                    if (result.success) {
+                        await supabase.from('hubtel_sessions').delete().eq('session_id', airtimePayment.metadata?.session_id ?? '')
+                    }
+                    return NextResponse.json({ received: true })
+                }
+
+                // A registered user's order: credit their wallet, then buy from it.
+                // Recognised by its wallet_payments row, which outlives the session.
+                const { findMemberPayment, settleMemberUssdOrder } = await import('@/lib/ussd-member-settle')
+                const memberPayment = await findMemberPayment(supabase, reference)
+                if (memberPayment) {
+                    const result = await settleMemberUssdOrder(supabase, {
+                        payment: memberPayment,
+                        reference,
+                        amountPaid: paidAmountKobo / 100,
+                    })
+                    await logCallback({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        transactionId: event.data.id ? String(event.data.id) : null,
+                        payerMsisdn: metadata?.payer_msisdn ?? null,
+                        message: result.creditedOnly
+                            ? `Credited to wallet; purchase failed: ${result.error}`
+                            : result.success ? null : `Member settle failed: ${result.error}`,
+                        raw: event.data,
+                    })
+                    if (result.success) {
+                        await supabase.from('hubtel_sessions').delete().eq('session_id', memberPayment.metadata?.session_id ?? '')
+                    }
+                    return NextResponse.json({ received: true })
+                }
 
                 // Paystack echoes back the metadata the charge was created with, so
                 // it tells us which session it is settling. No mapping store needed —
@@ -101,19 +191,14 @@ export async function POST(request: NextRequest) {
                 const amountPaid = paidAmountKobo / 100
                 const deferredWork: Array<() => Promise<void>> = []
 
-                const result = resolved.orderType === 'data'
-                    ? await (await import('@/lib/ussd-data-fulfillment')).fulfillUSSDDataBySession({
-                        sessionId: resolved.sessionId,
-                        referenceCode: reference,
-                        amountPaid,
-                        deferredWork,
-                    })
-                    : await (await import('@/lib/ussd-rc-fulfillment')).fulfillUSSDRCBySession({
-                        sessionId: resolved.sessionId,
-                        referenceCode: reference,
-                        amountPaid,
-                        deferredWork,
-                    })
+                const { fulfillUssdSession } = await import('@/lib/ussd-settle')
+                const result = await fulfillUssdSession({
+                    orderType: resolved.orderType,
+                    sessionId: resolved.sessionId,
+                    referenceCode: reference,
+                    amountPaid,
+                    deferredWork,
+                })
 
                 await logCallback({
                     clientReference: reference,
@@ -140,13 +225,17 @@ export async function POST(request: NextRequest) {
             // They are NOT stored in wallet_payments, so we must handle them separately
             // before the DB lookup to avoid "Payment not found" errors.
             if (reference && reference.startsWith('SHOP-')) {
-                // Hosted checkout echoes back the whole metadata object we sent at
-                // init. The MoMo rail deliberately sends a compact payload instead —
-                // ids and slugs, no display text — so fall back to the copy in Redis,
-                // exactly as /api/shop/verify and the PaySwitch sweep already do.
-                let shopMetadata = metadata
-                if (!shopMetadata?.shop_id) {
-                    shopMetadata = await getShopMeta<any>(reference)
+                // The stored copy (Redis, then shop_payment_meta) is the full order and
+                // always wins. The MoMo rail sends Paystack only a compact payload —
+                // {kind, shop_id, shop_slug, ref} — which HAS shop_id but no package,
+                // network or price. Falling back only when shop_id was missing let that
+                // compact payload through, every MoMo storefront order failed here with
+                // "Price configuration missing", and only a buyer still polling with the
+                // tab open ever got their order. The echoed metadata is used only when
+                // nothing is stored and it is a full order (hosted checkout sends one).
+                let shopMetadata = await getShopMeta<any>(reference)
+                if (!shopMetadata?.shop_id && metadata?.shop_id && (metadata.package_id || metadata.airtime_amount)) {
+                    shopMetadata = metadata
                 }
 
                 if (!shopMetadata?.shop_id) {
@@ -166,13 +255,29 @@ export async function POST(request: NextRequest) {
 
                 const { processShopOrder } = await import('@/lib/shop-order-processor')
                 console.log('[PaystackWebhook] Routing shop order payment')
-                await processShopOrder(
+                const result = await processShopOrder(
                     reference,
                     shopMetadata,
                     paidAmountKobo,
                     shopMetadata.slug ?? shopMetadata.shop_slug
                 )
-                await clearPaystackMomoPending(reference)
+
+                if (result.success) {
+                    await clearPaystackMomoPending(reference)
+                } else {
+                    // Paid, no order. Keep the marker and the ledger row pending so the
+                    // reconciliation cron retries; still 200 so Paystack does not
+                    // redeliver into the same failure. The cron owns retries now.
+                    console.error('[PaystackWebhook] SHOP- paid but order not created:', reference, result.error)
+                    const { logCallback } = await import('@/lib/hubtel-payment-log')
+                    await logCallback({
+                        clientReference: reference,
+                        status: 'failed',
+                        amount: paidAmountKobo / 100,
+                        message: `Paid but order not created yet: ${result.error ?? 'unknown error'}. Will retry.`,
+                        raw: event.data,
+                    })
+                }
                 return NextResponse.json({ received: true })
             }
 

@@ -1,4 +1,5 @@
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 
 // Agent Portal GH Fulfillment Service — mirrors lib/eazydata-service.ts architecture.
 // API Docs: https://api.agentportalgh.com  (see "Agent API" reference)
@@ -48,6 +49,7 @@ interface FulfillmentResponse {
     // account yet (whitelist gate). Agent Portal auto-submits it to MTN for enabling
     // (up to 2 weeks); the order is kept pending and the auto-refulfill cron retries it later.
     whitelistPending?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -127,35 +129,35 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[AgentPortal] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!AGENTPORTAL_API_KEY) {
-        return { success: false, error: 'AgentPortal API key not configured' }
+        return { success: false, error: 'AgentPortal API key not configured', failureKind: 'refused' }
     }
 
     try {
         // ── Resolve network → service + GB window ───────────────────────────
         const svc = resolveService(network)
         if (!svc) {
-            return { success: false, error: `Unsupported network: ${network}` }
+            return { success: false, error: `Unsupported network: ${network}`, failureKind: 'refused' }
         }
 
         // ── Parse whole-GB volume (decimals rejected by the supplier) ───────
         const sizeMatch = dataSize.match(/[\d.]+/)
         if (!sizeMatch) {
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
         const gigVolume = Number(sizeMatch[0])
         if (isNaN(gigVolume) || gigVolume <= 0) {
-            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}` }
+            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}`, failureKind: 'refused' }
         }
         if (!Number.isInteger(gigVolume)) {
             // Agent Portal only accepts whole-GB bundles.
-            return { success: false, error: `AgentPortal accepts whole-GB bundles only (got ${gigVolume}GB for ${network})` }
+            return { success: false, error: `AgentPortal accepts whole-GB bundles only (got ${gigVolume}GB for ${network})`, failureKind: 'refused' }
         }
         if (gigVolume < svc.min || gigVolume > svc.max) {
-            return { success: false, error: `${svc.service} accepts ${svc.min}–${svc.max} GB — ${gigVolume}GB is out of range` }
+            return { success: false, error: `${svc.service} accepts ${svc.min}–${svc.max} GB — ${gigVolume}GB is out of range`, failureKind: 'refused' }
         }
 
         // ── Phone Normalization → 0XXXXXXXXX (10-digit Ghana) ───────────────
@@ -204,7 +206,7 @@ export async function fulfillOrder(
 
                 if (response.status === 429) {
                     console.warn(`[AgentPortal] Rate limited (HTTP 429). Order ${orderId} kept pending.`)
-                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true }
+                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true, failureKind: lastError ? 'unknown' : 'refused' }
                 }
 
                 break
@@ -226,7 +228,7 @@ export async function fulfillOrder(
 
         if (!response) {
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to AgentPortal' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to AgentPortal', failureKind: 'unknown' }
         }
 
         // ── Parse JSON ─────────────────────────────────────────────────────
@@ -237,7 +239,7 @@ export async function fulfillOrder(
         } catch (e) {
             console.error(`[AgentPortal] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})`, failureKind: 'unknown' }
         }
 
         console.log(`[AgentPortal] API response:`, { status: response.status, added: data?.added })
@@ -263,7 +265,9 @@ export async function fulfillOrder(
             // (which triggers the customer verification SMS) for MTN orders.
             const isMtn = svc.service === 'mtn'
             console.warn(`[AgentPortal] Order ${orderId} not enqueued (added: 0): ${reason}.${isMtn ? ' Number auto-submitted to MTN for verification (up to 2 weeks).' : ''} Kept pending.`)
-            return { success: false, error: reason, whitelistPending: isMtn, apiResponse: sanitizeForLog(data) }
+            // added: 0 means nothing was queued and nothing charged — a definite refusal,
+            // so a fallback supplier may take the order instead of it waiting on MTN.
+            return { success: false, error: reason, whitelistPending: isMtn, apiResponse: sanitizeForLog(data), failureKind: lastError ? 'unknown' : 'refused' }
         }
 
         // ── Error responses: { error: "message" } ───────────────────────────
@@ -272,13 +276,13 @@ export async function fulfillOrder(
         // 402 insufficient balance — supplier is up, don't trip the breaker.
         if (response.status === 402) {
             console.error(`[AgentPortal] Order ${orderId}: insufficient wallet balance — top up AgentPortal. (${errMsg})`)
-            return { success: false, error: errMsg, apiResponse: sanitizeForLog(data) }
+            return { success: false, error: errMsg, apiResponse: sanitizeForLog(data), failureKind: lastError ? 'unknown' : 'refused' }
         }
 
         // 401 auth error — misconfigured key, supplier is up.
         if (response.status === 401) {
             console.error(`[AgentPortal] Order ${orderId}: authentication error — check AGENTPORTAL_API_KEY. (${errMsg})`)
-            return { success: false, error: errMsg, apiResponse: sanitizeForLog(data) }
+            return { success: false, error: errMsg, apiResponse: sanitizeForLog(data), failureKind: lastError ? 'unknown' : 'refused' }
         }
 
         console.warn(`[AgentPortal] Order ${orderId} not fulfilled: ${errMsg} (HTTP ${response.status}). Kept pending.`)
@@ -289,12 +293,13 @@ export async function fulfillOrder(
             success: false,
             error: errMsg,
             apiResponse: sanitizeForLog(data),
+            failureKind: response.status >= 500 || lastError ? 'unknown' : 'refused',
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[AgentPortal] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 

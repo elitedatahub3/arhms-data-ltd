@@ -22,13 +22,21 @@
  * requires user_id and wallet_id NOT NULL, and a USSD caller has neither.
  */
 
+export type UssdOrderType = 'data' | 'rc' | 'afa' | 'util' | 'air'
+
 export interface ResolvedUssdOrder {
     sessionId: string
-    orderType: 'data' | 'rc'
+    orderType: UssdOrderType
 }
 
-function normaliseOrderType(value: unknown): 'data' | 'rc' {
-    return String(value ?? '') === 'data' ? 'data' : 'rc'
+/**
+ * 'rc' stays the default for anything unrecognised: sessions written before AFA
+ * existed carry 'data' or 'rc' and nothing else, and checkers were the original
+ * catch-all.
+ */
+function normaliseOrderType(value: unknown): UssdOrderType {
+    const v = String(value ?? '')
+    return v === 'data' ? 'data' : v === 'afa' ? 'afa' : v === 'util' ? 'util' : v === 'air' ? 'air' : 'rc'
 }
 
 /**
@@ -112,8 +120,8 @@ export async function resolveByReference(
  * with the existing prefixes (SHOP-, RC-, DATA-, ...) — note that `USSD-RC-` does
  * NOT match `startsWith('RC-')`, which is what keeps voucher routing intact.
  */
-export function buildUssdReference(orderType: 'data' | 'rc'): string {
-    const kind = orderType === 'data' ? 'DATA' : 'RC'
+export function buildUssdReference(orderType: UssdOrderType): string {
+    const kind = orderType === 'data' ? 'DATA' : orderType === 'afa' ? 'AFA' : orderType === 'util' ? 'UTIL' : orderType === 'air' ? 'AIR' : 'RC'
     const stamp = Date.now().toString(36).toUpperCase()
     // crypto.randomUUID is available on the edge runtime; the slice keeps the
     // reference comfortably inside Paystack's length limit.

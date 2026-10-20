@@ -5,7 +5,7 @@ import { checkPaymentStatus } from '@/lib/moolre-payment-service'
 import { verifyTransaction } from '@/lib/paystack-momo-service'
 import { isPaystackMomoPending, clearPaystackMomoPending } from '@/lib/paystack-momo-checkout'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { creditShopRcProfit } from '@/lib/shop-service'
+import { creditOrderProfit } from '@/lib/shop-profit-credit'
 
 const redis = Redis.fromEnv()
 
@@ -175,14 +175,21 @@ export async function GET(request: NextRequest) {
         // same order when a payment webhook beats this poll. The helper is
         // idempotent on the reference, so whichever path arrives second is a no-op
         // instead of a second credit.
-        const shopProfit = Number(meta.shop_markup) || 0
-        if (shopProfit > 0 && meta.owner_id) {
-            await creditShopRcProfit({
-                ownerId: meta.owner_id,
-                amount: shopProfit,
-                description: `RC Voucher sale: ${meta.rc_type_name} x${meta.quantity}`,
-                reference: ref,
-            })
+        // The legs are read off the order row, not the cached meta: the row carries
+        // the upline split (lib/shop-profit.ts) and is what the webhook path pays
+        // from, so both paths pay identical legs whichever wins the race.
+        const { data: paidOrder } = await db
+            .from('results_checker_orders')
+            .select('*')
+            .eq('id', meta.order_id)
+            .maybeSingle()
+        if (paidOrder?.shop_id) {
+            await creditOrderProfit(
+                db,
+                paidOrder,
+                ref,
+                `RC Voucher sale: ${meta.rc_type_name} x${meta.quantity}`
+            )
         }
 
         // 8. Notify admin of RC sale

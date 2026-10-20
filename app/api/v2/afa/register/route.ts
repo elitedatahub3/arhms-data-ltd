@@ -6,7 +6,7 @@ import {
 import { generateReferenceCode } from '@/lib/utils'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { validateAfaFormData } from '@/lib/afa-validation'
-import { resolveAfaCostPrice } from '@/lib/afa-pricing'
+import { resolveAfaApiPrice } from '@/lib/afa-pricing'
 import { isDuplicateReferenceError } from '@/lib/api-v2-networks'
 
 /**
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
     // Price is always resolved server-side, from the same admin_settings rows the
     // dashboard reads. Fails closed — a missing row is a config error, never a free
     // registration.
-    const price = await resolveAfaCostPrice(supabase, userRole)
+    const price = await resolveAfaApiPrice(supabase, userRole)
     if (!price.ok) {
         logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'POST', statusCode: 503, responseTimeMs: Date.now() - startTime, ip, errorMessage: 'AFA pricing not configured' })
         return apiError(503, price.error)

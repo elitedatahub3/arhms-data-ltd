@@ -263,8 +263,17 @@ export async function POST(request: NextRequest) {
 
             // 1. Beneficiary SMS — only sent for standard airtime (not mashup)
             if (resolvedType !== 'mashup') {
-                await sendAirtimeBeneficiarySMS(cleanPhone, airtimeAmount)
-                    .catch((err: any) => console.error('[Airtime] Beneficiary SMS failed:', err))
+                // Under the buyer's own sender ID when they switched that on in
+                // the SMS Platform; the house message otherwise.
+                const { sendPlatformOrderSms } = await import('@/lib/sms/platform-order-sms')
+                await sendPlatformOrderSms({
+                    userId,
+                    isShopOrder: false,
+                    recipient: cleanPhone,
+                    body: `Your order for GH ${airtimeAmount.toFixed(2)} airtime has been received and is being processed. You will receive the confirmation sms very soon.`,
+                    reference: `airtime:${order.id}:received`,
+                    houseSend: () => sendAirtimeBeneficiarySMS(cleanPhone, airtimeAmount),
+                })
             }
 
             // 2. Admin email alert

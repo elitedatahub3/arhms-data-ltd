@@ -3,7 +3,6 @@ import { getCookieDomain } from '@/lib/supabase'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
-import { claimReferral, REFERRAL_COOKIE } from '@/lib/referrals'
 
 export async function GET(request: NextRequest) {
     const requestUrl = new URL(request.url)
@@ -96,27 +95,6 @@ export async function GET(request: NextRequest) {
             if (existingUser.phone_number && existingUser.phone_number !== '') {
                 targetPath = '/dashboard'
             }
-        }
-
-        // === REFERRAL ATTRIBUTION (the OAuth leg) ===
-        // Google drops query params entirely, so the code arrives in the cookie the
-        // middleware stashed on link click. This is the leg a handle_new_user()-based
-        // design would silently lose. Idempotent, and wrapped so a referral problem
-        // can never break a sign-in.
-        try {
-            const refCode = cookieStore.get(REFERRAL_COOKIE)?.value
-            if (refCode) {
-                await claimReferral({
-                    db: adminClient,
-                    userId: data.user.id,
-                    code: refCode,
-                    source: 'oauth',
-                    ip: request.headers.get('x-forwarded-for'),
-                })
-                cookieStore.set(REFERRAL_COOKIE, '', { path: '/', maxAge: 0 })
-            }
-        } catch (refErr) {
-            console.error('[OAuthCallback] Referral claim failed:', refErr)
         }
 
         // Use a 200 HTML meta-refresh instead of 302 redirect.

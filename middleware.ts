@@ -239,11 +239,26 @@ export async function middleware(request: NextRequest) {
         return NextResponse.next({ request: { headers: request.headers } })
     }
 
+    // === USSD INTERNAL BYPASS ===
+    // /api/ussd/* is called only by the edge USSD route, server to server, and every
+    // handler there checks the shared x-ussd-internal token itself. The session lookup and
+    // per-IP rate limit below would only throttle the one caller that must never be throttled.
+    if (pathname.startsWith('/api/ussd/')) {
+        return NextResponse.next({ request: { headers: request.headers } })
+    }
+
+    // === PAYSTACK WEBHOOK BYPASS ===
+    // Server-to-server and signed: the route verifies x-paystack-signature itself,
+    // so the session lookup, CORS and rate limiting below add only latency and
+    // ways to fail. A payment confirmation must reach its handler every time.
+    if (pathname === '/api/webhooks/paystack') {
+        return NextResponse.next({ request: { headers: request.headers } })
+    }
+
     // === RETIRED: MARKETPLACE SUBDOMAIN ===
     // marketplace.arhmsgh.com used to serve the classifieds app. That product was removed,
     // so the whole subdomain now sends visitors to the main site instead of a dead page.
-    // The query string is kept so a ?ref= referral link still attributes: the main domain's
-    // own run of this middleware captures it. /auth/* keeps its old behaviour of going to
+    // /auth/* keeps its old behaviour of going to
     // the same path on the main domain, so an old login link still lands somewhere useful.
     if (isMarketplace) {
         const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io'
@@ -457,10 +472,15 @@ export async function middleware(request: NextRequest) {
             // same per-IP ceiling as the data-bundle checkout.
             limiter = rateLimiters?.shopInitialize
             identifier = ip
-        } else if (pathname === '/api/webhooks/paystack' || pathname === '/api/webhooks/payswitch') {
+        } else if (pathname === '/api/webhooks/payswitch') {
             // PaySwitch callbacks carry no signature, so the route re-queries the
             // gateway before crediting. Rate limiting keeps a flood of forged
             // callbacks from turning into a flood of outbound status checks.
+            //
+            // Paystack is deliberately NOT limited here. Its webhooks are signed (a
+            // forged one costs one HMAC and a 401), and every delivery comes from a
+            // handful of Paystack IPs: 20/min per IP is a busy lunch hour, after which
+            // real payment confirmations were being answered 429.
             limiter = rateLimiters?.webhook
             identifier = ip
         } else if (pathname === '/api/airtime/create') {

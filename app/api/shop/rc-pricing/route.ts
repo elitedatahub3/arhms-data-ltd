@@ -2,6 +2,7 @@
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { createServerClient } from '@/lib/supabase'
 import { cookies } from 'next/headers'
+import { MAX_SHOP_PROFIT_GHS, ownerCostPrice } from '@/lib/shop-price-limits'
 
 export async function POST(request: NextRequest) {
     try {
@@ -31,15 +32,8 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Shop not found or unauthorized' }, { status: 403 })
         }
 
-        // 3. Fetch caller's role for max profit enforcement
-        const { data: dbUser } = await supabase
-            .from('users')
-            .select('role')
-            .eq('id', user.id)
-            .single()
-
-        const ownerRole = (dbUser as any)?.role || 'customer'
-        const maxProfit = ownerRole === 'agent' ? 10 : 5
+        // 3. Owners price freely above cost — the limit only catches typos
+        const maxProfit = MAX_SHOP_PROFIT_GHS
 
         // 4. Use service-role client to fetch cost prices and upsert (bypasses RLS)
         const db = createServerClient() as any
@@ -60,16 +54,26 @@ export async function POST(request: NextRequest) {
             )
         }
 
-        // Validate each item against cost price
+        // Validate each item against what the owner pays: their role price, the
+        // same cost the sale is settled against (lib/shop-profit.ts). It used to
+        // be the platform's cost_price, which let an owner price below their own
+        // role price and keep the platform's margin.
         if (items.length > 0) {
             const typeIds = items.map((i: any) => i.rcTypeId)
-            const { data: types } = await db
-                .from('results_checker_types')
-                .select('id, cost_price')
-                .in('id', typeIds)
+            const [{ data: types }, { data: owner }] = await Promise.all([
+                db.from('results_checker_types')
+                    .select('id, customer_price, agent_price, dealer_price')
+                    .in('id', typeIds),
+                db.from('users').select('role').eq('id', user.id).maybeSingle(),
+            ])
 
             const costMap: Record<string, number> = {}
-            for (const t of (types || [])) costMap[t.id] = parseFloat(t.cost_price)
+            for (const t of (types || [])) {
+                costMap[t.id] = ownerCostPrice(
+                    { price: t.customer_price, agent_price: t.agent_price, dealer_price: t.dealer_price },
+                    (owner as any)?.role
+                )
+            }
 
             for (const item of items) {
                 const cost = costMap[item.rcTypeId]
@@ -86,7 +90,7 @@ export async function POST(request: NextRequest) {
                 }
                 if (profit > maxProfit) {
                     return NextResponse.json({
-                        error: `Profit cannot exceed GHS ${maxProfit.toFixed(2)} per voucher`
+                        error: `A profit over GHS ${maxProfit.toFixed(2)} per voucher looks like a typo — check the price`
                     }, { status: 400 })
                 }
             }

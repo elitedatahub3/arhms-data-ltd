@@ -33,6 +33,11 @@
  * So do not "restore consistency" by wiring this into an API v1 route. That exemption
  * is the requirement; scripts/test-mtn-gate-strict.ts asserts the whole import graph.
  *
+ * A number counts as registered if Agent Portal has enabled it OR BundlePortal's
+ * verify_number accepts it. Both are asked in parallel; BundlePortal can only ever turn
+ * a refusal into a pass, never the reverse, and its answers are not cached (the cache's
+ * positives are permanent and mean "Agent Portal enabled").
+ *
  * Three things worth knowing before you change anything here:
  *
  *   1. Checking is NOT read-only. verifyMtnWhitelist() auto-submits any number that
@@ -47,14 +52,26 @@
  *      the backstop it always was. The exception is checkMtnRegistrationStrict(), used
  *      only by USSD, which fails CLOSED; see the note on that function for why.
  *
- *   3. It is off by default, and that toggle is the ONLY thing controlling it.
- *      admin_settings.mtn_registration_gate_enabled runs the check regardless of which
- *      supplier currently fulfils MTN — see loadGateSettings for why that is a
- *      deliberate choice with a real cost attached.
+ *   3. It is off by default, and two toggles are the ONLY thing controlling it:
+ *      mtn_registration_gate_shop_enabled (shop storefronts) and
+ *      mtn_registration_gate_site_enabled (the main site: dashboard + USSD). Every
+ *      caller names its surface, so one can be on while the other is off. Either runs
+ *      the check regardless of which supplier currently fulfils MTN — see
+ *      loadGateSettings for why that is a deliberate choice with a real cost attached.
  */
 import { verifyMtnWhitelist } from '@/lib/agentportal-service'
+import { verifyMtnNumbers as verifyBundlePortalNumbers } from '@/lib/bundleportal-service'
 import { validateGhanaianPhone } from '@/lib/phone-validation'
 import { redactIdentifier } from '@/lib/safe-log'
+import { ALL_MTN_GATE_KEYS, resolveGateEnabled, type GateSurface } from '@/lib/mtn-gate-keys'
+
+export {
+    ALL_MTN_GATE_KEYS,
+    LEGACY_MTN_GATE_KEY,
+    MTN_GATE_KEYS,
+    resolveGateEnabled,
+    type GateSurface,
+} from '@/lib/mtn-gate-keys'
 
 /**
  * Only plain MTN data orders are gated.
@@ -76,13 +93,25 @@ const SETTINGS_TTL_MS = 60 * 1000
 const UPSTREAM_TIMEOUT_MS = 4000
 
 /**
- * Upstream budget on the USSD path — a quarter of the web one, deliberately.
+ * Upstream budgets on the USSD path — one per server, because they are not alike.
  *
- * This check sits inside a live keypress on a step that previously did no network I/O
- * at all. Hubtel drops the session if we take too long, and a dropped session reads to
- * the caller as a broken service. Better to answer "cannot verify" fast than to hang.
+ * This check sits inside a live keypress, and Hubtel drops the session at about 10s.
+ * But USSD also fails CLOSED, so a server that misses its budget costs a sale outright.
+ * A single shared 1.5s budget did exactly that: BundlePortal (Server 2) is one HTTP call
+ * per number and routinely the slower of the two, so its "yes" was being thrown away
+ * and callers whose numbers were registered there were refused.
+ *
+ * The two run in parallel and the strict path returns on the first "registered", so the
+ * worst case is the larger of these, not their sum — still well inside Hubtel's window.
  */
-const USSD_UPSTREAM_TIMEOUT_MS = 1500
+const USSD_AGENTPORTAL_TIMEOUT_MS = 2500
+const USSD_BUNDLEPORTAL_TIMEOUT_MS = 4000
+
+/**
+ * BundlePortal checks one number per call. Higher than its checker page's 5 so a
+ * bulk paste stays bounded; only numbers not already known registered reach it.
+ */
+const BUNDLEPORTAL_CONCURRENCY = 10
 
 /** The single wait time quoted to buyers. Change it here and everywhere follows. */
 export const REGISTRATION_WAIT_TEXT = 'up to 2 weeks'
@@ -152,10 +181,7 @@ export function registrationRequiredBody(phoneNumbers: string[], total?: number)
 
 // ─── Admin settings (memoized) ──────────────────────────────────────────────────
 
-interface GateSettings {
-    /** The one and only switch. Nothing else gates this. */
-    enabled: boolean
-}
+type GateSettings = Record<GateSurface, boolean>
 
 let settingsCache: { value: GateSettings; expiresAt: number } | null = null
 
@@ -178,18 +204,23 @@ let settingsCache: { value: GateSettings; expiresAt: number } | null = null
 async function loadGateSettings(supabase: any): Promise<GateSettings> {
     if (settingsCache && settingsCache.expiresAt > Date.now()) return settingsCache.value
 
-    const disabled: GateSettings = { enabled: false }
+    const disabled: GateSettings = { shop: false, site: false }
 
     try {
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('admin_settings')
             .select('key, value')
-            .eq('key', 'mtn_registration_gate_enabled')
+            .in('key', ALL_MTN_GATE_KEYS)
+        if (error) throw error
 
-        const row = (data || [])[0]
+        const raw: Record<string, unknown> = {}
+        for (const row of data || []) raw[row.key] = row.value
 
-        // Absent row means off. Deploying this must not change buyer-facing behaviour.
-        const value: GateSettings = { enabled: String(row?.value) === 'true' }
+        // Absent rows mean off. Deploying this must not change buyer-facing behaviour.
+        const value: GateSettings = {
+            shop: resolveGateEnabled(raw, 'shop'),
+            site: resolveGateEnabled(raw, 'site'),
+        }
 
         settingsCache = { value, expiresAt: Date.now() + SETTINGS_TTL_MS }
         return value
@@ -303,16 +334,37 @@ function collectCandidates(
  *
  * Shared by both entry points so the caching rules, the staleness window and the
  * auto-submit side effect cannot drift between the web path and the USSD path. The
- * only thing callers vary is how long they will wait upstream.
+ * only things callers vary are how long they will wait on each server, and whether
+ * a single "registered" is enough to stop waiting (settleOnFirstPass).
  *
  * Numbers we could not resolve come back as 'unknown'. This function does not decide
  * what that means — the caller does, and that is the whole difference between the
  * fail-open and fail-closed entry points below.
  */
+interface ResolveOptions {
+    agentPortalMs: number
+    bundlePortalMs: number
+    /**
+     * Return as soon as either server says every candidate is registered, instead of
+     * waiting for the other one too. Only the strict path sets it — it is used for a
+     * single number, where one "yes" is the whole answer.
+     *
+     * A "no" or a failure never ends the wait early: the other server can still turn
+     * it into a pass, which is the only direction BundlePortal is allowed to move it.
+     *
+     * Accepted cost: when BundlePortal answers yes first, the Agent Portal result may
+     * arrive after we have returned, and its cache write can be lost. The Agent Portal
+     * request itself has already gone out, so MTN still receives the auto-submit.
+     */
+    settleOnFirstPass?: boolean
+    /** Called with each server's elapsed time and outcome — strict path logging. */
+    onServerResult?: (server: 'agentportal' | 'bundleportal', ms: number, outcome: string) => void
+}
+
 async function resolveRegistrationStatuses(
     supabase: any,
     candidates: string[],
-    timeoutMs: number
+    opts: ResolveOptions
 ): Promise<Map<string, RegistrationStatus>> {
     const statusByNumber = new Map<string, RegistrationStatus>()
     if (candidates.length === 0) return statusByNumber
@@ -333,24 +385,73 @@ async function resolveRegistrationStatuses(
         }
     }
 
-    if (needsUpstream.length > 0) {
-        const { success, allowed, error } = await verifyMtnWhitelist(needsUpstream, { timeoutMs })
+    // BundlePortal is asked about every number not already known registered — including
+    // cached negatives, since its answers are never cached — alongside Agent Portal
+    // rather than after it, so the wait is the slower of the two, not their sum.
+    const needsBundlePortal = candidates.filter(n => statusByNumber.get(n) !== 'registered')
+    if (needsUpstream.length === 0 && needsBundlePortal.length === 0) return statusByNumber
+
+    const allRegistered = () => candidates.every(n => statusByNumber.get(n) === 'registered')
+    let signalPass: () => void = () => {}
+    const firstPass = new Promise<void>(resolve => { signalPass = resolve })
+    const afterAnswer = () => { if (opts.settleOnFirstPass && allRegistered()) signalPass() }
+
+    // Each server's answer is applied the moment it lands, so whichever is faster can
+    // settle a settleOnFirstPass caller without waiting on the other.
+    const agentPortalDone = needsUpstream.length === 0 ? Promise.resolve() : (async () => {
+        const started = Date.now()
+        const { success, allowed, error } = await verifyMtnWhitelist(needsUpstream, { timeoutMs: opts.agentPortalMs })
+            .catch((err: any) => ({ success: false, allowed: new Set<string>(), error: err?.message }))
 
         if (!success) {
             console.error('[MtnGate] Verify failed for', needsUpstream.length, 'number(s):', error)
-            for (const number of needsUpstream) statusByNumber.set(number, 'unknown')
-        } else {
-            const results = needsUpstream.map(number => ({
-                phoneNumber: number,
-                isRegistered: allowed.has(number),
-            }))
-            for (const { phoneNumber, isRegistered } of results) {
-                statusByNumber.set(phoneNumber, isRegistered ? 'registered' : 'unregistered')
+            opts.onServerResult?.('agentportal', Date.now() - started, `failed: ${error}`)
+            // Never downgrade: BundlePortal may already have passed this number.
+            for (const number of needsUpstream) {
+                if (statusByNumber.get(number) !== 'registered') statusByNumber.set(number, 'unknown')
             }
-            await recordRegistrationResults(supabase, results)
+            return
         }
-    }
 
+        const results = needsUpstream.map(number => ({
+            phoneNumber: number,
+            isRegistered: allowed.has(number),
+        }))
+        for (const { phoneNumber, isRegistered } of results) {
+            if (isRegistered) statusByNumber.set(phoneNumber, 'registered')
+            else if (statusByNumber.get(phoneNumber) !== 'registered') statusByNumber.set(phoneNumber, 'unregistered')
+        }
+        opts.onServerResult?.('agentportal', Date.now() - started,
+            results.every(r => r.isRegistered) ? 'registered' : 'unregistered')
+        afterAnswer()
+        // The cache records Agent Portal's own answer — not the merged one — because
+        // its positives mean "Agent Portal enabled".
+        await recordRegistrationResults(supabase, results)
+    })()
+
+    // BundlePortal can only turn a refusal or an unknown into a pass. If it failed or
+    // has no key, nothing changes — so the fail-open/fail-closed rules still hold.
+    const bundlePortalDone = needsBundlePortal.length === 0 ? Promise.resolve() : (async () => {
+        const started = Date.now()
+        const result = await verifyBundlePortalNumbers(
+            needsBundlePortal, BUNDLEPORTAL_CONCURRENCY, { timeoutMs: opts.bundlePortalMs }
+        ).catch((error: any) => ({ success: false, allowed: new Set<string>(), error: error?.message }))
+
+        if (!result.success) {
+            console.error('[MtnGate] BundlePortal verify failed:', result.error)
+        }
+        for (const number of result.allowed) statusByNumber.set(number, 'registered')
+        opts.onServerResult?.('bundleportal', Date.now() - started, !result.success
+            ? `failed: ${result.error}`
+            : (result.allowed.size === needsBundlePortal.length ? 'registered' : 'unregistered'))
+        afterAnswer()
+    })()
+
+    // Caught here, not left to the race: after an early return the losing server's
+    // promise is unobserved, and an unhandled rejection would crash the instance.
+    const settled = Promise.all([agentPortalDone, bundlePortalDone].map(p =>
+        p.catch((error: any) => console.error('[MtnGate] Server check threw:', error?.message))))
+    await Promise.race([firstPass, settled])
     return statusByNumber
 }
 
@@ -363,12 +464,13 @@ async function resolveRegistrationStatuses(
  */
 export async function checkMtnRegistrationBatch(
     supabase: any,
-    entries: Array<{ phoneNumber: string; packageNetwork: string }>
+    entries: Array<{ phoneNumber: string; packageNetwork: string }>,
+    surface: GateSurface
 ): Promise<BatchGateResult> {
     const empty: BatchGateResult = { unregistered: [], statusByNumber: new Map() }
 
     const settings = await loadGateSettings(supabase)
-    if (!settings.enabled) return empty
+    if (!settings[surface]) return empty
 
     const candidates = collectCandidates(entries)
     if (candidates.size === 0) return empty
@@ -376,7 +478,7 @@ export async function checkMtnRegistrationBatch(
     const statusByNumber = await resolveRegistrationStatuses(
         supabase,
         Array.from(candidates),
-        UPSTREAM_TIMEOUT_MS
+        { agentPortalMs: UPSTREAM_TIMEOUT_MS, bundlePortalMs: UPSTREAM_TIMEOUT_MS }
     )
 
     const unregistered = Array.from(statusByNumber.entries())
@@ -398,11 +500,12 @@ export async function checkMtnRegistrationBatch(
 export async function checkMtnRegistration(
     supabase: any,
     rawPhone: string,
-    packageNetwork: string
+    packageNetwork: string,
+    surface: GateSurface
 ): Promise<RegistrationGateResult> {
     const { unregistered } = await checkMtnRegistrationBatch(supabase, [
         { phoneNumber: rawPhone, packageNetwork },
-    ])
+    ], surface)
 
     if (unregistered.length === 0) return { gated: false }
     return { gated: true, normalizedNumber: unregistered[0] }
@@ -422,11 +525,13 @@ export type StrictGateResult =
  * again. Money taken over USSD for data we cannot deliver is money we have to find and
  * refund by hand. So an order we could not verify is one we do not take money for.
  *
- * The cost is real and worth stating: while Agent Portal is down, or if
- * AGENTPORTAL_API_KEY is unset, every MTN USSD data sale stops. That is the accepted
- * trade, not an oversight.
+ * Both servers are asked (Server 1 = Agent Portal, Server 2 = BundlePortal), each on
+ * its own budget, and the first "registered" settles it. The cost is real and worth
+ * stating: while BOTH are down or unconfigured, every MTN USSD data sale stops. That is
+ * the accepted trade, not an oversight.
  *
- * `enabled` is passed in rather than read here on purpose. /api/hubtel/interact already
+ * `enabled` is passed in rather than read here on purpose — the route resolves it with
+ * resolveGateEnabled(raw, 'site'), USSD being part of the main site. /api/hubtel/interact already
  * batches every admin_settings key it needs into a single round trip, because on that
  * route a millisecond costs a sale — adding a second lookup inside a keypress would
  * undo the thing that route is built around.
@@ -445,19 +550,28 @@ export async function checkMtnRegistrationStrict(
     if (candidates.size === 0) return { blocked: false }
 
     const [number] = Array.from(candidates)
-    const statusByNumber = await resolveRegistrationStatuses(
-        supabase,
-        [number],
-        opts.timeoutMs ?? USSD_UPSTREAM_TIMEOUT_MS
-    )
+    const servers: string[] = []
+    const statusByNumber = await resolveRegistrationStatuses(supabase, [number], {
+        // An explicit override applies to both servers, as the single budget used to.
+        agentPortalMs: opts.timeoutMs ?? USSD_AGENTPORTAL_TIMEOUT_MS,
+        bundlePortalMs: opts.timeoutMs ?? USSD_BUNDLEPORTAL_TIMEOUT_MS,
+        settleOnFirstPass: true,
+        onServerResult: (server, ms, outcome) => servers.push(`${server}=${outcome} ${ms}ms`),
+    })
 
+    // What each server said and how long it took, so the two budgets can be tuned from
+    // production logs. A server missing from the list had not answered when we returned.
+    const timing = servers.join(', ') || 'cache'
     const status = statusByNumber.get(number)
-    if (status === 'registered') return { blocked: false }
+    if (status === 'registered') {
+        console.log('[MtnGate] USSD passed', redactIdentifier(number), '-', timing)
+        return { blocked: false }
+    }
 
     // 'unregistered', 'unknown', or missing entirely all refuse. The last case should
     // be unreachable, but defaulting it to "allow" would be the one bug in here that
     // silently reopens the door this function exists to shut.
     const reason = status === 'unregistered' ? 'unregistered' : 'unverifiable'
-    console.log('[MtnGate] USSD refusing', redactIdentifier(number), '-', reason)
+    console.log('[MtnGate] USSD refusing', redactIdentifier(number), '-', reason, '-', timing)
     return { blocked: true, reason }
 }

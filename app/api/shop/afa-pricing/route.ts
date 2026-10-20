@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
         }
         if (profit > maxProfit) {
             return NextResponse.json({
-                error: `Profit cannot exceed GHS ${maxProfit.toFixed(2)} per registration`
+                error: `A profit over GHS ${maxProfit.toFixed(2)} per registration looks like a typo — check the price`
             }, { status: 400 })
         }
 

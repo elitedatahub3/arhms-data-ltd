@@ -37,7 +37,7 @@ const ALL_SLIDES: (Slide & { show: (p: PromoHeroCarouselProps) => boolean })[] =
         title: 'Recruit Sub-Agents',
         description: 'Recruit sellers under you and earn on every sale they make.',
         ctaLabel: 'Recruit Agents',
-        href: '/dashboard/refer',
+        href: '/dashboard/sub',
         gradientClass: 'from-orange-600 to-red-800',
         show: (p) => p.role === 'agent' || p.role === 'dealer',
     },

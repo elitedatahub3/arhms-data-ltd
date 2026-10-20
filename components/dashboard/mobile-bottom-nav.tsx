@@ -31,7 +31,6 @@ import {
     Code2,
     Settings,
     Receipt,
-    Gift,
 } from 'lucide-react'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useUI } from '@/contexts/ui-context'
@@ -196,10 +195,10 @@ const NAV_VARIANTS = {
         subItems: {
             home: [
                 { href: '/dashboard/profile', label: 'Profile', icon: User },
-                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
                 { href: '/dashboard/upgrade', label: 'Role Upgrade', icon: Crown },
+                { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
             ],
             wallet: [
@@ -224,8 +223,8 @@ const NAV_VARIANTS = {
     // live under /dashboard/sub/* — separate implementations (own wallet debit,
     // upline-resolved pricing floor, owner-approved withdrawals) from the
     // customer pages the `dashboard` variant above points at. Everything not
-    // remapped here (Data Packages, Buy Airtime, Wallet, Refer &
-    // Earn, Transactions, Complaints, Profile, Download App, Developer API,
+    // remapped here (Data Packages, Buy Airtime, Wallet,
+    // Transactions, Complaints, Profile, Download App, Developer API,
     // Commission Wallet) is genuinely shared with the customer nav.
     'dashboard-sub': {
         root: '/dashboard',
@@ -239,9 +238,9 @@ const NAV_VARIANTS = {
         subItems: {
             home: [
                 { href: '/dashboard/profile', label: 'Profile', icon: User },
-                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+                { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
             ],
             wallet: [
@@ -280,14 +279,15 @@ const NAV_VARIANTS = {
                 { href: '/admin/packages', label: 'Packages', icon: Package },
                 { href: '/admin/announcements', label: 'Announce', icon: Bell },
                 { href: '/admin/sms-broadcast', label: 'SMS', icon: MessageSquare },
+                { href: '/admin/sms-businesses', label: 'SMS Businesses', icon: Store },
                 { href: '/admin/email-broadcast', label: 'Email', icon: Send },
                 { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
-                { href: '/admin/referrals', label: 'Referrals', icon: Gift },
                 { href: '/admin/settings', label: 'Settings', icon: Settings },
             ],
             orders: [
                 { href: '/admin/orders', label: 'Orders', icon: ShoppingCart },
                 { href: '/admin/fulfillment', label: 'Fulfillment', icon: Activity },
+                { href: '/admin/delivery-status', label: 'Delivery Status', icon: Activity },
                 { href: '/admin/up2u-checker', label: 'UP2U Checker', icon: ShieldCheck },
                 { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
                 { href: '/admin/airtime', label: 'Airtime', icon: Phone },

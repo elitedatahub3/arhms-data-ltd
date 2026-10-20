@@ -2,6 +2,7 @@
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@/lib/supabase'
+import { MAX_SHOP_PROFIT_GHS, ownerCostPrice } from '@/lib/shop-price-limits'
 
 export async function GET() {
     try {
@@ -64,7 +65,8 @@ export async function POST(req: Request) {
 
         const { data: userData } = await supabase.from('users').select('role').eq('id', shopProfile.owner_id).single()
         const userRole = userData?.role || 'customer'
-        const maxDataProfit = userRole === 'agent' ? 10 : 5
+        // Owners price freely above cost — the limit only catches typos.
+        const maxDataProfit = MAX_SHOP_PROFIT_GHS
 
         // Fetch Admin Settings to properly calculate Airtime caps (Bypassing RLS via Service Role)
         const adminDb = createServerClient()
@@ -94,22 +96,46 @@ export async function POST(req: Request) {
 
         // Strict Backend Validation for Data Packages
         if (items && Array.isArray(items)) {
-            for (const item of items) {
-                if (item.profit_margin === undefined || item.profit_margin === null) {
-                    return NextResponse.json({ error: 'Missing profit margin' }, { status: 400 })
-                }
-                if (item.profit_margin <= 0) {
-                    return NextResponse.json({ error: 'Profit must be more than 0' }, { status: 400 })
-                }
-                if (item.profit_margin > maxDataProfit) {
-                    return NextResponse.json({ error: `Profit cannot exceed GHS ${maxDataProfit.toFixed(2)}` }, { status: 400 })
-                }
-                
-                if (!item.package_id || !item.selling_price) {
+            // Profit is derived here from the package's cost, never taken from the
+            // client. profit_margin is what the price cascade re-applies on every
+            // admin cost change, so a client-supplied figure that disagreed with
+            // selling − cost would move the shelf price on its own — and one that
+            // hid a below-cost price would put it live, to be refused only after
+            // the customer had paid (the settlement floor rejects profit ≤ 0).
+            const packageIds = items.map((item: any) => item.package_id).filter(Boolean)
+            const { data: pkgRows } = await adminDb
+                .from('data_packages')
+                .select('id, price, agent_price, dealer_price')
+                .in('id', packageIds)
+            const pkgById = new Map<string, any>(((pkgRows as any[]) || []).map((p: any) => [p.id, p]))
+
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i]
+                const sellingPrice = Number(item.selling_price)
+                if (!item.package_id || !Number.isFinite(sellingPrice) || sellingPrice <= 0) {
                     return NextResponse.json({ error: 'Invalid payload format' }, { status: 400 })
                 }
-                
-                item.shop_id = shopId
+
+                const pkg = pkgById.get(item.package_id)
+                if (!pkg) {
+                    return NextResponse.json({ error: 'Unknown package in pricing' }, { status: 400 })
+                }
+
+                const profit = Math.round((sellingPrice - ownerCostPrice(pkg, userRole)) * 100) / 100
+                if (profit <= 0) {
+                    return NextResponse.json({ error: 'Selling price must be above your cost price' }, { status: 400 })
+                }
+                if (profit > maxDataProfit) {
+                    return NextResponse.json({ error: `A profit over GHS ${maxDataProfit.toFixed(2)} looks like a typo — check the price` }, { status: 400 })
+                }
+
+                // Only the columns this screen owns; nothing else from the body is written.
+                items[i] = {
+                    shop_id: shopId,
+                    package_id: item.package_id,
+                    selling_price: sellingPrice,
+                    profit_margin: profit,
+                }
             }
 
             // Carry each package's wholesale price across the rewrite.

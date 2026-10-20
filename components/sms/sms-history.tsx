@@ -16,6 +16,7 @@ import { ArrowLeft, RefreshCw, History } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { formatGhanaPhone } from '@/components/sms/sms-contacts'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface Campaign {
     id: string
@@ -76,7 +77,7 @@ function CampaignList({ onOpen }: { onOpen: (id: string) => void }) {
         (async () => {
             setLoading(true)
             try {
-                const res = await fetch(`/api/sms/campaigns?page=${page}`, { cache: 'no-store' })
+                const res = await smsFetch(`/api/sms/campaigns?page=${page}`, { cache: 'no-store' })
                 const data = await res.json()
                 if (data?.success) { setCampaigns(data.campaigns); setTotal(data.total) }
                 else toast.error(data?.error || 'Could not load your sends')
@@ -138,7 +139,7 @@ function CampaignDetail({ id, onBack }: { id: string; onBack: () => void }) {
         try {
             const params = new URLSearchParams({ page: String(page) })
             if (filter) params.set('status', filter)
-            const res = await fetch(`/api/sms/campaigns/${id}?${params}`, { cache: 'no-store' })
+            const res = await smsFetch(`/api/sms/campaigns/${id}?${params}`, { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) {
                 setCampaign(data.campaign)

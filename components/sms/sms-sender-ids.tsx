@@ -2,10 +2,7 @@
 
 /**
  * Sender ID requests: the brand name the owner's customers see as the sender.
- *
- * The tips sit above the input on purpose — the most common rejection is a name
- * like "KOFI DATA" or "MTN BUNDLES", and it is far kinder to say so before the
- * owner types it than after an admin and a network have both refused it.
+ * The name rules are still enforced as the owner types (validateSenderId).
  */
 
 import { useState } from 'react'
@@ -14,9 +11,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Lightbulb, Loader2, XCircle, CheckCircle2, Clock, Send } from 'lucide-react'
+import { Loader2, XCircle, CheckCircle2, Clock, Send } from 'lucide-react'
 import { toast } from 'sonner'
-import { validateSenderId, SENDER_ID_TIPS, SENDER_ID_MAX } from '@/lib/sms/sms-rules'
+import { validateSenderId, SENDER_ID_MAX } from '@/lib/sms/sms-rules'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 export interface SenderIdRow {
     id: string
@@ -77,7 +75,7 @@ export function SmsSenderIds({
         }
         setSubmitting(true)
         try {
-            const res = await fetch('/api/sms/senders', {
+            const res = await smsFetch('/api/sms/senders', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sender: sender.trim(), businessName: businessName.trim() }),
@@ -99,34 +97,6 @@ export function SmsSenderIds({
 
     return (
         <div className="space-y-4">
-            <Card className="border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
-                <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2">
-                        <Lightbulb className="w-4 h-4 text-amber-600" /> Before you choose a name
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <ul className="space-y-2 text-sm">
-                        {SENDER_ID_TIPS.map((tip) => (
-                            <li key={tip} className="flex gap-2">
-                                <span className="text-amber-600 font-bold">•</span>
-                                <span>{tip}</span>
-                            </li>
-                        ))}
-                    </ul>
-                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                        <div className="rounded-lg border border-emerald-300 bg-white dark:bg-transparent p-2">
-                            <p className="font-bold text-emerald-700 dark:text-emerald-400 mb-1">Good</p>
-                            <p className="font-mono">KofiStores · AmaBeauty · GH Gadgets</p>
-                        </div>
-                        <div className="rounded-lg border border-red-300 bg-white dark:bg-transparent p-2">
-                            <p className="font-bold text-red-700 dark:text-red-400 mb-1">Rejected</p>
-                            <p className="font-mono">KofiData · MTN Bundle · MoMo Hub</p>
-                        </div>
-                    </div>
-                </CardContent>
-            </Card>
-
             <Card>
                 <CardHeader>
                     <CardTitle className="text-base">Request a sender ID</CardTitle>

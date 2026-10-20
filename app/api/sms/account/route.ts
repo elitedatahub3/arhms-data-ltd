@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext, smsBlockReason, isCustomerSmsEnabled, SMS_DISABLED_MESSAGE } from '@/lib/sms/sms-purchase'
 import { getAllowedSenders } from '@/lib/sms/customer-sms'
+import { getSmsBusiness, countSentToday, dailyLimitFor, senderCapFor, getStats30d, getRecentCreditActivity } from '@/lib/sms/platform'
+import { MAX_RECIPIENTS } from '@/lib/sms/send-campaign'
 
 /**
  * Everything the Customer SMS home screen renders from, in one call.
@@ -17,12 +19,13 @@ export async function GET() {
         const { supabaseAdmin, account, shop, role, sub, settingsMap, unlockPrice, portal } = ctx
 
         const enabled = isCustomerSmsEnabled(settingsMap)
-        const blockedReason = enabled ? smsBlockReason(shop, sub) : SMS_DISABLED_MESSAGE
+        const blockedReason = enabled ? smsBlockReason(shop, sub, ctx.userStatus) : SMS_DISABLED_MESSAGE
 
         // loadSmsContext selects a fixed column list, so the toggles are read here.
+        // * so the platform switch (20261018010000) reads as off until it exists.
         const { data: toggles } = await supabaseAdmin
             .from('sms_accounts')
-            .select('order_sms_data_enabled, order_sms_airtime_enabled, last_order_sms_skip, last_order_sms_skip_at')
+            .select('*')
             .eq('id', account.id)
             .maybeSingle()
 
@@ -45,8 +48,23 @@ export async function GET() {
             .eq('account_id', account.id)
             .eq('opted_out', false)
 
+        const [business, sentToday, stats30d, recentActivity] = await Promise.all([
+            getSmsBusiness(supabaseAdmin, account.id),
+            countSentToday(supabaseAdmin, account.id),
+            getStats30d(supabaseAdmin, account.id),
+            getRecentCreditActivity(supabaseAdmin, account.id),
+        ])
+
         return NextResponse.json({
             success: true,
+            mode: ctx.mode,
+            businessStatus: business?.status ?? null,
+            dailyLimit: dailyLimitFor(ctx.mode, settingsMap),
+            sentToday,
+            stats30d,
+            recentActivity,
+            limits: { perSend: MAX_RECIPIENTS },
+            senderCap: senderCapFor(ctx.mode, settingsMap),
             // The page hides the whole feature on this rather than selling
             // something that cannot be used.
             enabled,
@@ -59,11 +77,18 @@ export async function GET() {
             portal,
             role,
             unlockPrice,
+            freeActivation: ctx.freeActivation,
             orderSms: {
                 data: !!(account as any).order_sms_data_enabled,
                 airtime: !!(account as any).order_sms_airtime_enabled,
                 lastSkip: (account as any).last_order_sms_skip || null,
                 lastSkipAt: (account as any).last_order_sms_skip_at || null,
+            },
+            // SMS Platform confirmations: the buyer's own platform purchases.
+            // Separate from orderSms above, which is the shop's storefront setting.
+            platformOrderSms: {
+                enabled: (account as any).platform_order_sms_enabled === true,
+                lastSkip: (account as any).last_platform_order_sms_skip || null,
             },
             account: {
                 status: account.status,
@@ -82,9 +107,10 @@ export async function GET() {
 }
 
 /**
- * Switches the shop's order confirmation SMS on or off.
+ * Switches order confirmation SMS on or off.
  *
- * body: { data?: boolean, airtime?: boolean }
+ * body: { data?: boolean, airtime?: boolean } — the shop's storefront confirmations;
+ *       { platform?: boolean }                — the SMS Platform's own-purchase confirmations.
  */
 export async function PATCH(request: Request) {
     try {
@@ -101,6 +127,7 @@ export async function PATCH(request: Request) {
         const patch: Record<string, any> = {}
         if (typeof body.data === 'boolean') patch.order_sms_data_enabled = body.data
         if (typeof body.airtime === 'boolean') patch.order_sms_airtime_enabled = body.airtime
+        if (typeof body.platform === 'boolean') patch.platform_order_sms_enabled = body.platform
 
         if (!Object.keys(patch).length) {
             return NextResponse.json({ error: 'Nothing to change' }, { status: 400 })
@@ -108,11 +135,11 @@ export async function PATCH(request: Request) {
 
         // Switching ON without an approved sender would look like it worked and
         // then silently send nothing, so it is refused with the reason.
-        if (patch.order_sms_data_enabled || patch.order_sms_airtime_enabled) {
+        if (patch.order_sms_data_enabled || patch.order_sms_airtime_enabled || patch.platform_order_sms_enabled) {
             const allowed = await getAllowedSenders(supabaseAdmin, account.id)
             if (!allowed.some(s => s.type === 'own')) {
                 return NextResponse.json(
-                    { error: 'You need an approved sender ID before your shop can send order confirmations' },
+                    { error: 'You need an approved sender ID before order confirmations can use it' },
                     { status: 400 }
                 )
             }
@@ -126,6 +153,9 @@ export async function PATCH(request: Request) {
 
         if (error) {
             console.error('[SmsAccount] PATCH failed:', error)
+            if (error.code === '42703') {
+                return NextResponse.json({ error: 'Run migration 20261018010000_sms_platform_order_sms.sql first.' }, { status: 500 })
+            }
             return NextResponse.json({ error: 'Could not save that setting' }, { status: 500 })
         }
 

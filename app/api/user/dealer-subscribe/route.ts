@@ -25,6 +25,7 @@ import {
 } from '@/lib/paystack-momo-checkout'
 import { claimHubtelStatusCheck, PAYSWITCH_CLIENT_THROTTLE_KEYS } from '@/lib/hubtel-status-throttle'
 import { processCompletedDealerSubscription } from '@/lib/payments'
+import { getDealerPlan, isDealerPlanId } from '@/lib/dealer-plans'
 
 export async function POST(request: NextRequest) {
     try {
@@ -38,9 +39,14 @@ export async function POST(request: NextRequest) {
 
         const { phone, network, otpCode, reference: existingRef, planType: rawPlanType, provider: bodyProvider } = await request.json().catch(() => ({}))
 
-        const planType: 'dealer_3m' | 'dealer_6m' = rawPlanType === 'dealer_3m' ? 'dealer_3m' : 'dealer_6m'
-        const planDays = planType === 'dealer_3m' ? 90 : 180
-        const planLabel = planType === 'dealer_3m' ? '3 Months Dealer Subscription' : '6 Months Dealer Subscription'
+        // A missing planType is an older client that only knew the 6-month plan; anything else must be a real plan id.
+        if (rawPlanType !== undefined && !isDealerPlanId(rawPlanType)) {
+            return NextResponse.json({ error: 'Unknown dealer plan' }, { status: 400 })
+        }
+        const plan = getDealerPlan(isDealerPlanId(rawPlanType) ? rawPlanType : 'dealer_6m')
+        const planType = plan.id
+        const planDays = plan.days
+        const planLabel = plan.label
 
         const { data: dbUser } = await supabase
             .from('users')
@@ -61,7 +67,7 @@ export async function POST(request: NextRequest) {
         const { data: settings } = await supabaseAdmin
             .from('admin_settings')
             .select('key, value')
-            .in('key', ['dealer_subscription_price_6m', 'dealer_subscription_price_3m', 'active_payment_provider_web'])
+            .in('key', [plan.priceKey, plan.enabledKey, 'active_payment_provider_web'])
 
         const settingsMap: Record<string, string> = {}
         for (const row of (settings || [])) settingsMap[row.key] = row.value
@@ -84,8 +90,14 @@ export async function POST(request: NextRequest) {
             'web'
         )
 
-        const priceKey = planType === 'dealer_3m' ? 'dealer_subscription_price_3m' : 'dealer_subscription_price_6m'
-        const subscriptionPrice = parseFloat(settingsMap[priceKey] || '0')
+        // Only a new purchase is gated on the switch: a payment already started
+        // (existingRef, e.g. the OTP step) must be able to finish if the admin
+        // turns the plan off mid-checkout.
+        if (!existingRef && settingsMap[plan.enabledKey] === 'false') {
+            return NextResponse.json({ error: 'This dealer plan is currently unavailable' }, { status: 400 })
+        }
+
+        const subscriptionPrice = parseFloat(settingsMap[plan.priceKey] || '0')
 
         if (!subscriptionPrice || subscriptionPrice <= 0) {
             return NextResponse.json({ error: 'Dealer subscription price not configured' }, { status: 400 })

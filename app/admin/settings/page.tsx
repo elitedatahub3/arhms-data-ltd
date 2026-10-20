@@ -34,6 +34,8 @@ export default function AdminSettingsPage() {
     const [afaPriceCustomer, setAfaPriceCustomer] = useState('15')
     const [afaPriceAgent, setAfaPriceAgent] = useState('15')
     const [afaPriceDealer, setAfaPriceDealer] = useState('15')
+    // Developer API price, every API caller. Blank = their role fee.
+    const [afaPriceApi, setAfaPriceApi] = useState('')
     const [storefrontAfaEnabled, setStorefrontAfaEnabled] = useState(false)
     const [dealerPromoEnabled, setDealerPromoEnabled] = useState(false)
     const [landingRcOnlyEnabled, setLandingRcOnlyEnabled] = useState(false)
@@ -56,13 +58,6 @@ export default function AdminSettingsPage() {
     // branch, so showing it here would offer a gateway that cannot take the money.
     const [ussdPaymentProvider, setUssdPaymentProvider] = useState<PaymentProvider>('paystack_momo')
     const [rcWalletPaymentEnabled, setRcWalletPaymentEnabled] = useState(true)
-    // Referral programme
-    const [referralEnabled, setReferralEnabled] = useState(false)
-    const [referralPercentOfSale, setReferralPercentOfSale] = useState('5')
-    const [referralMaxMarginShare, setReferralMaxMarginShare] = useState('50')
-    const [referralMinPlatformKeep, setReferralMinPlatformKeep] = useState('0.01')
-    const [referralMaxClaimsPerDay, setReferralMaxClaimsPerDay] = useState('25')
-    const [referralClawbackOnRefund, setReferralClawbackOnRefund] = useState(true)
     const [skipGoogleOauthOtp, setSkipGoogleOauthOtp] = useState(false)
     // Master switch. Starts closed to match isUssdEnabled(): if the row is
     // missing the service is off, and the toggle should say so.
@@ -123,6 +118,7 @@ export default function AdminSettingsPage() {
             setAfaPriceCustomer(settingsMap.afa_price_customer || '15')
             setAfaPriceAgent(settingsMap.afa_price_agent || '15')
             setAfaPriceDealer(settingsMap.afa_price_dealer || '15')
+            setAfaPriceApi(settingsMap.afa_price_api || '')
             setStorefrontAfaEnabled(settingsMap.storefront_afa_enabled === 'true')
             setUssdEnabled(settingsMap.ussd_enabled === 'true')
             setUssdDialCode(settingsMap.ussd_dial_code || '')
@@ -151,15 +147,6 @@ export default function AdminSettingsPage() {
             setUssdPaymentProvider(resolveProviderForScope(settingsMap.active_payment_provider_ussd, 'ussd'))
             setSkipGoogleOauthOtp(settingsMap.skip_google_oauth_otp === 'true')
             setRcWalletPaymentEnabled(settingsMap.rc_wallet_payment_enabled !== 'false')
-
-            // Referral programme. Defaults OFF — the kill switch is what makes the
-            // rollout safe, so an unset value must never read as enabled.
-            setReferralEnabled(settingsMap.referral_bonus_enabled === 'true')
-            setReferralPercentOfSale(settingsMap.referral_bonus_percent_of_sale || '5')
-            setReferralMaxMarginShare(settingsMap.referral_max_margin_share_percent || '50')
-            setReferralMinPlatformKeep(settingsMap.referral_min_platform_keep || '0.01')
-            setReferralMaxClaimsPerDay(settingsMap.referral_max_claims_per_day || '25')
-            setReferralClawbackOnRefund(settingsMap.referral_clawback_on_refund !== 'false')
 
             // Initialize page access values
             setPageAccessDashboard(settingsMap.page_access_dashboard !== 'false')
@@ -190,12 +177,6 @@ export default function AdminSettingsPage() {
         setSaving(true)
         try {
             const updates = [
-                { key: 'referral_bonus_enabled', value: String(referralEnabled) },
-                { key: 'referral_bonus_percent_of_sale', value: referralPercentOfSale },
-                { key: 'referral_max_margin_share_percent', value: referralMaxMarginShare },
-                { key: 'referral_min_platform_keep', value: referralMinPlatformKeep },
-                { key: 'referral_max_claims_per_day', value: referralMaxClaimsPerDay },
-                { key: 'referral_clawback_on_refund', value: String(referralClawbackOnRefund) },
                 { key: 'paystack_fee_percent', value: paystackFee },
                 { key: 'agent_paystack_fee_percent', value: agentPaystackFee },
                 { key: 'paystack_momo_fee_percent', value: paystackMomoFee },
@@ -205,6 +186,7 @@ export default function AdminSettingsPage() {
                 { key: 'afa_price_customer', value: afaPriceCustomer },
                 { key: 'afa_price_agent', value: afaPriceAgent },
                 { key: 'afa_price_dealer', value: afaPriceDealer },
+                { key: 'afa_price_api', value: afaPriceApi },
                 { key: 'storefront_afa_enabled', value: String(storefrontAfaEnabled) },
                 { key: 'dealer_promo_enabled', value: String(dealerPromoEnabled) },
                 { key: 'landing_rc_only_enabled', value: String(landingRcOnlyEnabled) },
@@ -292,7 +274,6 @@ export default function AdminSettingsPage() {
                     <TabsTrigger value="general">General</TabsTrigger>
                     <TabsTrigger value="fees">Fees &amp; Pricing</TabsTrigger>
                     <TabsTrigger value="fulfillment">Fulfillment</TabsTrigger>
-                    <TabsTrigger value="referrals">Referrals</TabsTrigger>
                     <TabsTrigger value="access">Page Access</TabsTrigger>
                 </TabsList>
 
@@ -700,6 +681,18 @@ export default function AdminSettingsPage() {
                                 />
                                 <p className="text-xs text-muted-foreground">Fee charged to dealers for AFA application</p>
                             </div>
+                            <div className="space-y-2">
+                                <Label>API Application Fee (GHS)</Label>
+                                <Input
+                                    type="number"
+                                    value={afaPriceApi}
+                                    onChange={(e) => setAfaPriceApi(e.target.value)}
+                                    placeholder="Blank = use the role fee above"
+                                    step="0.01"
+                                    min="0"
+                                />
+                                <p className="text-xs text-muted-foreground">Fee charged to every developer API user, whatever their role</p>
+                            </div>
                             <div className="flex items-center justify-between p-4 border rounded-lg">
                                 <div className="space-y-0.5">
                                     <Label className="text-base">Sell AFA on Storefronts</Label>
@@ -830,106 +823,6 @@ export default function AdminSettingsPage() {
                                 <Switch
                                     checked={skipGoogleOauthOtp}
                                     onCheckedChange={setSkipGoogleOauthOtp}
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-                </TabsContent>
-
-                <TabsContent value="referrals" className="space-y-4 mt-4">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Referral Bonus Programme</CardTitle>
-                            <CardDescription>
-                                Users earn a share of every data purchase made by someone who signed up
-                                through their referral link.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="flex items-center justify-between p-4 border rounded-lg">
-                                <div className="space-y-0.5">
-                                    <Label className="text-base">Referral Bonuses Enabled</Label>
-                                    <p className="text-sm text-muted-foreground">
-                                        Master kill switch. Turning this OFF stops all new accruals immediately;
-                                        bonuses already paid stay in users&apos; wallets.
-                                    </p>
-                                </div>
-                                <Switch checked={referralEnabled} onCheckedChange={setReferralEnabled} />
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Bonus Rate (% of sale)</Label>
-                                <Input
-                                    type="number"
-                                    value={referralPercentOfSale}
-                                    onChange={(e) => setReferralPercentOfSale(e.target.value)}
-                                    step="0.5"
-                                    min="0"
-                                    max="20"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    % of the amount the referred user pays. Advertised to users as
-                                    &quot;up to&quot;, because the margin cap below can reduce it. Clamped to 0-20.
-                                </p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Maximum Share of Margin (%)</Label>
-                                <Input
-                                    type="number"
-                                    value={referralMaxMarginShare}
-                                    onChange={(e) => setReferralMaxMarginShare(e.target.value)}
-                                    step="1"
-                                    min="0"
-                                    max="99"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    Hard ceiling: a bonus can never exceed this share of an order&apos;s profit.
-                                    This is what keeps the platform net-positive on every bonus it pays.
-                                    <strong> Never set this to 100</strong> — see the migration header.
-                                </p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Minimum Platform Keep (GHS)</Label>
-                                <Input
-                                    type="number"
-                                    value={referralMinPlatformKeep}
-                                    onChange={(e) => setReferralMinPlatformKeep(e.target.value)}
-                                    step="0.01"
-                                    min="0"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    Final backstop, applied after the margin cap. Normally inert.
-                                </p>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Max New Referrals Per Day (per user)</Label>
-                                <Input
-                                    type="number"
-                                    value={referralMaxClaimsPerDay}
-                                    onChange={(e) => setReferralMaxClaimsPerDay(e.target.value)}
-                                    step="1"
-                                    min="0"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    Signups beyond this are attributed but flagged for review. This caps
-                                    sign-ups only — it never caps how much an existing referral can earn.
-                                </p>
-                            </div>
-
-                            <div className="flex items-center justify-between p-4 border rounded-lg">
-                                <div className="space-y-0.5">
-                                    <Label className="text-base">Claw Back On Refund</Label>
-                                    <p className="text-sm text-muted-foreground">
-                                        When an order is refunded, reverse the bonus it paid. A referrer who
-                                        already spent it is never pushed negative.
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={referralClawbackOnRefund}
-                                    onCheckedChange={setReferralClawbackOnRefund}
                                 />
                             </div>
                         </CardContent>

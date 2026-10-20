@@ -4,7 +4,7 @@ import { validateAdminAccess } from '@/lib/auth-utils'
 import { sendSenderIdApprovedSMS, sendSenderIdRejectedSMS, getActiveSmsProvider } from '@/lib/sms-service'
 import { fetchKingFlexySenders, fetchKingFlexyBalance } from '@/lib/kingflexy-sms-service'
 import { validateSenderId } from '@/lib/sms/sms-rules'
-import { resolveSmsAccount } from '@/lib/sms/customer-sms'
+import { resolveSmsAccount, senderClaimedByOtherUser } from '@/lib/sms/customer-sms'
 
 /**
  * Admin queue for Customer SMS sender IDs.
@@ -52,11 +52,17 @@ export async function GET(request: NextRequest) {
             const { data: accounts } = ownerIds.length
                 ? await (supabase as any)
                     .from('sms_accounts')
-                    .select('id, user_id, status, credits')
+                    // * so scope is read when it exists; a row without it predates the
+                    // split and is the shop account.
+                    .select('*')
                     .in('user_id', ownerIds)
                 : { data: [] }
 
-            const byUser = new Map<string, any>((accounts || []).map((a: any) => [a.user_id, a]))
+            // Admin adds senders to the SHOP's Customer SMS account here, never to
+            // the owner's SMS Platform account.
+            const byUser = new Map<string, any>((accounts || [])
+                .filter((a: any) => (a.scope ?? 'shop') === 'shop')
+                .map((a: any) => [a.user_id, a]))
 
             return NextResponse.json({
                 success: true,
@@ -172,6 +178,16 @@ export async function PATCH(request: NextRequest) {
         const from = existing.status as SenderStatus
         if (!TRANSITIONS[from].includes(status)) {
             return NextResponse.json({ error: `Cannot move a sender ID from ${from} to ${status}` }, { status: 400 })
+        }
+
+        // Submitting or approving claims the name. Another person holding it
+        // blocks that; the same owner's other SMS account (shop or platform) does not.
+        if ((status === 'submitted' || status === 'approved')
+            && await senderClaimedByOtherUser(supabase, existing.sender, (existing as any).account?.user_id)) {
+            return NextResponse.json(
+                { error: 'Another business already holds this sender ID. Reject this request with that reason.' },
+                { status: 409 }
+            )
         }
 
         const now = new Date().toISOString()
@@ -328,6 +344,10 @@ export async function POST(request: NextRequest) {
         // nothing can be sent until they do.
         const account = await resolveSmsAccount(supabase, shop.owner_id, shop.id)
         if (!account) return NextResponse.json({ error: 'Could not resolve the shop SMS account' }, { status: 500 })
+
+        if (status !== 'pending' && await senderClaimedByOtherUser(supabase, sender, shop.owner_id)) {
+            return NextResponse.json({ error: 'Another business already holds this sender ID.' }, { status: 409 })
+        }
 
         const now = new Date().toISOString()
         const row: Record<string, any> = {

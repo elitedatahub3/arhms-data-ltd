@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendSMS, getActiveSmsProvider, normalizeGhanaPhone, sendMoolreBulkSMS, MOOLRE_BULK_BATCH } from '@/lib/sms-service'
 import { sendKingFlexyBulkSMS, isKingFlexySmsConfigured, KF_INLINE_RECIPIENTS } from '@/lib/kingflexy-sms-service'
 import { triggerSmsBroadcast } from '@/lib/sms-broadcast-kick'
+import { renderBroadcast } from '@/lib/sms-broadcast-greeting'
 import { z } from 'zod'
 
 // Vercel Hobby plan has no cron headroom for a "poll every N minutes" worker,
@@ -113,6 +114,8 @@ async function runBatches(jobId: string, origin: string): Promise<void> {
             })
             .eq('id', jobId)
             .eq('sent_count', alreadyProcessed)
+            // A job the admin cancelled is 'failed' — never claim it again.
+            .in('status', ['pending', 'processing'])
             .select('id')
 
         if (claimError) {
@@ -130,10 +133,13 @@ async function runBatches(jobId: string, origin: string): Promise<void> {
 
         if (bulk) {
             const numbers: string[] = []
+            // Each person's own copy ("Hi Derrick! ..."), same order as numbers.
+            const texts: string[] = []
             for (const recipient of batch) {
                 const phone = normalizeGhanaPhone(String(recipient.phone_number || ''))
                 if (phone) {
                     numbers.push(phone)
+                    texts.push(renderBroadcast(job.message, recipient))
                 } else {
                     batchFailed++
                     batchErrors.push(`${recipient.first_name || 'Unknown'}: invalid phone number ${recipient.phone_number || '(none)'}`)
@@ -143,6 +149,7 @@ async function runBatches(jobId: string, origin: string): Promise<void> {
                 const result = await sendMoolreBulkSMS({
                     message: job.message,
                     recipients: numbers,
+                    messages: texts,
                     refPrefix: `bc${String(jobId).slice(0, 8)}_${alreadyProcessed}`,
                 })
                 if (result.ok) {
@@ -153,26 +160,40 @@ async function runBatches(jobId: string, origin: string): Promise<void> {
                     console.error('[SMSBroadcastProcess] Moolre bulk send failed:', jobId, result.error)
                 }
             } else if (numbers.length > 0) {
-                const result = await sendKingFlexyBulkSMS({
-                    message: job.message,
-                    recipients: numbers,
-                    // Their idempotency key: a re-run of this same slice returns the
-                    // original campaign instead of texting everyone twice.
-                    reference: `arhms_bc_${jobId}_${alreadyProcessed}`.slice(0, 100),
+                // KingFlexy sends one text to a whole list, so a "Hi {name}!"
+                // batch goes out as one call per distinct text.
+                const groups = new Map<string, string[]>()
+                numbers.forEach((n, i) => {
+                    const list = groups.get(texts[i])
+                    if (list) list.push(n)
+                    else groups.set(texts[i], [n])
                 })
-                if (result.ok) {
-                    batchSuccess += result.sent
-                    batchFailed += result.failed
-                } else {
-                    batchFailed += numbers.length
-                    batchErrors.push(`${numbers.length} recipients: ${result.outOfCredits ? 'KingFlexy SMS credits exhausted - top up at kingflexygh.com' : (result.error || 'Send failed')}`)
-                    console.error('[SMSBroadcastProcess] Bulk send failed:', jobId, result.error)
+                let g = 0
+                for (const [text, groupNumbers] of groups) {
+                    const result = await sendKingFlexyBulkSMS({
+                        message: text,
+                        recipients: groupNumbers,
+                        // Their idempotency key: a re-run of this same slice returns the
+                        // original campaign instead of texting everyone twice.
+                        reference: (groups.size === 1
+                            ? `arhms_bc_${jobId}_${alreadyProcessed}`
+                            : `arhms_bc_${jobId}_${alreadyProcessed}_${g}`).slice(0, 100),
+                    })
+                    g++
+                    if (result.ok) {
+                        batchSuccess += result.sent
+                        batchFailed += result.failed
+                    } else {
+                        batchFailed += groupNumbers.length
+                        batchErrors.push(`${groupNumbers.length} recipients: ${result.outOfCredits ? 'KingFlexy SMS credits exhausted - top up at kingflexygh.com' : (result.error || 'Send failed')}`)
+                        console.error('[SMSBroadcastProcess] Bulk send failed:', jobId, result.error)
+                    }
                 }
             }
         } else await Promise.allSettled(
             batch.map(async (recipient: any) => {
                 try {
-                    const result = await sendSMS({ recipient: recipient.phone_number, message: job.message })
+                    const result = await sendSMS({ recipient: recipient.phone_number, message: renderBroadcast(job.message, recipient) })
                     if (result.success) {
                         batchSuccess++
                     } else {
@@ -191,23 +212,28 @@ async function runBatches(jobId: string, origin: string): Promise<void> {
         // newer total.
         const { data: fresh } = await (supabase
             .from('sms_broadcast_jobs') as any)
-            .select('success_count, failed_count, errors')
+            .select('success_count, failed_count, errors, status')
             .eq('id', jobId)
             .single()
 
         const base = (fresh as any) || job
+        // Cancelled while this batch was in flight: record what went out, but
+        // leave the job cancelled instead of flipping it back to processing.
+        const cancelled = base.status === 'failed'
         await (supabase.from('sms_broadcast_jobs') as any)
             .update({
                 success_count: (base.success_count || 0) + batchSuccess,
                 failed_count: (base.failed_count || 0) + batchFailed,
                 errors: [...(base.errors || []), ...batchErrors].slice(-MAX_ERRORS_STORED),
-                status: isDone ? 'completed' : 'processing',
-                completed_at: isDone ? new Date().toISOString() : null,
+                ...(cancelled ? {} : {
+                    status: isDone ? 'completed' : 'processing',
+                    completed_at: isDone ? new Date().toISOString() : null,
+                }),
                 updated_at: new Date().toISOString(),
             })
             .eq('id', jobId)
 
-        if (isDone) return
+        if (isDone || cancelled) return
     }
 
     // Out of time for this invocation — hand the rest to a fresh one.

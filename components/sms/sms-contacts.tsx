@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SUB_AGENTS_GROUP_ID } from '@/lib/sms/sms-rules'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface Contact {
     id: string
@@ -43,6 +44,7 @@ export interface SmsGroup {
     name: string
     memberCount: number
     system: boolean
+    createdAt?: string
 }
 
 const PAGE_SIZE = 100
@@ -61,7 +63,7 @@ export function formatGhanaPhone(phone: string) {
  * columns all turn up in real exports. Anything that is not obviously a number
  * is sent anyway and reported back as invalid by the server.
  */
-function parseContactsText(text: string): { phone: string; name: string | null }[] {
+export function parseContactsText(text: string): { phone: string; name: string | null }[] {
     const out: { phone: string; name: string | null }[] = []
     for (const rawLine of text.split(/\r?\n/)) {
         const line = rawLine.trim()
@@ -116,7 +118,7 @@ export function SmsContacts({
             const params = new URLSearchParams({ page: String(page) })
             if (search.trim()) params.set('search', search.trim())
             if (groupFilter !== ALL) params.set('groupId', groupFilter)
-            const res = await fetch(`/api/sms/contacts?${params}`, { cache: 'no-store' })
+            const res = await smsFetch(`/api/sms/contacts?${params}`, { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) {
                 setContacts(data.contacts)
@@ -152,7 +154,7 @@ export function SmsContacts({
     const postContacts = async (body: any) => {
         setSaving(true)
         try {
-            const res = await fetch('/api/sms/contacts', {
+            const res = await smsFetch('/api/sms/contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -177,7 +179,7 @@ export function SmsContacts({
     const importFromOrders = async () => {
         setImporting(true)
         try {
-            const res = await fetch('/api/sms/contacts/import-orders', { method: 'POST' })
+            const res = await smsFetch('/api/sms/contacts/import-orders', { method: 'POST' })
             const data = await res.json()
             if (!res.ok || !data?.success) {
                 toast.error(data?.error || 'Import failed')
@@ -226,7 +228,7 @@ export function SmsContacts({
 
     const toggleOptOut = async (contact: Contact) => {
         setContacts((prev) => prev.map((c) => (c.id === contact.id ? { ...c, opted_out: !c.opted_out } : c)))
-        const res = await fetch('/api/sms/contacts', {
+        const res = await smsFetch('/api/sms/contacts', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: contact.id, optedOut: !contact.opted_out }),
@@ -239,7 +241,7 @@ export function SmsContacts({
 
     const remove = async (contact: Contact) => {
         if (!confirm(`Remove ${formatGhanaPhone(contact.phone)} from your list?`)) return
-        const res = await fetch(`/api/sms/contacts?id=${contact.id}`, { method: 'DELETE' })
+        const res = await smsFetch(`/api/sms/contacts?id=${contact.id}`, { method: 'DELETE' })
         if (!res.ok) { toast.error('Could not remove that customer'); return }
         toast.success('Removed')
         refresh()
@@ -250,7 +252,7 @@ export function SmsContacts({
         if (!name) return
         setSaving(true)
         try {
-            const res = await fetch('/api/sms/groups', {
+            const res = await smsFetch('/api/sms/groups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name }),
@@ -259,7 +261,7 @@ export function SmsContacts({
             if (!res.ok || !data?.success) { toast.error(data?.error || 'Could not create group'); return }
             // Creating a group with customers ticked puts them straight in it.
             if (selectedIds.size) {
-                await fetch('/api/sms/groups', {
+                await smsFetch('/api/sms/groups', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ groupId: data.group.id, addContactIds: [...selectedIds] }),
@@ -277,7 +279,7 @@ export function SmsContacts({
 
     const addSelectedToGroup = async (groupId: string) => {
         if (!selectedIds.size) return
-        const res = await fetch('/api/sms/groups', {
+        const res = await smsFetch('/api/sms/groups', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ groupId, addContactIds: [...selectedIds] }),
@@ -291,7 +293,7 @@ export function SmsContacts({
 
     const removeSelectedFromGroup = async () => {
         if (!selectedIds.size || groupFilter === ALL) return
-        await fetch('/api/sms/groups', {
+        await smsFetch('/api/sms/groups', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ groupId: groupFilter, removeContactIds: [...selectedIds] }),
@@ -303,7 +305,7 @@ export function SmsContacts({
 
     const deleteGroup = async (group: SmsGroup) => {
         if (!confirm(`Delete the group "${group.name}"? The customers stay on your list.`)) return
-        const res = await fetch(`/api/sms/groups?id=${group.id}`, { method: 'DELETE' })
+        const res = await smsFetch(`/api/sms/groups?id=${group.id}`, { method: 'DELETE' })
         if (!res.ok) { toast.error('Could not delete group'); return }
         if (groupFilter === group.id) setGroupFilter(ALL)
         onGroupsChanged()
@@ -333,7 +335,7 @@ export function SmsContacts({
             const params = new URLSearchParams({ ids: '1' })
             if (search.trim()) params.set('search', search.trim())
             if (groupFilter !== ALL) params.set('groupId', groupFilter)
-            const res = await fetch(`/api/sms/contacts?${params}`, { cache: 'no-store' })
+            const res = await smsFetch(`/api/sms/contacts?${params}`, { cache: 'no-store' })
             const data = await res.json()
             if (!res.ok || !data?.success) {
                 toast.error(data?.error || 'Could not select everyone')

@@ -8,7 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { parseAllowedRoles } from '@/lib/role-parser'
 
 /** Which family of endpoints a key may reach. See the v2 migration for why. */
-export type ApiKeyKind = 'standard' | 'commission'
+export type ApiKeyKind = 'standard' | 'commission' | 'sms'
 
 export interface ApiAuthResult {
     userId: string
@@ -61,6 +61,9 @@ function fingerprintKey(fullKey: string): string {
 /** Tag a Commission Services key carries. Standard keys keep the original kf_live_. */
 export const COMMISSION_KEY_TAG = 'kf_cs_live_'
 
+/** Tag an SMS Platform key carries. It can only reach /api/v2/sms/*. */
+export const SMS_KEY_TAG = 'ar_sms_live_'
+
 /**
  * How many leading characters of a key are stored as its searchable prefix.
  *
@@ -72,16 +75,20 @@ export const COMMISSION_KEY_TAG = 'kf_cs_live_'
  * space regardless of how long the tag is.
  */
 function prefixLengthFor(fullKey: string): number {
-    return fullKey.startsWith(COMMISSION_KEY_TAG) ? COMMISSION_KEY_TAG.length + 8 : 16
+    if (fullKey.startsWith(COMMISSION_KEY_TAG)) return COMMISSION_KEY_TAG.length + 8
+    if (fullKey.startsWith(SMS_KEY_TAG)) return SMS_KEY_TAG.length + 8
+    return 16
 }
 
 function normaliseKind(raw: unknown): ApiKeyKind {
-    return raw === 'commission' ? 'commission' : 'standard'
+    if (raw === 'commission' || raw === 'sms') return raw
+    return 'standard'
 }
 
 const KIND_LABEL: Record<ApiKeyKind, string> = {
     standard:   'Standard API key',
     commission: 'Commission Services key',
+    sms:        'SMS API key',
 }
 
 /**
@@ -176,7 +183,9 @@ export async function validateApiKey(
 
     const { data: userData } = await supabase
         .from('users')
-        .select('role, status')
+        // '*' rather than naming is_api_user, so auth keeps working on a database
+        // migration 20261015010000 has not reached yet.
+        .select('*')
         .eq('id', keyRow.user_id)
         .single()
 
@@ -187,9 +196,18 @@ export async function validateApiKey(
 
     if (userStatus !== 'active') return apiError(403, 'Your account is suspended or inactive')
 
-    // Standard keys work for every active account, whatever its role — the
-    // stored api_allowed_roles setting is no longer consulted. Approval of the
-    // key itself (status 'active') is the gate. Commission keys stay role-gated,
+    // Standard keys need the account switched on as an API user by an admin, on
+    // top of the key's own approval. Admins pass regardless. A missing column
+    // (migration not run) means the gate is not live yet, so it is skipped.
+    if (keyKind === 'standard'
+        && userRole !== 'admin' && userRole !== 'sub-admin'
+        && 'is_api_user' in (userData as any)
+        && (userData as any).is_api_user !== true) {
+        return apiError(403, 'Your account is not enabled for API access. Contact support to become an API user.')
+    }
+
+    // The stored api_allowed_roles setting is no longer consulted for standard
+    // keys. Commission keys stay role-gated,
     // but dealers are always allowed: api_commission_allowed_roles predates
     // dealers, has no admin UI, and a dealer can be issued and approved a
     // commission key that this check would then refuse on every call.
@@ -213,6 +231,12 @@ export async function validateApiKey(
 }
 
 function enforceKind(actual: ApiKeyKind, required?: ApiKeyKind): NextResponse | null {
+    // An SMS key spends SMS credits and nothing else. v1 routes pass no kind and
+    // accept "either" — that must never include a key minted for SMS, or it
+    // could place data orders against the wallet.
+    if (actual === 'sms' && required !== 'sms') {
+        return apiError(403, 'An SMS API key can only be used with the /api/v2/sms endpoints.')
+    }
     if (!required || actual === required) return null
     return apiError(403, `This endpoint requires a ${KIND_LABEL[required]}. You sent a ${KIND_LABEL[actual]}.`)
 }
@@ -322,6 +346,7 @@ export function getClientIp(request: NextRequest): string | null {
 export type RateLimitBucket =
     | 'purchase' | 'bulk' | 'balance' | 'status' | 'commission'
     | 'billers' | 'lookup' | 'pay' | 'orders'
+    | 'sms_send' | 'sms_read'
 
 const DEFAULT_LIMITS: Record<RateLimitBucket, number> = {
     // Data API
@@ -337,6 +362,10 @@ const DEFAULT_LIMITS: Record<RateLimitBucket, number> = {
     lookup:     10,
     pay:         6,
     orders:     30,
+    // SMS API. One send can carry thousands of recipients, so the request rate
+    // is not what limits volume — the daily limit and credits are.
+    sms_send:   30,
+    sms_read:   60,
 }
 
 let rateLimitRedis: Redis | null = null

@@ -27,6 +27,7 @@ import { SmsContacts, type SmsGroup } from '@/components/sms/sms-contacts'
 import { SmsCompose, type AllowedSender } from '@/components/sms/sms-compose'
 import { SmsHistory } from '@/components/sms/sms-history'
 import { SmsOrderSettings } from '@/components/sms/sms-order-settings'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface AccountInfo {
     enabled: boolean
@@ -37,6 +38,8 @@ interface AccountInfo {
     contactCount: number
     isSub: boolean
     unlockPrice: number
+    freeActivation?: boolean
+    mode?: 'platform' | 'business'
     account: {
         status: 'locked' | 'active' | 'suspended'
         credits: number
@@ -69,7 +72,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
     const loadAccount = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/account', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) setInfo(data)
             else toast.error(data?.error || 'Could not load Customer SMS')
@@ -84,7 +87,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
     const loadGroups = useCallback(async () => {
         try {
-            const res = await fetch('/api/sms/groups', { cache: 'no-store' })
+            const res = await smsFetch('/api/sms/groups', { cache: 'no-store' })
             const data = await res.json()
             if (data?.success) setGroups(data.groups)
         } catch { /* groups are optional to the page */ }
@@ -105,7 +108,7 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
     const refreshAll = useCallback(() => { loadAccount(); loadGroups() }, [loadAccount, loadGroups])
 
     const isUnlocked = useCallback(async () => {
-        const res = await fetch('/api/sms/account', { cache: 'no-store' })
+        const res = await smsFetch('/api/sms/account', { cache: 'no-store' })
         const data = await res.json()
         return data?.account?.status === 'active'
     }, [])
@@ -115,6 +118,25 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
         await loadAccount()
         setTab('senders')
     }, [loadAccount])
+
+    const [activating, setActivating] = useState(false)
+    const activateFree = useCallback(async () => {
+        setActivating(true)
+        try {
+            const res = await smsFetch('/api/sms/unlock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            })
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) { toast.error(data?.error || 'Could not activate Customer SMS'); return }
+            await onUnlocked()
+        } catch {
+            toast.error('Could not activate Customer SMS. Please try again.')
+        } finally {
+            setActivating(false)
+        }
+    }, [onUnlocked])
 
     const back = (
         <Link href={backHref}><Button variant="ghost" className="gap-2"><ArrowLeft className="w-4 h-4" /> {backLabel}</Button></Link>
@@ -195,8 +217,14 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
                         Send SMS to your customers under your own business name — new stock, promos, order updates.
                     </p>
                     <div className="mt-6 flex items-baseline gap-2">
-                        <span className="text-4xl font-black">GHS {Number(info.unlockPrice).toFixed(2)}</span>
-                        <span className="text-emerald-100/80 text-sm">one time</span>
+                        {info.freeActivation ? (
+                            <span className="text-4xl font-black">FREE</span>
+                        ) : (
+                            <>
+                                <span className="text-4xl font-black">GHS {Number(info.unlockPrice).toFixed(2)}</span>
+                                <span className="text-emerald-100/80 text-sm">one time</span>
+                            </>
+                        )}
                     </div>
                 </div>
 
@@ -229,14 +257,20 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
-                            <SmsPaymentForm
-                                endpoint="/api/sms/unlock"
-                                amount={info.unlockPrice}
-                                payLabel="Unlock"
-                                deBranded={deBranded}
-                                isSettled={isUnlocked}
-                                onSettled={onUnlocked}
-                            />
+                            {info.freeActivation ? (
+                                <Button className="w-full" onClick={activateFree} disabled={activating}>
+                                    {activating ? 'Activating…' : 'Activate free'}
+                                </Button>
+                            ) : (
+                                <SmsPaymentForm
+                                    endpoint="/api/sms/unlock"
+                                    amount={info.unlockPrice}
+                                    payLabel="Unlock"
+                                    deBranded={deBranded}
+                                    isSettled={isUnlocked}
+                                    onSettled={onUnlocked}
+                                />
+                            )}
                         </CardContent>
                     </Card>
                 )}
@@ -325,6 +359,9 @@ export function CustomerSmsPanel({ backHref, backLabel = 'Back to Shop', setupHr
 
                 <TabsContent value="send" className="mt-4">
                     <SmsCompose
+                        // Shop Customer SMS has no Platform/Business modes: links are
+                        // allowed, as they always were. Scam warnings still show.
+                        mode="business"
                         credits={account.credits}
                         allowedSenders={info.allowedSenders}
                         groups={groups}

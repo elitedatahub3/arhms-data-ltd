@@ -1,24 +1,25 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext } from '@/lib/sms/sms-purchase'
+import { fetchBundles, bundleAudienceFor } from '@/lib/sms/platform'
 
 /**
  * The credit bundles on sale, plus the caller's current balance.
  *
  * Prices come from the sms_credit_bundles table rather than a constant so admin
- * can retune them without a deploy.
+ * can retune them without a deploy. ?portal=platform returns the SMS Platform
+ * price list; anything else returns the shop Customer SMS list.
  */
-export async function GET() {
+export async function GET(request: Request) {
     try {
         const ctx = await loadSmsContext()
         if ('error' in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status })
 
         const { supabaseAdmin, account } = ctx
 
-        const { data: bundles } = await supabaseAdmin
-            .from('sms_credit_bundles')
-            .select('id, name, credits, price')
-            .eq('is_active', true)
-            .order('sort_order', { ascending: true })
+        // The platform account sells the platform price list; the shop account the
+        // shop list. ?portal=platform is still honoured for older clients.
+        const audience = ctx.scope === 'platform' ? 'platform' : bundleAudienceFor(new URL(request.url).searchParams.get('portal'))
+        const bundles = await fetchBundles(supabaseAdmin, audience)
 
         const { data: purchases } = await supabaseAdmin
             .from('sms_credit_purchases')

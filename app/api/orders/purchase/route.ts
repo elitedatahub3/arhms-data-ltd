@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { generateReferenceCode } from '@/lib/utils'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
-import { sendOrderSuccessEmail, sendAdminNewOrderAlert } from '@/lib/email-service'
-import { sendAdminAgentOrderAlert } from '@/lib/sms-service'
-import { sendPushToUser, sendPushToAdmins } from '@/lib/web-push'
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
-import { resolveDataPrice } from '@/lib/data-order-pricing'
-import { triggerFulfillment } from '@/lib/order-fulfillment-dispatcher'
+import { purchaseDataWithWallet } from '@/lib/wallet-data-purchase'
 import { checkMtnRegistration, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 
 const purchaseRateLimit = new Ratelimit({
@@ -71,244 +66,46 @@ export async function POST(request: NextRequest) {
         // Service role client for privileged operations
         const supabase = createServerClient()
 
-        // === IDEMPOTENCY: If a referenceCode was provided by the client, check for duplicates first ===
-        if (clientReferenceCode) {
-            const { data: existingOrder } = await (supabase.from('orders') as any)
-                .select('id, reference_code, status')
-                .eq('reference_code', clientReferenceCode)
-                .maybeSingle()
+        // Everything from the idempotency check to supplier fulfilment lives in
+        // lib/wallet-data-purchase.ts, shared with USSD member orders so both charge
+        // and fulfil a bundle the same way.
+        const result = await purchaseDataWithWallet({
+            supabase,
+            userId,
+            packageId,
+            phoneNumber,
+            referenceCode: clientReferenceCode,
+            // MTN registration gate. Runs before the wallet is touched, so a refusal
+            // charges nothing and creates no order. Off unless an admin turns it on.
+            beforeCharge: async (pkg) => {
+                const gate = await checkMtnRegistration(supabase, phoneNumber, pkg.network, 'site')
+                return gate.gated
+                    ? { status: 409, body: registrationRequiredBody([gate.normalizedNumber]) }
+                    : null
+            },
+        })
 
-            if (existingOrder) {
-                // Order already exists — this is a duplicate request. Return success with existing data.
-                console.log('[Purchase] Duplicate request blocked for client reference')
-                return NextResponse.json({
-                    success: true,
-                    isDuplicate: true,
-                    order: {
-                        id: existingOrder.id,
-                        reference_code: existingOrder.reference_code,
-                        status: existingOrder.status,
-                    },
-                })
-            }
+        if (!result.ok) {
+            return NextResponse.json(result.body ?? { error: result.error }, { status: result.status })
         }
 
-        // Get package details
-        const { data: pkg, error: pkgError } = await supabase
-            .from('data_packages')
-            .select('*')
-            .eq('id', packageId)
-            .eq('is_available', true)
-            .single()
-
-        if (pkgError || !pkg) {
-            return NextResponse.json({ error: 'Package not found' }, { status: 404 })
-        }
-
-        // Check if phone is blacklisted
-        const { data: blacklisted } = await supabase
-            .from('phone_blacklist')
-            .select('id')
-            .eq('phone_number', phoneNumber)
-            .single()
-
-        if (blacklisted) {
-            return NextResponse.json({ error: 'This phone number is not allowed' }, { status: 400 })
-        }
-
-        // MTN registration gate. Runs before the wallet is touched, so a refusal
-        // charges nothing and creates no order. Off unless an admin turns it on.
-        const gate = await checkMtnRegistration(supabase, phoneNumber, (pkg as any).network)
-        if (gate.gated) {
-            return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
-        }
-
-        // Resolve the authoritative price (sub-agent gates + role pricing)
-        const priceResult = await resolveDataPrice(supabase, userId, pkg)
-
-        if (!priceResult.ok || !priceResult.data) {
-            return NextResponse.json(
-                { error: priceResult.error || 'Failed to resolve price' },
-                { status: priceResult.status || 500 }
-            )
-        }
-
-        const { price: priceToCharge, role: userRole } = priceResult.data
-        const isAgent = userRole === 'agent'
-
-        // === SECURITY: Atomic wallet deduction (prevents double-spend) ===
-        const { data: deductResult, error: deductError } = await (supabase as any)
-            .rpc('deduct_wallet_balance', {
-                p_user_id: userId,
-                p_amount: priceToCharge,
-            })
-
-        if (deductError) {
-            if (deductError.message?.includes('INSUFFICIENT_BALANCE')) {
-                return NextResponse.json({ error: 'Insufficient balance' }, { status: 400 })
-            }
-            console.error('Wallet deduction error:', deductError)
-            return NextResponse.json({ error: 'Failed to process payment' }, { status: 500 })
-        }
-
-        const walletRow = deductResult?.[0] || deductResult
-        const walletId = walletRow?.wallet_id
-        const newBalance = walletRow?.new_balance
-
-        if (!walletId) {
-            return NextResponse.json({ error: 'Wallet not found' }, { status: 404 })
-        }
-
-        // Use client-provided referenceCode if available, else generate a new one
-        const referenceCode = clientReferenceCode || generateReferenceCode()
-
-        // Create order AFTER successful deduction
-        const { data: order, error: orderError } = await (supabase
-            .from('orders') as any)
-            .insert({
-                user_id: userId,
-                phone_number: phoneNumber,
-                network: (pkg as any).network,
-                size: (pkg as any).size,
-                price: priceToCharge,
-                cost_price_at_time: (pkg as any).cost_price || 0,
-                role_at_time: userRole || 'customer',
-                status: 'pending',
-                payment_status: 'paid',
-                reference_code: referenceCode,
-                fulfillment_method: 'auto',
-            })
-            .select()
-            .single()
-
-        if (orderError) {
-            console.error('Order creation error:', orderError)
-            // Refund the deducted amount atomically since order failed
-            const { error: refundError } = await (supabase as any)
-                .rpc('credit_wallet_balance', {
-                    p_user_id: userId,
-                    p_amount: priceToCharge
-                })
-
-            if (refundError) {
-                console.error('CRITICAL: Refund RPC failed', refundError)
-            }
-            return NextResponse.json({ error: 'Failed to create order' }, { status: 500 })
-        }
-
-        // === PERFORMANCE: Create wallet transaction (non-blocking, fire-and-forget) ===
-        ;(supabase.from('wallet_transactions') as any).insert({
-            wallet_id: walletId,
-            user_id: userId,
-            type: 'debit',
-            amount: priceToCharge,
-            description: `Data purchase: ${(pkg as any).size} for ${phoneNumber}`,
-            reference: referenceCode,
-            source: 'purchase',
-            status: 'completed',
-        }).then(() => {}).catch((e: any) => console.error('[Purchase] Tx insert error:', e))
-
-        // === PERFORMANCE: Create notification + web push (fire-and-forget) ===
-        const progressMessage = `Your order for ${(pkg as any).size} to ${phoneNumber} has been placed and is being processed.`
-
-        ;(supabase.from('notifications') as any).insert({
-            user_id: userId,
-            title: 'Order Placed',
-            message: progressMessage,
-            type: 'order_update',
-            action_url: `/dashboard/my-orders`,
-        }).then(() => {}).catch((e: any) => console.error('[Purchase] Notification error:', e))
-
-        await sendPushToUser(userId, {
-            title: 'Order Placed',
-            body: `Your ${(pkg as any).size} bundle for ${phoneNumber} is being processed.`,
-            url: '/dashboard/my-orders',
-        }).catch((e: any) => console.error('[Purchase] Push error:', e))
-
-        // === NOTIFICATIONS & AUTO-FULFILLMENT: Awaited to ensure Vercel doesn't kill process ===
-        try {
-            // Fetch user data once for both notifications and fulfillment
-            const { data: userData, error: userFetchError } = await supabase
-                .from('users')
-                .select('email, first_name, last_name, phone_number, role')
-                .eq('id', userId)
-                .single()
-
-            if (userFetchError || !userData) {
-                console.error('[Purchase] Post-purchase user fetch failed:', userFetchError)
-            } else {
-                const userEmail = (userData as any).email
-                const firstName = (userData as any).first_name || 'Customer'
-                const accountHolderPhone = (userData as any).phone_number
-
-                // 1. Send User Email Confirmation (Removed as requested)
-                // if (userEmail) {
-                //     await sendOrderSuccessEmail(userEmail, firstName, {
-                //         referenceCode,
-                //         phoneNumber,
-                //         network: (pkg as any).network,
-                //         size: (pkg as any).size,
-                //         price: priceToCharge
-                //     }).then(() => console.log('[Purchase] Confirmation email sent successfully'))
-                //       .catch((err: Error) => console.error('[Purchase] Confirmation email failed:', err))
-                // }
-
-                // 2. No "order received" SMS from here — triggerFulfillment sends one
-                // once the supplier has actually accepted the order.
-
-                // 3. Send Admin Agent Alert
-                if (isAgent) {
-                    await sendAdminAgentOrderAlert()
-                        .catch((err: Error) => console.error('[Purchase] Admin agent alert failed:', err))
-                }
-
-                // 4. Notify admin via push
-                await sendPushToAdmins({
-                    title: 'New Data Order',
-                    body: `${firstName} · ${(pkg as any).network} ${(pkg as any).size} → ${phoneNumber} (GHS ${priceToCharge.toFixed(2)})`,
-                    url: '/admin/orders',
-                }).catch(() => {})
-
-                // 4. Trigger Auto-Fulfillment
-                // An unregistered MTN recipient is not special-cased here. The supplier
-                // rejects it, auto-submits the number to MTN, and the order stays pending
-                // for the auto-refulfill cron — the behaviour that predates the gate.
-                if ((pkg as any).network === 'EXPRESS MTN') {
-                    // EXPRESS MTN is always manual — skip auto-fulfillment, just alert admin
-                    await sendAdminNewOrderAlert({
-                        referenceCode: (order as any).reference_code,
-                        phoneNumber: (order as any).phone_number,
-                        network: (order as any).network,
-                        size: (order as any).size,
-                        price: priceToCharge,
-                        customerName: `${firstName} ${(userData as any).last_name || ''}`.trim() || 'Customer',
-                        customerEmail: userEmail || 'Unknown',
-                        source: 'main_site' as const,
-                        reason: 'EXPRESS MTN — Manual fulfillment required'
-                    }).catch(err => console.error('[Purchase] EXPRESS MTN admin alert failed:', err))
-                } else {
-                    await triggerFulfillment((order as any).id, (pkg as any).network, {
-                        email: userEmail || 'Unknown',
-                        name: `${firstName} ${(userData as any).last_name || ''}`.trim() || 'Customer'
-                    })
-                }
-            }
-        } catch (postPurchaseError) {
-            console.error('[Purchase] Post-purchase notification/fulfillment failed:', postPurchaseError)
+        if (result.isDuplicate) {
+            // Order already exists — this is a duplicate request. Return success with existing data.
+            return NextResponse.json({ success: true, isDuplicate: true, order: result.order })
         }
 
         // Return immediately — don't wait for fulfillment/emails/SMS
         return NextResponse.json({
             success: true,
             order: {
-                id: (order as any).id,
-                reference_code: referenceCode,
+                id: result.order.id,
+                reference_code: result.order.reference_code,
                 status: 'pending',
-                network: (pkg as any).network,
-                size: (pkg as any).size,
+                network: result.network,
+                size: result.size,
                 phone_number: phoneNumber,
-                price: priceToCharge,
-                new_balance: newBalance,
+                price: result.price,
+                new_balance: result.newBalance,
             },
         })
     } catch (error: any) {

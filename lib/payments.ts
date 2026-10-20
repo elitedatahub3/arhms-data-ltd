@@ -2,6 +2,7 @@ import { createServerClient } from './supabase'
 import { sendWalletTopupSuccessEmail, sendPermanentAgentUpgradeSuccessEmail } from './email-service'
 import { sendWalletTopupSuccessSMS, sendAgentUpgradeSuccessSMS, sendAgentExtensionSuccessSMS, sendPermanentAgentUpgradeSuccessSMS, sendDealerUpgradeSuccessSMS, sendUssdActivationSMS } from './sms-service'
 import { sendPushToUser, sendPushToAdmins } from './web-push'
+import { snapshotBeforeDealer } from './dealer-role-history'
 
 /**
  * Processes a completed payment by updating the status, 
@@ -572,7 +573,53 @@ export async function processCompletedSmsUnlock(reference: string, providerMetad
         title: 'Customer SMS Unlocked 💬',
         message: 'You can now request your sender ID, buy SMS credits and message your customers.',
         type: 'system',
-        action_url: subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+        action_url: originalMetadata.portal === 'platform' ? '/dashboard/sms' : subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+    })
+
+    return { success: true }
+}
+
+/**
+ * Free activation: the admin has waived the unlock fee, so the account goes
+ * locked -> active with no payment row. Same conditional update as the paid path,
+ * so a suspended account stays suspended and a repeat call changes nothing.
+ */
+export async function activateSmsAccountFree(params: { accountId: string; userId: string; portal?: string }) {
+    const { accountId, userId, portal } = params
+    const supabase = createServerClient()
+
+    const { data: updated, error } = await (supabase.from('sms_accounts') as any)
+        .update({
+            status: 'active',
+            unlocked_at: new Date().toISOString(),
+            unlock_reference: 'free_activation',
+            unlock_amount: 0,
+            updated_at: new Date().toISOString(),
+        })
+        .eq('id', accountId)
+        .eq('status', 'locked')
+        .select('id')
+
+    if (error) {
+        console.error('[SmsFreeActivation] Account update error:', error)
+        return { success: false, error: 'Could not activate Customer SMS' }
+    }
+    // Nothing matched: already active (a double tap) or suspended. Not an error here;
+    // the route has already rejected suspended accounts.
+    if (!updated || updated.length === 0) return { success: true, alreadyProcessed: true }
+
+    const { data: subRow } = await supabase
+        .from('sub_agents')
+        .select('id')
+        .eq('user_id', userId)
+        .maybeSingle()
+
+    await (supabase.from('notifications') as any).insert({
+        user_id: userId,
+        title: 'Customer SMS Unlocked 💬',
+        message: 'You can now request your sender ID, buy SMS credits and message your customers.',
+        type: 'system',
+        action_url: portal === 'platform' ? '/dashboard/sms' : subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
     })
 
     return { success: true }
@@ -679,7 +726,7 @@ export async function processCompletedSmsCreditPurchase(reference: string, provi
         title: 'SMS Credits Added 💬',
         message: `${purchase.credits} SMS credits have been added. Your balance is now ${newBalance}.`,
         type: 'system',
-        action_url: subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
+        action_url: originalMetadata.portal === 'platform' ? '/dashboard/sms' : subRow ? '/dashboard/sub/sms' : '/dashboard/shop/sms',
     })
 
     return { success: true, credits: purchase.credits, balance: newBalance }
@@ -738,7 +785,7 @@ export async function processCompletedDealerSubscription(reference: string, prov
     // 3. Load the user
     const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('role, dealer_expires_at, dealer_claimed_at, first_name, phone_number')
+        .select('role, dealer_expires_at, dealer_claimed_at, agent_expires_at, first_name, phone_number')
         .eq('id', payment.user_id)
         .single()
 
@@ -764,6 +811,8 @@ export async function processCompletedDealerSubscription(reference: string, prov
             role: 'dealer',
             dealer_expires_at: newExpiry.toISOString(),
             dealer_claimed_at: user.dealer_claimed_at ?? now.toISOString(),
+            // What to go back to when the dealership ends ({} on a renewal)
+            ...snapshotBeforeDealer(user, now),
             updated_at: now.toISOString(),
         })
         .eq('id', payment.user_id)

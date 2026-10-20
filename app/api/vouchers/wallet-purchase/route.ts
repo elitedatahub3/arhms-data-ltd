@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createRouteClient } from '@/lib/supabase-server'
 import { purchaseWithWallet } from '@/lib/vouchers/checkout'
+import { isApiUserRow } from '@/lib/api-pricing'
 
 export async function POST(request: NextRequest) {
     try {
@@ -23,7 +24,8 @@ export async function POST(request: NextRequest) {
         // Get user profile for role
         const { data: userProfile, error: profileError } = await supabase
             .from('users')
-            .select('role, email, first_name')
+            // '*' so a database without is_api_user still works (lib/api-pricing.ts).
+            .select('*')
             .eq('id', session.user.id)
             .single()
 
@@ -43,7 +45,9 @@ export async function POST(request: NextRequest) {
             quantity,
             customerName: name,
             customerEmail: email,
-            customerPhone
+            customerPhone,
+            // API users pay the admin-set API price when the type has one.
+            apiPricing: isApiUserRow(userProfile),
         })
 
         return NextResponse.json({ success: true, data: result })

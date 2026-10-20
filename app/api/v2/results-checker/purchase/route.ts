@@ -108,6 +108,7 @@ export async function POST(request: NextRequest) {
             customerPhone,
             referenceCode,
             apiKeyId,
+            apiPricing: true,
         })
 
         const order = result.order as any

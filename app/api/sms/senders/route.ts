@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { loadSmsContext, smsBlockReason, isCustomerSmsEnabled, SMS_DISABLED_MESSAGE } from '@/lib/sms/sms-purchase'
-import { validateSenderId, getAllowedSenders, SENDER_ID_TIPS } from '@/lib/sms/customer-sms'
+import { validateSenderId, getAllowedSenders, SENDER_ID_TIPS, senderClaimedByOtherUser } from '@/lib/sms/customer-sms'
+import { senderCapFor, getSmsBusiness } from '@/lib/sms/platform'
 
 /**
  * Sender IDs: the brand name the shop's messages arrive from.
@@ -14,7 +15,7 @@ export async function GET() {
         const ctx = await loadSmsContext()
         if ('error' in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status })
 
-        const { supabaseAdmin, account } = ctx
+        const { supabaseAdmin, account, settingsMap, mode } = ctx
 
         const { data: senders } = await supabaseAdmin
             .from('sms_sender_ids')
@@ -27,6 +28,8 @@ export async function GET() {
             senderIds: senders || [],
             allowedSenders: await getAllowedSenders(supabaseAdmin, account.id),
             tips: SENDER_ID_TIPS,
+            mode,
+            cap: senderCapFor(mode, settingsMap),
         })
     } catch (error: any) {
         console.error('[SmsSenders] GET error:', error)
@@ -45,7 +48,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: SMS_DISABLED_MESSAGE }, { status: 503 })
         }
 
-        const blockedReason = smsBlockReason(shop, sub)
+        const blockedReason = smsBlockReason(shop, sub, ctx.userStatus)
         if (blockedReason) return NextResponse.json({ error: blockedReason }, { status: 403 })
 
         if (account.status !== 'active') {
@@ -66,27 +69,51 @@ export async function POST(request: Request) {
 
         // A rejected name can be resubmitted after the owner fixes it, so only a
         // request that is still live blocks a new one.
-        const { data: existing } = await supabaseAdmin
+        const { count: liveCount } = await supabaseAdmin
             .from('sms_sender_ids')
-            .select('id, status')
+            .select('id', { count: 'exact', head: true })
             .eq('account_id', account.id)
             .in('status', ['pending', 'submitted', 'approved'])
 
-        if ((existing || []).length >= 3) {
+        // Platform Mode gets a few KYC-free names; an approved business gets
+        // many. Both caps are admin settings.
+        const cap = senderCapFor(ctx.mode, settingsMap)
+        if ((liveCount ?? 0) >= cap) {
             return NextResponse.json(
-                { error: 'You already have three sender IDs requested or approved. Contact support if you need another.' },
+                {
+                    error: ctx.mode === 'business'
+                        ? `You already have ${cap} sender IDs requested or approved. Contact support if you need more.`
+                        : `Platform Mode accounts can hold ${cap} sender ID${cap === 1 ? '' : 's'}. Register your business to request more.`,
+                    needsBusinessMode: ctx.mode !== 'business',
+                },
                 { status: 400 }
             )
         }
 
+        // Someone else's name is refused up front. The caller's own name on their
+        // other SMS account (shop or platform) is allowed.
+        if (await senderClaimedByOtherUser(supabaseAdmin, sender, ctx.authUser.id)) {
+            return NextResponse.json(
+                { error: 'That sender ID is already taken. Please choose a different name.' },
+                { status: 409 }
+            )
+        }
+
+        const business = ctx.mode === 'business' ? await getSmsBusiness(supabaseAdmin, account.id) : null
+
+        const row: Record<string, any> = {
+            account_id: account.id,
+            sender,
+            business_name: businessName || business?.business_name || (shop as any)?.shop_name || null,
+            ghana_card_url: ghanaCardUrl,
+            status: 'pending',
+        }
+        // Only written once the migration has added the column; a 'platform'
+        // default covers older databases.
+        if (ctx.mode === 'business') row.kind = 'business'
+
         const { data: created, error } = await (supabaseAdmin.from('sms_sender_ids') as any)
-            .insert({
-                account_id: account.id,
-                sender,
-                business_name: businessName || (shop as any)?.shop_name || null,
-                ghana_card_url: ghanaCardUrl,
-                status: 'pending',
-            })
+            .insert(row)
             .select('id, sender, status, created_at')
             .single()
 

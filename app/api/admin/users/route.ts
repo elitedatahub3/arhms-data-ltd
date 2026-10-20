@@ -20,13 +20,26 @@ export async function GET(request: NextRequest) {
         const search = rawSearch ? rawSearch.trim().slice(0, 100) : null
         const role = searchParams.get('role')
 
-        const VALID_ROLES = ['customer', 'agent', 'sub-admin', 'admin', 'all']
+        // 'api' is not a role: it filters to accounts an admin has switched on as API
+        // users (users.is_api_user), whatever their role.
+        const VALID_ROLES = ['customer', 'agent', 'dealer', 'sub-admin', 'admin', 'api', 'all']
         if (role && !VALID_ROLES.includes(role)) {
             return NextResponse.json({ error: 'Invalid role filter' }, { status: 400 })
         }
 
         // Service role client to bypass RLS
         const supabase = createServerClient()
+
+        // Every live key, keyed by user. Few enough rows to read whole; lets the card
+        // flag someone who requested a key but is not yet an API user.
+        const { data: keyRows } = await (supabase.from('api_keys') as any)
+            .select('user_id, status')
+            .in('status', ['active', 'pending'])
+        const apiStatusByUser = new Map<string, string>()
+        for (const k of ((keyRows as any[]) || [])) {
+            // One active key outranks a pending one.
+            if (apiStatusByUser.get(k.user_id) !== 'active') apiStatusByUser.set(k.user_id, k.status)
+        }
 
         // Add timeout to prevent hanging queries
         const timeoutPromise = new Promise((_, reject) =>
@@ -35,23 +48,18 @@ export async function GET(request: NextRequest) {
 
         let query = supabase
             .from('users')
+            // '*' rather than a column list so is_api_user comes back when the
+            // migration has run, without breaking this page when it has not.
             .select(`
-                id,
-                email,
-                first_name,
-                last_name,
-                phone_number,
-                role,
-                status,
-                agent_expires_at,
-                created_at,
-                updated_at,
+                *,
                 wallets (
                     balance
                 )
             `, { count: 'exact' })
 
-        if (role && role !== 'all') {
+        if (role === 'api') {
+            query = query.eq('is_api_user', true)
+        } else if (role && role !== 'all') {
             query = query.eq('role', role)
         }
 
@@ -74,7 +82,7 @@ export async function GET(request: NextRequest) {
         }
 
         return NextResponse.json({
-            users: users || [],
+            users: ((users as any[]) || []).map(u => ({ ...u, api_key_status: apiStatusByUser.get(u.id) ?? null })),
             totalCount: count || 0
         })
     } catch (error: any) {

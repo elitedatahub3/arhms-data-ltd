@@ -22,6 +22,7 @@ import {
 } from '@/lib/paystack-momo-checkout'
 import { checkMtnRegistration, registrationRequiredBody } from '@/lib/mtn-registration-gate'
 import { saveShopMeta, getShopMeta, deleteShopMeta } from '@/lib/shop-meta-store'
+import { ownerCostPrice } from '@/lib/shop-price-limits'
 
 // Redis client for distributed idempotency across all serverless instances.
 // In-memory Maps were removed — they reset on every Vercel cold start.
@@ -221,27 +222,17 @@ export async function POST(request: NextRequest) {
 
             sellingPrice = parseFloat(shopPrice.selling_price)
             const ownerRole = shop.owner?.role || 'customer'
-            const ownerIsAgentTier = ['agent', 'dealer'].includes(ownerRole)
 
-            // Use the correct cost price based on the owner's role tier
-            let tierPrice = 0
-            if (ownerRole === 'dealer' && parseFloat(pkg.dealer_price) > 0) {
-                tierPrice = parseFloat(pkg.dealer_price)
-            } else if (ownerRole === 'agent' && parseFloat(pkg.agent_price) > 0) {
-                tierPrice = parseFloat(pkg.agent_price)
-            }
-            const hasTierPrice = ownerIsAgentTier && tierPrice > 0
-            costPrice = hasTierPrice ? tierPrice : (parseFloat(pkg.price) || 0)
-            profit = hasTierPrice ? sellingPrice - costPrice : sellingPrice
+            // Same cost ladder lib/shop-order-processor.ts settles with.
+            costPrice = ownerCostPrice(pkg, ownerRole)
+            profit = Math.round((sellingPrice - costPrice) * 100) / 100
 
             if (sellingPrice <= 0) {
                 return NextResponse.json({ error: 'Invalid pricing configuration' }, { status: 400 })
             }
-            // Only enforce profit margin when a known cost price exists
-            if (!ownerIsAgentTier && profit <= 0) {
-                return NextResponse.json({ error: 'Invalid pricing configuration' }, { status: 400 })
-            }
-            if (hasTierPrice && profit < 0) {
+            // Refuse before the prompt goes out: settlement rejects profit ≤ 0, and
+            // by then the customer has already paid.
+            if (profit <= 0) {
                 return NextResponse.json({ error: 'Invalid pricing configuration' }, { status: 400 })
             }
 
@@ -293,7 +284,7 @@ export async function POST(request: NextRequest) {
         // so a held order is one they can neither track nor chase. Refusing the sale is
         // kinder than banking it against a two-week wait they cannot follow up on.
         if (orderType !== 'airtime') {
-            const gate = await checkMtnRegistration(db, cleanPhone, pkgNetwork)
+            const gate = await checkMtnRegistration(db, cleanPhone, pkgNetwork, 'shop')
             if (gate.gated) {
                 return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
             }
@@ -344,11 +335,33 @@ export async function POST(request: NextRequest) {
                         metadata: fullMetadata,
                     }),
                 })
+            // Paystack echoes the metadata back, but the stored copy is what opens the
+            // ledger row the reconciliation cron settles from if no webhook arrives.
+            if (!existingRef) {
+                await saveShopMeta(shopRef, fullMetadata)
+            }
+
+            const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    email: validatedGuestEmail || `guest-${cleanPhone}@checkout.arhmsgh.com`,
+                    amount: totalAmount, // already in pesewas
+                    reference: shopRef,
+                    callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/shop/${shopSlug}/success?reference=${shopRef}`,
+                    metadata: fullMetadata,
+                }),
+            })
 
             const paystackData = await paystackRes.json()
 
             if (!paystackData.status) {
                 console.error('[ShopInit] Paystack init failed:', paystackData)
+                // No checkout page was created, so nothing can be paid on this reference.
+                if (!existingRef) await deleteShopMeta(shopRef)
                 return NextResponse.json({ error: 'Payment gateway error' }, { status: 500 })
             }
 
@@ -526,6 +539,13 @@ export async function POST(request: NextRequest) {
             }
         }
 
+        // Metadata must be stored BEFORE the prompt, as on every other rail: it used to
+        // be written after initiatePayment returned, so a Redis-and-database failure
+        // there left a live prompt with the order details stored nowhere.
+        if (!existingRef) {
+            await saveShopMeta(shopRef, fullMetadata)
+        }
+
         let moolreResponse = await initiatePayment({
             amount: totalAmount / 100,
             payerPhone: payerClean,
@@ -545,13 +565,12 @@ export async function POST(request: NextRequest) {
         }
 
         if (!moolreResponse.success) {
+            // Refused: no prompt went out on a fresh reference, so drop its record.
+            if (!existingRef) await deleteShopMeta(shopRef)
             return NextResponse.json({ error: moolreResponse.error || 'Payment initialization failed' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ' || (!otpCode && moolreResponse.success)) {
-            if (!existingRef) {
-                await saveShopMeta(shopRef, fullMetadata)
-            }
+        if (moolreResponse.status === '200_OTP_REQ') {
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',
@@ -559,10 +578,6 @@ export async function POST(request: NextRequest) {
                 reference: shopRef,
                 message: 'OTP is required to complete this payment. Please enter the code sent to your phone.',
             })
-        }
-
-        if (!existingRef) {
-            await saveShopMeta(shopRef, fullMetadata)
         }
 
         try {
@@ -578,7 +593,7 @@ export async function POST(request: NextRequest) {
         // checkout. Say so plainly (and 503, so it reads as retryable) instead of
         // a generic "Internal server error" that gives the shopper nothing to act on.
         const detail = error instanceof Error ? `${error.name} ${error.message}` : String(error)
-        if (/upstash|max requests limit|redis/i.test(detail)) {
+        if (/upstash|max requests limit|redis|ShopMeta durable write failed/i.test(detail)) {
             return NextResponse.json(
                 { error: 'Payments are temporarily unavailable. Please try again in a few minutes.' },
                 { status: 503 }

@@ -4,8 +4,21 @@
  * Cache expires after 5 minutes
  */
 
+import { buildDealerPlanConfig, type DealerPlanConfig } from '@/lib/dealer-plans'
+
 const CACHE_KEY = 'agent_pricing_cache'
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
+
+function legacyDealerPlans(price3m?: number, price6m?: number): DealerPlanConfig {
+    return buildDealerPlanConfig([
+        { key: 'dealer_subscription_price_3m', value: String(price3m ?? 0) },
+        { key: 'dealer_subscription_price_6m', value: String(price6m ?? 0) },
+        // short plans did not exist when this cache was written
+        { key: 'dealer_plan_enabled_3d', value: 'false' },
+        { key: 'dealer_plan_enabled_2w', value: 'false' },
+        { key: 'dealer_plan_enabled_1m', value: 'false' },
+    ])
+}
 
 export interface PricingData {
     prices: {
@@ -36,6 +49,9 @@ export interface PricingData {
     whatsappCommunityLink: string
     dealerPrice6m: number
     dealerPrice3m: number
+    // Price + on/off for every dealer plan. Missing on caches written before
+    // the short plans existed, so readers must go through getCachedPricing.
+    dealerPlans: DealerPlanConfig
 }
 
 interface CachedData extends PricingData {
@@ -76,6 +92,7 @@ export async function getCachedPricing(): Promise<PricingData> {
                     whatsappCommunityLink: data.whatsappCommunityLink,
                     dealerPrice6m: data.dealerPrice6m ?? 0,
                     dealerPrice3m: data.dealerPrice3m ?? 0,
+                    dealerPlans: data.dealerPlans ?? legacyDealerPlans(data.dealerPrice3m, data.dealerPrice6m),
                 }
             }
         }

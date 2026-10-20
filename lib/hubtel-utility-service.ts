@@ -35,6 +35,7 @@ import {
     describeHubtelNetworkFailure,
 } from '@/lib/hubtel-payment-service'
 import { sanitizeForLog } from '@/lib/safe-log'
+import { webhookBaseUrl } from './webhook-base-url'
 
 const HUBTEL_CS_BASE_URL = 'https://cs.hubtel.com/commissionservices'
 
@@ -511,7 +512,7 @@ export async function payUtilityBill(params: UtilityPaymentParams): Promise<Util
         const payload: Record<string, unknown> = {
             Destination: destination,
             Amount: round2(amount),
-            CallbackUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/hubtel-utility`,
+            CallbackUrl: `${webhookBaseUrl()}/api/webhooks/hubtel-utility`,
             ClientReference: clientReference,
         }
 

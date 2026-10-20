@@ -27,7 +27,8 @@ import { isRetiredBoostReference, reportRetiredBoostPayment, RETIRED_BOOST_MESSA
 import { createServerClient } from '@/lib/supabase'
 import { isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 import { Redis } from '@upstash/redis'
-import { getShopMeta } from '@/lib/shop-meta-store'
+import { getShopMeta, listPendingShopPayments, stampShopPaymentCheck } from '@/lib/shop-meta-store'
+import { reconcileShopPayment } from '@/lib/shop-payment-reconcile'
 import { verifyTransaction } from '@/lib/paystack-momo-service'
 import { logStatusCheck } from '@/lib/hubtel-payment-log'
 import { clearPaystackMomoPromptCount } from '@/lib/hubtel-prompt-limit'
@@ -36,6 +37,10 @@ import {
     PAYSTACK_MOMO_CRON_THROTTLE_KEYS,
 } from '@/lib/hubtel-status-throttle'
 import { resolveByReference } from '@/lib/ussd-reference'
+import { findMemberPayment, settleMemberUssdOrder } from '@/lib/ussd-member-settle'
+import { findUssdUtilityPayment, settleUssdUtilityOrder } from '@/lib/ussd-utility-settle'
+import { findUssdAirtimePayment, settleUssdAirtimeOrder } from '@/lib/ussd-airtime-settle'
+import { USSD_MEMBER_PAYMENT_KIND } from '@/lib/ussd-member'
 import {
     processCompletedWalletPayment,
     processCompletedUpgradePayment,
@@ -67,6 +72,13 @@ const MAX_CRON_CHECKS = 10
 const BATCH_LIMIT = 10
 /** Check on every run while a late approval is still likely. */
 const EVERY_RUN_MINUTES = 35
+/**
+ * Part B0 bounds. Gateway calls per run, and the wall-clock point after which the
+ * ledger stops starting new checks so Parts B and C still get their turn inside
+ * maxDuration. Rows not reached are first in line next run (least recently checked).
+ */
+const LEDGER_GATEWAY_CALLS = 20
+const LEDGER_TIME_BUDGET_MS = 25_000
 
 /**
  * Both spellings of "not paid for yet".
@@ -114,6 +126,10 @@ export async function GET(request: NextRequest) {
         guestChecked: 0,
         guestSettled: 0,
         guestReleased: 0,
+        ledgerChecked: 0,
+        ledgerSettled: 0,
+        ledgerFailed: 0,
+        ledgerPaidIssues: 0,
         ussdChecked: 0,
         ussdFulfilled: 0,
         activationsChecked: 0,
@@ -175,7 +191,35 @@ export async function GET(request: NextRequest) {
 
                     // Same routing as the webhook and verify-hubtel-payments. Every
                     // processor is idempotent, so racing a late callback is safe.
-                    if (payment.reference.startsWith('DATA-')) {
+                    if (payment.reference.startsWith('USSD-') && metadata.kind === 'utility_order' && metadata.channel === 'ussd') {
+                        // A bill paid over USSD. Without this it would fall to the wallet
+                        // top-up branch below and credit the account of record instead of
+                        // paying the bill.
+                        const r = await settleUssdUtilityOrder(supabase, {
+                            payment,
+                            reference: payment.reference,
+                            amountPaid: (verified.amountPesewas ?? 0) / 100,
+                        })
+                        if (!r.success) throw new Error(r.error || 'USSD utility order failed')
+                    } else if (payment.reference.startsWith('USSD-AIR-') && metadata.kind === 'airtime_order' && metadata.channel === 'ussd') {
+                        // Airtime bought over USSD. Without this it would fall to the wallet
+                        // top-up branch below and credit the wallet instead of buying the airtime.
+                        const r = await settleUssdAirtimeOrder(supabase, {
+                            payment,
+                            reference: payment.reference,
+                            amountPaid: (verified.amountPesewas ?? 0) / 100,
+                        })
+                        if (!r.success) throw new Error(r.error || 'USSD airtime order failed')
+                    } else if (payment.reference.startsWith('USSD-') && metadata.kind === USSD_MEMBER_PAYMENT_KIND) {
+                        // A registered user's USSD order: credit the wallet AND buy
+                        // the item, not just the credit a plain top-up gets.
+                        const r = await settleMemberUssdOrder(supabase, {
+                            payment,
+                            reference: payment.reference,
+                            amountPaid: (verified.amountPesewas ?? 0) / 100,
+                        })
+                        if (!r.success) throw new Error(r.error || 'USSD member order failed')
+                    } else if (payment.reference.startsWith('DATA-')) {
                         const { processDataDirectOrder } = await import('@/lib/data-order-payments')
                         const r = await processDataDirectOrder(payment.reference)
                         if (!r.success && !r.alreadyProcessed) throw new Error(r.error || 'Data order processing failed')
@@ -254,10 +298,63 @@ export async function GET(request: NextRequest) {
         results.errors.push(`walletPayments: ${err?.message ?? 'unknown'}`)
     }
 
+    // ── PART B0: storefront payment ledger (shop_payment_meta) ─────────────────
+    // The durable record of every SHOP- payment, on every rail, written before the
+    // prompt goes out. Unlike the Redis marker below it survives a Redis outage, and
+    // a paid payment that cannot become an order ends as needs_attention instead of
+    // vanishing. Empty until migration 20261013000000 runs, so Part B carries on alone.
+    const ledgerHandled = new Set<string>()
+    try {
+        const rows = await listPendingShopPayments(CALLBACK_GRACE_MINUTES * 60 * 1000, 100)
+        let gatewayCalls = 0
+        for (const row of rows) {
+            if (gatewayCalls >= LEDGER_GATEWAY_CALLS || Date.now() - startTime > LEDGER_TIME_BUDGET_MS) break
+
+            const ageMs = Date.now() - new Date(row.created_at).getTime()
+            const lastChecked = row.last_checked_at ? new Date(row.last_checked_at).getTime() : 0
+            // Same cadence as Part A: every run for the first half hour, then hourly.
+            if (Date.now() - lastChecked < cronBackoffMs(ageMs, 0)) continue
+
+            ledgerHandled.add(row.reference)
+            results.ledgerChecked++
+            gatewayCalls++
+            try {
+                await stampShopPaymentCheck(row.reference)
+                const r = await reconcileShopPayment(row, {
+                    failureCutoffMs: FAILURE_CUTOFF_MINUTES * 60 * 1000,
+                    abandonAfterMs: ABANDON_AFTER_MINUTES * 60 * 1000,
+                })
+                if (r.outcome === 'settled' || r.outcome === 'already_settled') results.ledgerSettled++
+                else if (r.outcome === 'failed') results.ledgerFailed++
+                else if (r.outcome === 'paid_issue') {
+                    results.ledgerPaidIssues++
+                    results.errors.push(`${row.reference}: paid, no order (${r.detail ?? 'unknown'})`)
+                }
+
+                if (r.outcome === 'settled' || r.outcome === 'paid_issue') {
+                    await logStatusCheck({
+                        clientReference: row.reference,
+                        status: r.outcome === 'settled' ? 'success' : 'failed',
+                        message: r.outcome === 'settled'
+                            ? 'Settled by reconciliation cron (ledger) - no callback had created the order.'
+                            : `Paid but order not created: ${r.detail ?? 'unknown'}. Retrying.`,
+                    })
+                }
+            } catch (err: any) {
+                console.error('[CronPaystackMomo] Ledger error on', row.reference, err?.message)
+                results.errors.push(`${row.reference}: ${err?.message ?? 'unknown'}`)
+            }
+        }
+    } catch (err: any) {
+        console.error('[CronPaystackMomo] Part B0 failed:', err)
+        results.errors.push(`shopLedger: ${err?.message ?? 'unknown'}`)
+    }
+
     // ── PART B: guest storefront flows ──────────────────────────────────────────
     // No wallet_payments row and therefore no provider column, so these are found by
     // the marker written at initiate. Only this rail writes it, so the sweep cannot
-    // pick up a payment belonging to another gateway.
+    // pick up a payment belonging to another gateway. For SHOP- this is now the
+    // legacy path (Part B0 covers it durably); it still carries afa / rc / rc_shop.
     try {
         let cursor = 0
         const keys: string[] = []
@@ -275,6 +372,7 @@ export async function GET(request: NextRequest) {
 
         for (const key of keys) {
             const reference = key.replace('paystack_momo:pending:', '')
+            if (ledgerHandled.has(reference)) continue
             try {
                 const rawInfo = await redis.get<any>(key)
                 const info = typeof rawInfo === 'string' ? JSON.parse(rawInfo) : rawInfo
@@ -294,16 +392,24 @@ export async function GET(request: NextRequest) {
 
                 if (verified.outcome === 'paid') {
                     const paidAmountKobo = verified.amountPesewas ?? 0
-                    await settleGuestOrder(supabase, reference, info?.kind, paidAmountKobo)
+                    const settled = await settleGuestOrder(supabase, reference, info?.kind, paidAmountKobo)
                     await logStatusCheck({
                         clientReference: reference,
-                        status: 'success',
+                        status: settled.success ? 'success' : 'failed',
                         amount: paidAmountKobo / 100,
-                        message: 'Settled by reconciliation cron — no callback was received.',
+                        message: settled.success
+                            ? 'Settled by reconciliation cron — no callback was received.'
+                            : `Paid but order not created: ${settled.error ?? 'unknown'}. Will retry.`,
                         raw: verified.raw,
                     })
-                    await redis.del(key)
-                    results.guestSettled++
+                    if (settled.success) {
+                        await redis.del(key)
+                        results.guestSettled++
+                    } else {
+                        // Keep the marker: it is the only thing that brings this
+                        // payment back to the next run.
+                        results.errors.push(`${reference}: paid, no order (${settled.error ?? 'unknown'})`)
+                    }
                 } else if (verified.outcome === 'failed' && ageMs > failureCutoffMs) {
                     await releaseGuestOrder(supabase, reference, info?.kind)
                     await logStatusCheck({
@@ -361,6 +467,77 @@ export async function GET(request: NextRequest) {
                 }
 
                 const amountPaid = (verified.amountPesewas ?? 0) / 100
+
+                // A registered user's order settles into their wallet and is bought
+                // from it (lib/ussd-member-settle.ts). Same call the webhook makes;
+                // both steps are idempotent, so racing it is safe.
+                // A utility bill settles through the website's bill payer (see the webhook).
+                const utilityPayment = await findUssdUtilityPayment(supabase, reference)
+                if (utilityPayment) {
+                    const result = await settleUssdUtilityOrder(supabase, { payment: utilityPayment, reference, amountPaid })
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: amountPaid,
+                        message: result.success
+                            ? 'Recovered by reconciliation sweep.'
+                            : `Utility settle failed: ${result.error ?? 'unknown error'}`,
+                        raw: verified.raw,
+                    })
+                    if (result.success) {
+                        results.ussdFulfilled++
+                        await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', utilityPayment.metadata?.session_id ?? '')
+                    } else {
+                        results.failed++
+                    }
+                    continue
+                }
+
+                // Airtime settles through the website's airtime buyer (see the webhook).
+                const airtimePayment = await findUssdAirtimePayment(supabase, reference)
+                if (airtimePayment) {
+                    const result = await settleUssdAirtimeOrder(supabase, { payment: airtimePayment, reference, amountPaid })
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: amountPaid,
+                        message: result.success
+                            ? 'Recovered by reconciliation sweep.'
+                            : `Airtime settle failed: ${result.error ?? 'unknown error'}`,
+                        raw: verified.raw,
+                    })
+                    if (result.success) {
+                        results.ussdFulfilled++
+                        await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', airtimePayment.metadata?.session_id ?? '')
+                    } else {
+                        results.failed++
+                    }
+                    continue
+                }
+
+                const memberPayment = await findMemberPayment(supabase, reference)
+                if (memberPayment) {
+                    const result = await settleMemberUssdOrder(supabase, { payment: memberPayment, reference, amountPaid })
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: result.success ? 'success' : 'failed',
+                        amount: amountPaid,
+                        message: result.creditedOnly
+                            ? `Recovered by reconciliation sweep. Credited to wallet; purchase failed: ${result.error}`
+                            : result.success
+                                ? 'Recovered by reconciliation sweep.'
+                                : `Member settle failed: ${result.error ?? 'unknown error'}`,
+                        raw: verified.raw,
+                    })
+                    if (result.success) {
+                        results.ussdFulfilled++
+                        await (supabase.from('hubtel_sessions') as any).delete().eq('session_id', memberPayment.metadata?.session_id ?? '')
+                    } else {
+                        results.failed++
+                    }
+                    continue
+                }
+
                 const resolved = await resolveByReference(supabase, reference)
                 if (!resolved) {
                     console.error('[CronPaystackMomo] Paid but unresolvable, needs a human:', reference)
@@ -377,13 +554,11 @@ export async function GET(request: NextRequest) {
                 const deferredWork: Array<() => Promise<void>> = []
                 // Both fulfillers are idempotent on referenceCode, so racing the
                 // webhook is safe — whichever arrives second is a no-op.
-                const result = resolved.orderType === 'data'
-                    ? await (await import('@/lib/ussd-data-fulfillment')).fulfillUSSDDataBySession({
-                        sessionId: resolved.sessionId, referenceCode: reference, amountPaid, deferredWork,
-                    })
-                    : await (await import('@/lib/ussd-rc-fulfillment')).fulfillUSSDRCBySession({
-                        sessionId: resolved.sessionId, referenceCode: reference, amountPaid, deferredWork,
-                    })
+                const { fulfillUssdSession } = await import('@/lib/ussd-settle')
+                const result = await fulfillUssdSession({
+                    orderType: resolved.orderType, sessionId: resolved.sessionId,
+                    referenceCode: reference, amountPaid, deferredWork,
+                })
 
                 await logStatusCheck({
                     clientReference: reference,
@@ -498,32 +673,40 @@ async function guestOrderAlreadySettled(
     return !!data && !UNSETTLED_PAYMENT_STATUSES.includes(String(data.payment_status))
 }
 
-/** Settles through the same finalizers the webhook uses, so both stay idempotent together. */
+/**
+ * Settles through the same finalizers the webhook uses, so both stay idempotent together.
+ *
+ * Reports whether an order actually came out of it. It used to return nothing, and
+ * the caller logged "success" and dropped the marker even when the processor had
+ * refused the order — the one payment the sweep exists for, lost by the sweep.
+ */
 async function settleGuestOrder(
     supabase: any,
     reference: string,
     kind: string | undefined,
     paidAmountKobo: number
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
     if (kind === 'shop') {
         const metadata = await getShopMeta<any>(reference)
         if (!metadata?.shop_id) {
             console.error('[CronPaystackMomo] SHOP- paid but metadata is gone:', reference)
-            return
+            return { success: false, error: 'Paid but the order details are gone' }
         }
         const { processShopOrder } = await import('@/lib/shop-order-processor')
-        await processShopOrder(reference, metadata, paidAmountKobo, metadata.slug ?? metadata.shop_slug)
-        return
+        const result = await processShopOrder(reference, metadata, paidAmountKobo, metadata.slug ?? metadata.shop_slug)
+        return { success: result.success, error: result.error }
     }
     if (kind === 'rc' || kind === 'rc_shop') {
         const { finalizeRCGatewayOrder } = await import('@/lib/vouchers/checkout')
         await finalizeRCGatewayOrder({ reference, paidAmountKobo, metadata: {} })
-        return
+        return { success: true }
     }
     if (kind === 'afa') {
         const { finalizeAfaShopOrder } = await import('@/lib/afa/checkout')
         await finalizeAfaShopOrder({ reference, paidAmountKobo })
+        return { success: true }
     }
+    return { success: false, error: `Unknown guest kind: ${kind ?? 'none'}` }
 }
 
 /**

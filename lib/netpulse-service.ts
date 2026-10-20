@@ -1,4 +1,5 @@
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 import { normaliseSupplierStatus } from '@/lib/order-status-display'
 
 // NetPulse Fulfillment Service — mirrors lib/eazydata-service.ts architecture.
@@ -35,6 +36,7 @@ interface FulfillmentResponse {
     // submitted. Not a fresh failure — the order already lives at the supplier,
     // so callers should stop retrying it as pending.
     alreadySubmitted?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -122,28 +124,28 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[NetPulse] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!NETPULSE_API_KEY) {
-        return { success: false, error: 'NetPulse API key not configured' }
+        return { success: false, error: 'NetPulse API key not configured', failureKind: 'refused' }
     }
 
     try {
         // ── Resolve network → NetPulse network + catalog ────────────────────
         const resolved = resolveNetwork(network)
         if (!resolved) {
-            return { success: false, error: `Unsupported network: ${network}` }
+            return { success: false, error: `Unsupported network: ${network}`, failureKind: 'refused' }
         }
 
         // ── Parse whole-GB volume ───────────────────────────────────────────
         const sizeMatch = dataSize.match(/[\d.]+/)
         if (!sizeMatch) {
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
         const gigVolume = Number(sizeMatch[0])
         if (isNaN(gigVolume) || gigVolume <= 0) {
-            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}` }
+            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}`, failureKind: 'refused' }
         }
 
         // ── Catalog guard ───────────────────────────────────────────────────
@@ -153,6 +155,7 @@ export async function fulfillOrder(
             return {
                 success: false,
                 error: `NetPulse does not sell ${gigVolume}GB on ${resolved.network} (available: ${resolved.sizes.join(', ')}GB)`,
+                failureKind: 'refused',
             }
         }
 
@@ -209,7 +212,7 @@ export async function fulfillOrder(
 
                 if (response.status === 429) {
                     console.warn(`[NetPulse] Rate limited (HTTP 429). Order ${orderId} kept pending.`)
-                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true }
+                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true, failureKind: lastError ? 'unknown' : 'refused' }
                 }
 
                 break
@@ -231,7 +234,7 @@ export async function fulfillOrder(
 
         if (!response) {
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to NetPulse' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to NetPulse', failureKind: 'unknown' }
         }
 
         // ── Parse JSON ─────────────────────────────────────────────────────
@@ -242,7 +245,7 @@ export async function fulfillOrder(
         } catch (e) {
             console.error(`[NetPulse] Non-JSON response (HTTP ${response.status}):`, rawText.slice(0, 300))
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})`, failureKind: 'unknown' }
         }
 
         console.log(`[NetPulse] API response:`, { status: response.status, reference: data?.reference })
@@ -274,6 +277,9 @@ export async function fulfillOrder(
                 isRateLimited: true,
                 error: `Duplicate-order window (409): ${errMsg}`,
                 apiResponse: sanitizeForLog(data),
+                // The window is keyed on the number, so the order it collided with may be
+                // our own earlier attempt that DID go through. Not safe to fall back.
+                failureKind: 'unknown',
             }
         }
 
@@ -293,12 +299,15 @@ export async function fulfillOrder(
             success: false,
             error: `${errMsg} (HTTP ${response.status})`,
             apiResponse: sanitizeForLog(data),
+            // No idempotency key: after a mid-flight error, a rejection can't vouch for
+            // the earlier attempt.
+            failureKind: response.status >= 500 || lastError ? 'unknown' : 'refused',
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[NetPulse] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 

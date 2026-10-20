@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { computeShopProfit } from '@/lib/shop-profit'
 
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
         // 2. Fetch shop
         const { data: shop } = await db
             .from('shop_profiles')
-            .select('id')
+            .select('id, owner_id')
             .eq('shop_slug', shopSlug)
             .eq('approval_status', 'approved')
             .eq('is_active', true)
@@ -46,10 +47,23 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ types: [] })
         }
 
-        // 4. For each type, count available inventory
-        const activeRows = pricingRows.filter(
+        // 4. For each type, count available inventory. A type whose price no longer
+        //    clears what the owner pays (or, for a sub, their upline's price) is
+        //    left off the shelf — checkout would refuse it, so listing it only
+        //    sends a buyer into an error. See lib/shop-profit.ts.
+        const pricedRows = pricingRows.filter(
             (row: any) => row.results_checker_types?.is_active
         )
+        const sellable = await Promise.all(pricedRows.map(async (row: any) => {
+            const split = await computeShopProfit(db, {
+                kind: 'rc',
+                ownerId: shop.owner_id,
+                itemId: row.rc_type_id,
+                unitPrice: parseFloat(row.selling_price),
+            })
+            return !!split && split.totalMargin > 0
+        }))
+        const activeRows = pricedRows.filter((_: any, i: number) => sellable[i])
 
         const types = await Promise.all(
             activeRows.map(async (row: any) => {

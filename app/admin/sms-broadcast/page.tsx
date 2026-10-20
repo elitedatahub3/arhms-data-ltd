@@ -15,8 +15,17 @@ import {
     SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Send, MessageSquare, Users, Search, CheckSquare, XSquare } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { Loader2, Send, MessageSquare, Users, Search, CheckSquare, XSquare, AlertTriangle, Play, Ban } from 'lucide-react'
 import { toast } from 'sonner'
+import { GREETING_PREFIX, NAME_TOKEN, greetName, greetShopName, hasNameToken, renderBroadcast } from '@/lib/sms-broadcast-greeting'
+
+interface ActiveJob {
+    id: string
+    sent_count: number
+    total: number
+    created_at: string
+}
 
 interface User {
     id: string
@@ -37,10 +46,16 @@ export default function AdminSMSBroadcastPage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [roleFilter, setRoleFilter] = useState<string>('all')
     const [jobProgress, setJobProgress] = useState<{ sent: number; total: number } | null>(null)
+    // An unfinished broadcast from earlier. Shown with Resume / Cancel — never
+    // restarted just because the page was opened.
+    const [activeJob, setActiveJob] = useState<ActiveJob | null>(null)
+    const [cancelling, setCancelling] = useState(false)
+    // "Hi {name}! " in front of the message, each person's own first name.
+    const [greet, setGreet] = useState(true)
 
     useEffect(() => {
         fetchUsers()
-        resumeActiveJob()
+        checkActiveJob()
     }, [])
 
     useEffect(() => {
@@ -109,23 +124,52 @@ export default function AdminSMSBroadcastPage() {
         setSelectedUsers(newSelected)
     }
 
-    // Pick tracking back up for a broadcast still running from an earlier visit.
-    // Polling is also what restarts a stalled job server-side, so this is how a
-    // broadcast that stopped part-way gets moving again.
-    const resumeActiveJob = async () => {
+    // Look for a broadcast left unfinished by an earlier visit. Report only:
+    // resuming it here used to start texting people the moment the admin
+    // opened this page. The admin chooses Resume or Cancel on the banner.
+    const checkActiveJob = async () => {
         try {
             const response = await fetch('/api/admin/sms-broadcast/status?active=1')
             const data = await response.json()
-            const job = data?.job
-            if (!response.ok || !job) return
-            toast.info(`Resuming broadcast: ${job.sent_count} / ${job.total} sent`)
-            setSending(true)
-            setJobProgress({ sent: job.sent_count, total: job.total })
-            await pollJobStatus(job.id)
+            if (response.ok && data?.job) setActiveJob(data.job)
         } catch (error) {
             console.error('[SMSBroadcast] Could not check for an active broadcast:', error)
+        }
+    }
+
+    // Polling by jobId is what restarts a stalled job server-side, so this is
+    // how a broadcast that stopped part-way gets moving again.
+    const handleResume = async () => {
+        if (!activeJob) return
+        const job = activeJob
+        setActiveJob(null)
+        toast.info(`Resuming broadcast: ${job.sent_count} / ${job.total} sent`)
+        setSending(true)
+        setJobProgress({ sent: job.sent_count, total: job.total })
+        try {
+            await pollJobStatus(job.id)
         } finally {
             setSending(false)
+        }
+    }
+
+    const handleCancel = async () => {
+        if (!activeJob) return
+        setCancelling(true)
+        try {
+            const response = await fetch('/api/admin/sms-broadcast/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jobId: activeJob.id }),
+            })
+            const data = await response.json()
+            if (!response.ok) throw new Error(data.error || 'Failed to cancel')
+            toast.success('Broadcast cancelled — nobody else will be texted')
+            setActiveJob(null)
+        } catch (error: any) {
+            toast.error(error.message || 'Failed to cancel broadcast')
+        } finally {
+            setCancelling(false)
         }
     }
 
@@ -191,7 +235,7 @@ export default function AdminSMSBroadcastPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     userIds: Array.from(selectedUsers),
-                    message: message.trim()
+                    message: finalMessage
                 })
             })
 
@@ -227,7 +271,24 @@ export default function AdminSMSBroadcastPage() {
         }
     }
 
-    const characterCount = message.length
+    // What actually gets queued: the greeting goes in front unless the admin
+    // already placed {name} themselves.
+    const finalMessage = greet && message.trim() && !hasNameToken(message)
+        ? GREETING_PREFIX + message.trim()
+        : message.trim()
+
+    // Preview with the first selected person's name, or a sample.
+    const previewUser = users.find(u => selectedUsers.has(u.id))
+    const previewName = !previewUser
+        ? 'Derrick'
+        : previewUser.id.startsWith('shop_') ? greetShopName(previewUser.last_name) : greetName(previewUser.first_name)
+    const preview = renderBroadcast(finalMessage, { greet_name: previewName })
+
+    const insertName = () => {
+        setMessage(m => (m ? `${m} ${NAME_TOKEN}` : `${GREETING_PREFIX}`))
+    }
+
+    const characterCount = preview.length
     const smsCount = Math.ceil(characterCount / 160) || 1
 
     return (
@@ -236,6 +297,27 @@ export default function AdminSMSBroadcastPage() {
                 <h1 className="text-2xl font-bold">SMS Broadcast</h1>
                 <p className="text-muted-foreground">Send SMS alerts to your customers</p>
             </div>
+
+            {activeJob && (
+                <div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-2 text-sm">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                            An earlier broadcast did not finish: <strong>{activeJob.sent_count} / {activeJob.total}</strong> sent
+                            {' '}(started {new Date(activeJob.created_at).toLocaleString()}). It is paused — nothing is sent unless you resume it.
+                        </span>
+                    </div>
+                    <div className="flex gap-2">
+                        <Button size="sm" onClick={handleResume} disabled={sending || cancelling}>
+                            <Play className="mr-1 h-4 w-4" /> Resume
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={handleCancel} disabled={sending || cancelling}>
+                            {cancelling ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Ban className="mr-1 h-4 w-4" />}
+                            Cancel it
+                        </Button>
+                    </div>
+                </div>
+            )}
 
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Compose SMS Card */}
@@ -265,6 +347,39 @@ export default function AdminSMSBroadcastPage() {
                                 <span>{smsCount} SMS{smsCount > 1 ? 's' : ''} (160 chars each)</span>
                             </div>
                         </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                            <Label htmlFor="greet" className="flex flex-col gap-0.5 font-normal">
+                                <span className="font-medium">Greet each person by name</span>
+                                <span className="text-xs text-muted-foreground">
+                                    Adds &quot;Hi Derrick!&quot; with each person&apos;s own first name
+                                </span>
+                            </Label>
+                            <Switch id="greet" checked={greet} onCheckedChange={setGreet} />
+                        </div>
+                        <button
+                            type="button"
+                            onClick={insertName}
+                            className="text-xs text-primary underline-offset-2 hover:underline"
+                        >
+                            Insert {NAME_TOKEN} somewhere else in the message
+                        </button>
+
+                        {message.trim() && (
+                            <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground">
+                                    Preview — what {previewUser ? previewName : 'a customer'} will receive
+                                </Label>
+                                <div className="rounded-2xl bg-muted px-4 py-3 text-sm whitespace-pre-wrap break-words">
+                                    {preview}
+                                </div>
+                                {hasNameToken(finalMessage) && (
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Names differ in length, so some messages may be a few characters longer.
+                                    </p>
+                                )}
+                            </div>
+                        )}
 
                         <div className="p-3 rounded-lg bg-muted/50 space-y-1">
                             <div className="flex justify-between text-sm">

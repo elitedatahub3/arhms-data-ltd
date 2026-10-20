@@ -43,7 +43,6 @@ import {
     CreditCard,
     Loader2,
     Receipt,
-    Gift,
     UserPlus,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
@@ -65,11 +64,11 @@ const userNavItems = [
     { href: '/dashboard/my-orders', label: 'Orders', icon: ShoppingCart },
     { href: '/dashboard/shop/sub-agents', label: 'Sub-Agents', icon: UserPlus },
     { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
-    { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
     { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
     { href: '/dashboard/complaints', label: 'Complaints', icon: MessageSquare },
     { href: '/dashboard/profile', label: 'Profile', icon: User },
     { href: '/dashboard/install', label: 'Download App', icon: Download },
+    { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
     { href: '/dashboard/developer-api', label: 'Developer API', icon: Code2 },
     { href: '/dashboard/commission-wallet', label: 'Commission Wallet', icon: Percent },
 ]
@@ -79,7 +78,7 @@ const userNavItems = [
  * live under /dashboard/sub/* — separate implementations (own wallet debit,
  * upline-resolved pricing floor, owner-approved withdrawals) from the shared
  * customer pages `userNavItems` otherwise points at. Everything not listed
- * here (Data Packages, Buy Airtime, Wallet, Refer & Earn,
+ * here (Data Packages, Buy Airtime, Wallet,
  * Transactions, Complaints, Profile, Download App, Developer API, Commission
  * Wallet) is genuinely shared and needs no remap.
  */
@@ -96,11 +95,11 @@ const adminNavItems = [
     { href: '/admin/top-up', label: 'Top-Up', icon: Wallet },
     { href: '/admin/orders', label: 'Orders', icon: ShoppingCart },
     { href: '/admin/fulfillment', label: 'Fulfillment', icon: Activity },
+    { href: '/admin/delivery-status', label: 'Delivery Status', icon: Activity },
     { href: '/admin/up2u-checker', label: 'UP2U Checker', icon: ShieldCheck },
     { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
     { href: '/admin/airtime', label: 'Airtime', icon: Phone },
     { href: '/admin/utilities', label: 'Utility Bills', icon: Receipt },
-    { href: '/admin/referrals', label: 'Referrals', icon: Gift },
     { href: '/admin/mashup-orders', label: 'Special MTN Mashup', icon: Zap },
     { href: '/admin/express-orders', label: 'EXPRESS MTN', icon: Zap },
     { href: '/admin/shops', label: 'Shops', icon: Store },
@@ -114,6 +113,7 @@ const adminNavItems = [
     { href: '/admin/announcements', label: 'Announce', icon: Bell },
     { href: '/admin/sms-broadcast', label: 'SMS', icon: MessageSquare },
     { href: '/admin/sms-senders', label: 'Customer SMS', icon: MessageSquare },
+    { href: '/admin/sms-businesses', label: 'SMS Businesses', icon: Store },
     { href: '/admin/email-broadcast', label: 'Email', icon: Send },
     { href: '/admin/finance', label: 'Finance', icon: Banknote },
     { href: '/admin/hubtel-payments', label: 'Hubtel Payments', icon: Banknote },
@@ -309,6 +309,8 @@ export function DashboardSidebar() {
     // Roles whose sidebar chrome is a solid dark panel need light-on-dark
     // treatment for anything rendered inside it.
     const onDarkPanel = currentRole.darkPanel
+    // Plain customers (not admins, sub-admins or sub-agents) get the yellow profile card.
+    const isCustomerCard = !onDarkPanel && currentRole === roleConfig.customer
 
     // Results Checker Only mode collapses the sidebar for regular users, but admins
     // and sub-admins keep their full sidebar (they need it to reach Admin → Settings
@@ -442,9 +444,12 @@ export function DashboardSidebar() {
                         <div className={cn("mx-4 mt-6 p-5 rounded-2xl border shadow-sm",
                             onDarkPanel
                                 ? "bg-white/10 border-white/15 text-white"
-                                : dbUser.role === 'customer'
-                                    ? "bg-brand-gold/[0.06] border-brand-gold/20 dark:bg-brand-gold/[0.08] dark:border-brand-gold/20 text-slate-800 dark:text-slate-100"
-                                    : "bg-secondary/5 border-border/50 text-foreground"
+                                : isCustomerCard
+                                    // Same yellow fill as the admin "Reprocess" button.
+                                    ? "bg-yellow-500 border-yellow-600 text-black"
+                                    : dbUser.role === 'customer'
+                                        ? "bg-brand-gold/[0.06] border-brand-gold/20 dark:bg-brand-gold/[0.08] dark:border-brand-gold/20 text-slate-800 dark:text-slate-100"
+                                        : "bg-secondary/5 border-border/50 text-foreground"
                         )}>
                             <div className="flex items-center gap-4 mb-4">
                                 <div className={cn(
@@ -459,6 +464,9 @@ export function DashboardSidebar() {
                                         {dbUser?.first_name} {dbUser?.last_name}
                                     </p>
                                     <div className="flex items-center gap-1.5 mt-0.5">
+                                        {/* badgeClass is a 15% wash; keep it on the surface it was
+                                            designed for so the yellow card doesn't bleed through. */}
+                                        <span className={cn("inline-flex rounded-full", isCustomerCard && "bg-background")}>
                                         <span
                                             className={cn(
                                                 "text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest",
@@ -472,6 +480,7 @@ export function DashboardSidebar() {
                                         >
                                             {isSubAgent ? 'Sub-Agent' : currentRole.label}
                                         </span>
+                                        </span>
                                     </div>
                                 </div>
                             </div>
@@ -483,12 +492,14 @@ export function DashboardSidebar() {
                                 // navy panel produced a washed-out grey slab.
                                 onDarkPanel
                                     ? "bg-black/25 border-white/10"
-                                    : "bg-background/50 border-border/50"
+                                    : isCustomerCard
+                                        ? "bg-white/30 border-black/10"
+                                        : "bg-background/50 border-border/50"
                             )}>
                                 <div>
                                     <p className={cn(
                                         "text-[9px] uppercase tracking-widest font-bold mb-0.5",
-                                        onDarkPanel ? "text-white/70" : "text-muted-foreground"
+                                        onDarkPanel ? "text-white/70" : isCustomerCard ? "text-black/60" : "text-muted-foreground"
                                     )}>Balance</p>
                                     <p className="text-lg font-black text-current tracking-tight">{formatCurrency(walletBalance)}</p>
                                 </div>

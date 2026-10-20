@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { MAX_SHOP_PROFIT_GHS } from '@/lib/shop-price-limits'
 
 interface Package {
     id: string
@@ -48,6 +49,7 @@ interface RCType {
     name: string
     cost_price: number
     agent_price: number
+    dealer_price?: number | null
     customer_price: number
 }
 
@@ -196,9 +198,13 @@ export default function ShopPricingPage() {
     }
 
     // Mirrors the server rule in /api/shop/pricing and /api/shop/rc-pricing —
-    // agents get GHS 10, everyone else GHS 5. Keeping one source of truth here
-    // stops the grid painting a price green that the API then rejects.
-    const maxProfit = shop?.owner_role === 'agent' ? 10 : 5
+    // owners price freely above cost, and the limit only catches typos. Sharing
+    // the constant stops the grid painting a price green that the API rejects.
+    const maxProfit = MAX_SHOP_PROFIT_GHS
+
+    // Why a red card is red — almost always a price at or below cost now.
+    const priceHint = (profit: number | string | null, max: number = maxProfit) =>
+        Number(profit) <= 0 ? 'Must be above cost' : `Max profit: ${max}`
 
     const isValidPrice = (pkg: Package, sellingStr: string) => {
         const profit = getProfit(pkg, sellingStr)
@@ -206,11 +212,14 @@ export default function ShopPricingPage() {
         return profit > 0 && profit <= maxProfit
     }
 
-    // Vouchers settle against results_checker_types.cost_price: that is what
-    // /api/shop/rc-pricing validates and what the storefront pays the shop
-    // (selling_price - cost_price). Showing the role price here would advertise
-    // a profit the owner never earns.
-    const getRcCostPrice = (type: RCType) => type.cost_price
+    // Vouchers settle against the owner's own role price — the same rule as data,
+    // and what /api/shop/rc-pricing validates and lib/shop-profit.ts pays. The
+    // platform's cost_price is the platform's margin, not the owner's.
+    const getRcCostPrice = (type: RCType) => {
+        if (dbUser?.role === 'dealer' && Number(type.dealer_price) > 0) return Number(type.dealer_price)
+        if (dbUser?.role === 'agent' && Number(type.agent_price) > 0) return Number(type.agent_price)
+        return Number(type.customer_price)
+    }
 
     const getRcProfit = (type: RCType, sellingStr: string) => {
         const selling = parseFloat(sellingStr)
@@ -311,7 +320,7 @@ export default function ShopPricingPage() {
                 return true
             }
             if (profit > maxDataProfit) {
-                invalidReason = `Profit cannot exceed GHS ${maxDataProfit.toFixed(2)}`
+                invalidReason = `Profit over GHS ${maxDataProfit.toFixed(2)} looks like a typo`
                 return true
             }
             return false
@@ -333,7 +342,7 @@ export default function ShopPricingPage() {
                 return true
             }
             if (profit > maxDataProfit) {
-                invalidReason = `RC Profit cannot exceed GHS ${maxDataProfit.toFixed(2)}`
+                invalidReason = `RC profit over GHS ${maxDataProfit.toFixed(2)} looks like a typo`
                 return true
             }
             return false
@@ -356,7 +365,7 @@ export default function ShopPricingPage() {
                 return
             }
             if (afaProfit > afaMax) {
-                toast.error(`AFA Profit cannot exceed GHS ${afaMax.toFixed(2)}`)
+                toast.error(`AFA profit over GHS ${afaMax.toFixed(2)} looks like a typo`)
                 return
             }
         }
@@ -512,7 +521,7 @@ export default function ShopPricingPage() {
             return
         }
         if (margin > maxProfit) {
-            toast.error(`Profit cannot exceed GHS ${maxProfit.toFixed(2)}`)
+            toast.error(`Profit over GHS ${maxProfit.toFixed(2)} looks like a typo`)
             return
         }
         const newPricing: Record<string, string> = { ...pricing }
@@ -699,7 +708,7 @@ export default function ShopPricingPage() {
                                             <div>
                                                 <div className="flex justify-between mb-2">
                                                     <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Selling Price</Label>
-                                                    {valStr && valid === false && <span className="text-[10px] text-red-600 font-bold uppercase tracking-tight">Max Profit: {maxProfit}</span>}
+                                                    {valStr && valid === false && <span className="text-[10px] text-red-600 font-bold uppercase tracking-tight">{priceHint(profitStr)}</span>}
                                                 </div>
                                                 <div className="relative">
                                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-sm text-slate-400">GHS</span>
@@ -796,7 +805,7 @@ export default function ShopPricingPage() {
                                         <div>
                                             <div className="flex justify-between mb-2">
                                                 <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Selling Price</Label>
-                                                {afaPrice && valid === false && <span className="text-[10px] text-red-600 font-bold uppercase tracking-tight">Max Profit: {afaMax}</span>}
+                                                {afaPrice && valid === false && <span className="text-[10px] text-red-600 font-bold uppercase tracking-tight">{priceHint(getAfaProfit(afaPrice), afaMax)}</span>}
                                             </div>
                                             <div className="relative">
                                                 <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-sm text-slate-400">GHS</span>
@@ -849,7 +858,7 @@ export default function ShopPricingPage() {
                                 <span className="font-black text-lg">You sell at GHS {shop?.owner_role === 'agent' ? '13' : '12'}</span>
                             </div>
                             <ul className="space-y-2 pt-2 text-xs uppercase tracking-wider font-bold">
-                                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500"/> Max profit: GHS {shop?.owner_role === 'agent' ? '10.00' : '5.00'}</li>
+                                <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500"/> Set any price you want above your cost</li>
                                 <li className="flex items-center gap-2"><XCircle className="w-4 h-4 text-red-500"/> Cannot sell below cost</li>
                             </ul>
                         </div>
@@ -932,7 +941,7 @@ export default function ShopPricingPage() {
                                     <div>
                                         <div className="flex justify-between mb-2">
                                             <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Selling Price</Label>
-                                            {valStr && valid === false && <span className="text-[10px] text-red-600 font-bold uppercase tracking-tight">Max Profit: {shop?.owner_role === 'agent' ? '10' : '5'}</span>}
+                                            {valStr && valid === false && <span className="text-[10px] text-red-600 font-bold uppercase tracking-tight">{priceHint(profitStr)}</span>}
                                         </div>
                                         <div className="relative">
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-sm text-slate-400">GHS</span>

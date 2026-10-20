@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils'
 import StorefrontUtilities from '@/components/shop/storefront-utilities'
 import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
+import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
+import { channelForNetwork } from '@/lib/delivery-estimate'
 import {
     Phone, Mail, MessageCircle, ShoppingCart, Loader2,
     CheckCircle2, AlertCircle, X, Search, Zap, Smartphone, ChevronDown, Check, Menu, Bell,
@@ -40,6 +42,36 @@ import type { AnnouncementTone } from '@/lib/announcement-tones'
 import { isUssdEnabled } from '@/lib/ussd-availability'
 
 const ShopPwaInstallPrompt = dynamic(() => import('@/components/ShopPwaInstallPrompt'), { ssr: false })
+
+// Payment poll pacing. 4s keeps the first minute (15/min) under the verify route's
+// 20/min per-IP limit with room for a manual "check now".
+const PAY_POLL_FAST_MS = 4000
+const PAY_POLL_SLOW_MS = 6000
+const PAY_POLL_FAST_FOR_MS = 60_000
+const PAY_POLL_STOP_AFTER_MS = 5 * 60_000
+/** A reload within this window resumes the poll on the saved reference. */
+const PAY_RESUME_WITHIN_MS = 30 * 60_000
+
+type PendingPayment = { ref: string; startedAt: number }
+const pendingPaymentKey = (slug: string) => `shop_pending_payment_${slug}`
+
+function readPendingPayment(slug: string): PendingPayment | null {
+    try {
+        const raw = localStorage.getItem(pendingPaymentKey(slug))
+        const parsed = raw ? JSON.parse(raw) : null
+        return parsed?.ref && Number.isFinite(parsed.startedAt) ? parsed : null
+    } catch {
+        return null
+    }
+}
+
+function writePendingPayment(slug: string, value: PendingPayment) {
+    try { localStorage.setItem(pendingPaymentKey(slug), JSON.stringify(value)) } catch { }
+}
+
+function clearPendingPayment(slug: string) {
+    try { localStorage.removeItem(pendingPaymentKey(slug)) } catch { }
+}
 
 // ─── Divider SVG paths (matching setup page) ──────────────────────────────────
 const DIVIDER_PATHS: Record<string, string> = {
@@ -428,6 +460,13 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     useEffect(() => {
         const error = searchParams.get('error')
         if (error) {
+            // The money may already be in for these two, so they resume the
+            // payment check on the reference instead of showing an error.
+            const ref = searchParams.get('ref')
+            if (ref && (error === 'payment_pending' || error === 'payment_processing')) {
+                setPollingRef(ref)
+                return
+            }
             const messages: Record<string, string> = {
                 payment_failed: 'Payment was not completed. Please try again.',
                 order_not_found: 'Order not found. Please try again.',
@@ -442,47 +481,122 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     const [rcVouchers, setRcVouchers] = useState<{ pin: string; serial_number: string }[]>([])
     const [showRcDelivery, setShowRcDelivery] = useState(false)
 
-    // Poll for payment status when reference is set
-    useEffect(() => {
-        let interval: NodeJS.Timeout
-        if (pollingRef) {
-            interval = setInterval(async () => {
-                try {
-                    const isRcOrder = pollingRef.startsWith('RC-SHOP-')
-                    const isAfaOrder = pollingRef.startsWith('AFA-SHOP-')
-                    const endpoint = isRcOrder
-                        ? `/api/shop/rc/verify?ref=${pollingRef}&slug=${shop.shop_slug}`
-                        : isAfaOrder
-                            ? `/api/shop/afa/verify?ref=${pollingRef}&slug=${shop.shop_slug}`
-                            : `/api/shop/verify?ref=${pollingRef}&slug=${shop.shop_slug}`
-                    const res = await fetch(endpoint, { headers: { 'Accept': 'application/json' } })
-                    const data = await res.json()
+    // Shown after the poll ends without a clean answer: 'slow' when it gave up
+    // waiting, 'received' when the server says the money is in but the order is
+    // still being finished. Either way the buyer keeps their reference.
+    const [payNotice, setPayNotice] = useState<{ ref: string; kind: 'slow' | 'received' } | null>(null)
+    const [checkingNow, setCheckingNow] = useState(false)
+    const checkNowRef = useRef<(() => Promise<void>) | null>(null)
 
-                    if (data.status === 'completed') {
-                        clearInterval(interval)
-                        setPollingRef(null)
-                        setLoading(false)
-                        if (isRcOrder && data.vouchers?.length > 0) {
-                            // Show vouchers instantly on-screen
-                            setRcVouchers(data.vouchers)
-                            setShowRcDelivery(true)
-                        } else {
-                            toast.success('Payment completed successfully!')
-                            window.location.href = `/shop/${shop.shop_slug}/success?ref=${pollingRef}`
-                        }
-                    } else if (data.status === 'failed') {
-                        clearInterval(interval)
-                        setPollingRef(null)
-                        setLoading(false)
-                        setErrorMsg(data.message || 'Payment failed or cancelled.')
-                    }
-                } catch (e) {
-                    console.error('Polling error', e)
-                }
-            }, 3000)
+    // A buyer who reloads, or comes back to the tab, picks the poll back up instead
+    // of losing the reference. The server settles the order either way (webhook and
+    // reconciliation cron); this is only so the buyer sees it happen.
+    useEffect(() => {
+        const saved = readPendingPayment(shop.shop_slug)
+        if (saved && Date.now() - saved.startedAt < PAY_RESUME_WITHIN_MS) {
+            writePendingPayment(shop.shop_slug, { ref: saved.ref, startedAt: Date.now() })
+            setPollingRef(saved.ref)
+        } else if (saved) {
+            clearPendingPayment(shop.shop_slug)
         }
-        return () => clearInterval(interval)
+    }, [shop.shop_slug])
+
+    // Poll for payment status when reference is set.
+    //
+    // Every 4s for the first minute, then every 6s, and it stops after 5 minutes
+    // with the reference on screen rather than polling forever. Only a server
+    // `status` ends it: a 429 or 500 with no status is not an answer.
+    useEffect(() => {
+        if (!pollingRef) return
+        const ref = pollingRef
+        let cancelled = false
+        let timer: ReturnType<typeof setTimeout> | undefined
+
+        const saved = readPendingPayment(shop.shop_slug)
+        const startedAt = saved?.ref === ref ? saved.startedAt : Date.now()
+        writePendingPayment(shop.shop_slug, { ref, startedAt })
+        setPayNotice(null)
+
+        const isRcOrder = ref.startsWith('RC-SHOP-')
+        const isAfaOrder = ref.startsWith('AFA-SHOP-')
+        const endpoint = isRcOrder
+            ? `/api/shop/rc/verify?ref=${ref}&slug=${shop.shop_slug}`
+            : isAfaOrder
+                ? `/api/shop/afa/verify?ref=${ref}&slug=${shop.shop_slug}`
+                : `/api/shop/verify?ref=${ref}&slug=${shop.shop_slug}`
+
+        const stop = () => {
+            cancelled = true
+            if (timer) clearTimeout(timer)
+            clearPendingPayment(shop.shop_slug)
+            setPollingRef(null)
+            setLoading(false)
+        }
+
+        const check = async () => {
+            try {
+                const res = await fetch(endpoint, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+                const data = await res.json().catch(() => null)
+                if (cancelled || !data?.status) return
+
+                if (data.status === 'completed') {
+                    stop()
+                    if (isRcOrder && data.vouchers?.length > 0) {
+                        // Show vouchers instantly on-screen
+                        setRcVouchers(data.vouchers)
+                        setShowRcDelivery(true)
+                    } else {
+                        toast.success('Payment completed successfully!')
+                        window.location.href = `/shop/${shop.shop_slug}/success?ref=${ref}`
+                    }
+                } else if (data.status === 'failed') {
+                    stop()
+                    setErrorMsg(data.message || 'Payment not completed — the prompt was declined, timed out, or the balance was too low. No money was taken; please try again.')
+                } else if (data.status === 'paid_issue') {
+                    // Paid; the order is being finished server-side. Never "failed".
+                    stop()
+                    setPayNotice({ ref, kind: 'received' })
+                }
+                // 'pending' and 'processing' keep polling.
+            } catch (e) {
+                console.error('Polling error', e)
+            }
+        }
+
+        const loop = async () => {
+            if (cancelled) return
+            const elapsed = Date.now() - startedAt
+            if (elapsed > PAY_POLL_STOP_AFTER_MS) {
+                stop()
+                setPayNotice({ ref, kind: 'slow' })
+                return
+            }
+            await check()
+            if (cancelled) return
+            timer = setTimeout(loop, elapsed < PAY_POLL_FAST_FOR_MS ? PAY_POLL_FAST_MS : PAY_POLL_SLOW_MS)
+        }
+
+        checkNowRef.current = check
+        timer = setTimeout(loop, PAY_POLL_FAST_MS)
+        return () => {
+            cancelled = true
+            if (timer) clearTimeout(timer)
+            checkNowRef.current = null
+        }
     }, [pollingRef, shop.shop_slug])
+
+    const checkPaymentNow = async () => {
+        if (!checkNowRef.current || checkingNow) return
+        setCheckingNow(true)
+        try { await checkNowRef.current() } finally { setCheckingNow(false) }
+    }
+
+    // "Check again" after the poll gave up: a fresh 5-minute window on the same reference.
+    const resumePaymentCheck = (ref: string) => {
+        clearPendingPayment(shop.shop_slug)
+        setPayNotice(null)
+        setPollingRef(ref)
+    }
 
     // Auto-detect network for airtime
     useEffect(() => {
@@ -643,6 +757,22 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 return
             }
 
+            // A prompt is already live on this number (a double tap, or a retry
+            // within 90s). Pick that payment back up instead of showing a dead end:
+            // approving it is what finishes the order.
+            if (res.status === 409 && data?.resumable && data?.reference) {
+                if (data.otpRequired) {
+                    setOtpReference(data.reference)
+                    setOtpOrderType('data')
+                    setOtpRequired(true)
+                    setLoading(false)
+                } else {
+                    toast.info(data.error || 'A payment prompt is already waiting on your phone.')
+                    setPollingRef(data.reference)
+                }
+                return
+            }
+
             if (!res.ok || !data.reference) {
                 setErrorMsg(rateLimitMessage(res) || data.error || 'Failed to initialize payment')
                 if (data.contact) setContactInfo(data.contact)
@@ -658,7 +788,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             if (data.gateway === 'hubtel') {
                 toast.success(data.message || 'Payment prompt sent! Please approve on your phone.')
                 setPollingRef(data.reference)
-                setLoading(false)
                 return
             }
 
@@ -1994,6 +2123,10 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 {(activeTab === 'data' || activeTab === 'mashup') && (
                     <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-4">
 
+                {activeTab === 'data' && (
+                    <DeliveryStatusCard className="mb-8" headlineChannel={channelForNetwork(activeNetwork)} />
+                )}
+
                 {/* ── Network Filter Tabs ── */}
                 {activeTab === 'data' && networks.length > 1 && (
                     <div className="grid grid-cols-4 gap-2 sm:gap-3 mb-6">
@@ -2142,7 +2275,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     >
                         <div
                             className="absolute inset-0 bg-black/50 backdrop-blur-[2px] animate-in fade-in duration-200"
-                            onClick={() => !loading && closeDataCheckout()}
+                            onClick={() => (!loading || pollingRef) && closeDataCheckout()}
                         />
                         {/* max-h uses dvh so the sheet shrinks to the *visible* viewport when
                             the Android keyboard opens; with vh the sticky action bar was pushed
@@ -2151,7 +2284,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                             <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 pt-3 pb-1 rounded-t-[28px]">
                                 <div className="mx-auto w-10 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700" />
                                 <button
-                                    onClick={() => !loading && closeDataCheckout()}
+                                    onClick={() => (!loading || pollingRef) && closeDataCheckout()}
                                     aria-label="Close checkout"
                                     className="absolute top-2 right-4 w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                                 >
@@ -2296,16 +2429,105 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                             : <><Smartphone className="w-5 h-5" /> Proceed to payment</>}
                                 </button>
 
-                                <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
-                                    {needsMomoDetails
-                                        ? 'Your phone will show the exact total to approve.'
-                                        : 'You’ll choose how to pay and see the exact total on the next page.'}
-                                </p>
+                                {pollingRef ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={checkPaymentNow}
+                                            disabled={checkingNow}
+                                            className="w-full py-3.5 rounded-md bg-green-600 hover:bg-green-700 text-white font-black text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-transform disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-green-600"
+                                        >
+                                            {checkingNow
+                                                ? <><Loader2 className="w-5 h-5 animate-spin" /> Checking...</>
+                                                : <><CheckCircle2 className="w-5 h-5" /> I&apos;ve paid — check now</>}
+                                        </button>
+                                        <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
+                                            Approve the prompt on your phone. You can close this — your order completes automatically once the payment lands.
+                                        </p>
+                                    </>
+                                ) : (
+                                    <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
+                                        {needsMomoDetails
+                                            ? 'Your phone will show the exact total to approve.'
+                                            : 'You’ll choose how to pay and see the exact total on the next page.'}
+                                    </p>
+                                )}
                             </div>
                         </div>
                     </div>
                 )
             })()}
+
+            {/* Payment status. Shown when the checkout sheet was closed mid-payment
+                (closing never cancels anything), and when the poll ended without a
+                clean answer, so the buyer always leaves with their reference. Sits
+                below the checkout sheet's z-[70] and above the WhatsApp button. */}
+            {((pollingRef && !selectedPackage) || payNotice) && (
+                <div className="fixed inset-x-4 bottom-24 z-[60] mx-auto max-w-md rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-e4 p-4 animate-in slide-in-from-bottom-4 duration-300">
+                    <div className="flex items-start gap-3">
+                        <div className={cn(
+                            'w-9 h-9 rounded-full flex items-center justify-center shrink-0',
+                            payNotice?.kind === 'received' ? 'bg-green-100 dark:bg-green-900/30' : 'bg-amber-100 dark:bg-amber-900/30'
+                        )}>
+                            {payNotice?.kind === 'received'
+                                ? <CheckCircle2 className="w-5 h-5 text-green-600" />
+                                : pollingRef
+                                    ? <Loader2 className="w-5 h-5 text-amber-600 animate-spin" />
+                                    : <Clock className="w-5 h-5 text-amber-600" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <p className="text-sm font-black text-gray-900 dark:text-white">
+                                {payNotice?.kind === 'received'
+                                    ? 'Payment received — finishing your order'
+                                    : pollingRef
+                                        ? 'Waiting for your payment approval'
+                                        : 'Still waiting for the payment'}
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-gray-500 dark:text-gray-400 leading-snug">
+                                {payNotice?.kind === 'received'
+                                    ? 'Your money is in. The order is being completed automatically — no need to pay again.'
+                                    : pollingRef
+                                        ? 'Approve the prompt on your phone. Your order completes automatically.'
+                                        : 'If you approved, your order completes automatically — do not pay again.'}
+                                {(payNotice?.ref || pollingRef) && (
+                                    <> Ref: <span className="font-mono font-bold text-gray-700 dark:text-gray-200 break-all">{payNotice?.ref || pollingRef}</span></>
+                                )}
+                                {payNotice && shop.whatsapp_number && <> · Questions? WhatsApp the shop.</>}
+                            </p>
+                            <div className="mt-3 flex items-center gap-2">
+                                {pollingRef ? (
+                                    <button
+                                        type="button"
+                                        onClick={checkPaymentNow}
+                                        disabled={checkingNow}
+                                        className="px-3 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-black flex items-center gap-1.5 disabled:opacity-70"
+                                    >
+                                        {checkingNow ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                                        I&apos;ve paid — check now
+                                    </button>
+                                ) : payNotice?.kind === 'slow' ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => resumePaymentCheck(payNotice.ref)}
+                                        className="px-3 py-2 rounded-md bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-xs font-black flex items-center gap-1.5"
+                                    >
+                                        <RefreshCw className="w-3.5 h-3.5" /> Check again
+                                    </button>
+                                ) : null}
+                                {payNotice && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPayNotice(null)}
+                                        className="px-3 py-2 rounded-md text-xs font-bold text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                                    >
+                                        Dismiss
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* WhatsApp floating button */}
             {shop.whatsapp_number && (

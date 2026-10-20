@@ -1,8 +1,13 @@
 import { createServerClient } from './supabase'
 import { updateOrderWithColumnFallback } from './order-update-fallback'
+import {
+    loadFulfillmentConfig, fulfillWithFallback, ordersStamp, shopOrdersStamp, optionalStampKeys,
+    describeAttempts, failureReason,
+} from './supplier-router'
 import { creditShopProfit } from './shop-service'
 import { resolveSubAgentContext } from './sub-agents'
 import { resolveChainCosts, splitChainProfit } from './pricing/chain-cost'
+import { ownerCostPrice } from './shop-price-limits'
 import { shopFeeSettingKeys, resolveShopFeePercent } from './gateway-fees'
 import { sendPushToUser } from './web-push'
 import type { PaymentProvider } from './payment-provider'
@@ -10,11 +15,40 @@ import type { PaymentProvider } from './payment-provider'
 // In-memory lock to prevent race conditions between frontend verification and Paystack webhooks
 const processingLocks = new Set<string>();
 
+type ShopOrderResult = { success: boolean; error?: string; orderId?: string; isDuplicate?: boolean }
+
 /**
  * Shared logic for processing a successful shop storefront payment.
  * Handles idempotency, security amount validation, order creation, profit credit, and fulfillment.
+ *
+ * Every caller (webhooks, /api/shop/verify, the reconciliation cron, the admin
+ * retry) only reaches this once the gateway says the money is in, so the outcome
+ * is written to the payment ledger here, in one place: settled, or a counted
+ * failure that the cron retries and eventually hands to a human. A paid payment
+ * that cannot become an order is never silent again.
  */
 export async function processShopOrder(
+    reference: string,
+    metadata: Parameters<typeof settleShopOrder>[1],
+    paidAmountPesewas: number,
+    slug?: string
+): Promise<ShopOrderResult> {
+    const result = await settleShopOrder(reference, metadata, paidAmountPesewas, slug)
+
+    // A same-Lambda lock skip has no order id yet; the call holding the lock
+    // writes the real outcome.
+    if (result.isDuplicate && !result.orderId) return result
+
+    const { markShopPaymentSettled, markShopPaymentIssue } = await import('./shop-meta-store')
+    if (result.success) {
+        await markShopPaymentSettled(reference)
+    } else {
+        await markShopPaymentIssue(reference, result.error || 'Unknown settlement error')
+    }
+    return result
+}
+
+async function settleShopOrder(
     reference: string,
     metadata: {
         shop_id: string;
@@ -53,7 +87,7 @@ export async function processShopOrder(
     },
     paidAmountPesewas: number,
     slug?: string
-): Promise<{ success: boolean; error?: string; orderId?: string; isDuplicate?: boolean }> {
+): Promise<ShopOrderResult> {
     const supabase = createServerClient()
     const db = supabase as any
 
@@ -205,20 +239,9 @@ export async function processShopOrder(
                 : Math.round(dbSellingPrice * (paystackFeePercent / 100) * 100) / 100
             expectedTotalPesewas = Math.round((dbSellingPrice + paystackFee) * 100)
             
-            const isDealerOwner = ownerRole === 'dealer' && parseFloat(pkg?.dealer_price) > 0
-            const isAgentOwner = ownerRole === 'agent' && parseFloat(pkg?.agent_price) > 0
-            
             verifiedSellingPrice = dbSellingPrice
-            
-            if (isDealerOwner) {
-                verifiedCostPrice = parseFloat(pkg?.dealer_price)
-            } else if (isAgentOwner) {
-                verifiedCostPrice = parseFloat(pkg?.agent_price)
-            } else {
-                verifiedCostPrice = parseFloat(pkg?.price) || 0
-            }
-            
-            verifiedProfit = dbSellingPrice - verifiedCostPrice
+            verifiedCostPrice = ownerCostPrice(pkg, ownerRole)
+            verifiedProfit = Math.round((dbSellingPrice - verifiedCostPrice) * 100) / 100
             adminCostAtTime = parseFloat(pkg?.cost_price) || 0
 
             // ── SUB-AGENT SPLIT ──────────────────────────────────────────────
@@ -372,6 +395,20 @@ export async function processShopOrder(
                 const retry = await insertOrder(withoutGrandparent)
                 newOrder = retry.data
                 createError = retry.error
+            }
+
+            if (createError?.code === '23505') {
+                // Lost the race on shop_orders.paystack_reference UNIQUE: the webhook,
+                // the buyer's poll and the cron can all settle the same payment from
+                // different Lambdas, which the in-memory lock above cannot see. The
+                // winner owns profit credit and fulfilment; this call is a duplicate.
+                const { data: winner } = await db
+                    .from('shop_orders')
+                    .select('id')
+                    .eq('paystack_reference', reference)
+                    .maybeSingle()
+                console.log(`[Shop Order Processor] Concurrent settle lost the insert race; order ${winner?.id} already exists.`)
+                return { success: true, orderId: winner?.id, isDuplicate: true }
             }
 
             if (createError) {
@@ -612,63 +649,35 @@ async function triggerShopFulfillment(
     }
 
     try {
-        // ── 1. Fetch fulfillment settings from admin_settings ──────────────
-        const { data: settingsData } = await db
-            .from('admin_settings')
-            .select('key, value')
-            .in('key', ['auto_fulfillment_enabled', 'fulfillment_settings'])
+        // ── 1. Route: primary supplier for the network, fallback if it refuses ──
+        const config = await loadFulfillmentConfig(db)
 
-        const settingsMap = (settingsData || []).reduce((acc: any, curr: any) => {
-            acc[curr.key] = curr.value
-            return acc
-        }, {})
-
-        if (String(settingsMap.auto_fulfillment_enabled) === 'false') {
+        if (!config.globalEnabled) {
             console.log(`[Shop Order Processor] Auto-fulfillment globally disabled`)
             await sendAdminNewOrderAlert({ ...alertDetails, reason: 'Global auto-fulfillment is disabled' })
             return
         }
 
-        // ── 2. Parse fulfillment_settings ─────────────────────────────────
-        let fulfillmentSettings: {
-            networks: Record<string, boolean>
-            codecraft_networks: Record<string, boolean>
-            kingflexy_networks: Record<string, boolean>
-            eazydata_networks: Record<string, boolean>
-            agentportal_networks: Record<string, boolean>
-            netpulse_networks: Record<string, boolean>
-            hendylinks_networks: Record<string, boolean>
-            bundleportal_networks: Record<string, boolean>
-        } = { networks: {}, codecraft_networks: {}, kingflexy_networks: {}, eazydata_networks: {}, agentportal_networks: {}, netpulse_networks: {}, hendylinks_networks: {}, bundleportal_networks: {} }
-
-        try {
-            if (settingsMap.fulfillment_settings) {
-                const parsed = typeof settingsMap.fulfillment_settings === 'string'
-                    ? JSON.parse(settingsMap.fulfillment_settings)
-                    : settingsMap.fulfillment_settings
-                fulfillmentSettings.networks = parsed.networks || {}
-                fulfillmentSettings.codecraft_networks = parsed.codecraft_networks || {}
-                fulfillmentSettings.kingflexy_networks = parsed.kingflexy_networks || {}
-                fulfillmentSettings.eazydata_networks = parsed.eazydata_networks || {}
-                fulfillmentSettings.agentportal_networks = parsed.agentportal_networks || {}
-                fulfillmentSettings.netpulse_networks = parsed.netpulse_networks || {}
-                fulfillmentSettings.hendylinks_networks = parsed.hendylinks_networks || {}
-                fulfillmentSettings.bundleportal_networks = parsed.bundleportal_networks || {}
-            }
-        } catch (e) { /* ignore parse failure — defaults to empty */ }
-
-        const isDataKazinaEnabled = fulfillmentSettings.networks[network] === true
-        const isCodeCraftEnabled = fulfillmentSettings.codecraft_networks[network] === true
-        const isKingFlexyEnabled = fulfillmentSettings.kingflexy_networks[network] === true
-        const isEazyDataEnabled = fulfillmentSettings.eazydata_networks[network] === true
-        const isAgentPortalEnabled = fulfillmentSettings.agentportal_networks[network] === true
-        const isNetPulseEnabled = fulfillmentSettings.netpulse_networks[network] === true
-        const isHendyLinksEnabled = fulfillmentSettings.hendylinks_networks[network] === true
-        const isBundlePortalEnabled = fulfillmentSettings.bundleportal_networks[network] === true
+        // ── 2. Execute (lib/supplier-router never throws) ──────────────────
+        const outcome = await fulfillWithFallback({
+            db,
+            network,
+            phone,
+            size: extra.size || '',
+            orderId,
+            match: { column: 'shop_order_id', value: orderId },
+            mode: 'live',
+            config,
+            // Stamp fulfilled_by BEFORE each supplier call — the per-supplier sync
+            // crons find storefront orders by it, fallback included.
+            onBeforeAttempt: async (supplier) => {
+                await db.from('shop_orders').update({ fulfilled_by: supplier.id }).eq('id', orderId)
+                console.log(`[Shop Order Processor] Routing to ${supplier.id} for order ${orderId} | network: ${network}`)
+            },
+        })
 
         // ── 3. FULFILLMENT_CONFLICT Guard (absolute last line of defense) ──
-        const activeCount = [isDataKazinaEnabled, isCodeCraftEnabled, isKingFlexyEnabled, isEazyDataEnabled, isAgentPortalEnabled, isNetPulseEnabled, isHendyLinksEnabled, isBundlePortalEnabled].filter(Boolean).length
-        if (activeCount > 1) {
+        if (outcome.status === 'conflict') {
             console.error(`[Fulfillment] CONFLICT DETECTED for ${network} on order ${orderId}`)
             await sendAdminNewOrderAlert({
                 ...alertDetails,
@@ -679,85 +688,23 @@ async function triggerShopFulfillment(
         }
 
         // ── 4. No active supplier ──────────────────────────────────────────
-        if (!isDataKazinaEnabled && !isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && !isHendyLinksEnabled && !isBundlePortalEnabled) {
+        if (outcome.status === 'no_supplier' || outcome.status === 'disabled') {
             console.log(`[Shop Order Processor] No active supplier for network ${network}. Order ${orderId} kept pending.`)
             await sendAdminNewOrderAlert({ ...alertDetails, reason: `No active supplier configured for network: ${network}` })
             return
         }
 
-        // ── 5. Determine supplier and stamp fulfilled_by ATOMICALLY first ──
-        const supplierLabel = isCodeCraftEnabled ? 'codecraft' : isKingFlexyEnabled ? 'kingflexy' : isEazyDataEnabled ? 'eazydata' : isAgentPortalEnabled ? 'agentportal' : isNetPulseEnabled ? 'netpulse' : isHendyLinksEnabled ? 'hendylinks' : isBundlePortalEnabled ? 'bundleportal' : 'datakazina'
-        await db.from('shop_orders').update({ fulfilled_by: supplierLabel }).eq('id', orderId)
-        console.log(`[Shop Order Processor] Routing to ${supplierLabel} for order ${orderId} | network: ${network}`)
+        const supplierLabel = outcome.supplier.id
+        const result = outcome.result
 
-        // ── 6. Execute fulfillment (dedicated try/catch — ensures alert fires on any exception) ──
-        // webhookRef is set by the Dakazina path only (see lib/fulfillment-service).
-        let result: { success: boolean; reference?: string; transactionId?: string; webhookRef?: string; error?: string; isRateLimited?: boolean }
-
-        try {
-            if (isCodeCraftEnabled) {
-                const { fulfillOrder: ccFulfill } = await import('./codecraft-service')
-                result = await ccFulfill(network, phone, extra.size || '', orderId)
-            } else if (isKingFlexyEnabled) {
-                const { fulfillOrder: kfFulfill } = await import('./kingflexy-service')
-                result = await kfFulfill(network, phone, extra.size || '', orderId)
-            } else if (isEazyDataEnabled) {
-                const { fulfillOrder: edFulfill } = await import('./eazydata-service')
-                result = await edFulfill(network, phone, extra.size || '', orderId)
-            } else if (isAgentPortalEnabled) {
-                const { fulfillOrder: apFulfill } = await import('./agentportal-service')
-                result = await apFulfill(network, phone, extra.size || '', orderId)
-            } else if (isNetPulseEnabled) {
-                const { fulfillOrder: npFulfill } = await import('./netpulse-service')
-                result = await npFulfill(network, phone, extra.size || '', orderId)
-            } else if (isHendyLinksEnabled) {
-                const { fulfillOrder: hlFulfill } = await import('./hendylinks-service')
-                result = await hlFulfill(network, phone, extra.size || '', orderId)
-            } else if (isBundlePortalEnabled) {
-                const { fulfillOrder: bpFulfill } = await import('./bundleportal-service')
-                result = await bpFulfill(network, phone, extra.size || '', orderId)
-            } else {
-                const { fulfillOrder: dkFulfill } = await import('./fulfillment-service')
-                result = await dkFulfill(network, phone, extra.size || '', orderId)
-            }
-        } catch (importOrCallErr: any) {
-            console.error(`[Shop Order Processor] Supplier import/call exception for order ${orderId}:`, importOrCallErr)
-            await sendAdminNewOrderAlert({
-                ...alertDetails,
-                reason: `Supplier exception during fulfillment (${supplierLabel}): ${importOrCallErr?.message || 'Unknown error'}. Order kept pending.`
-            })
-            return
-        }
-
-        // ── 7. Handle result ───────────────────────────────────────────────
-        if (result.success) {
+        // ── 5. Handle result ───────────────────────────────────────────────
+        if (outcome.status === 'placed') {
             const updatedAt = new Date().toISOString()
 
             const updatePayload: Record<string, any> = {
                 status: 'processing',
                 updated_at: updatedAt,
-            }
-
-            if (isCodeCraftEnabled && result.transactionId) {
-                updatePayload.codecraft_reference_id = result.transactionId
-            }
-            if (isKingFlexyEnabled && result.transactionId) {
-                updatePayload.kingflexy_reference = result.transactionId
-            }
-            if (isEazyDataEnabled && result.transactionId) {
-                updatePayload.eazydata_reference = result.transactionId
-            }
-            if (isAgentPortalEnabled && result.transactionId) {
-                updatePayload.agentportal_reference = result.transactionId
-            }
-            if (isNetPulseEnabled && result.transactionId) {
-                updatePayload.netpulse_reference = result.transactionId
-            }
-            if (isHendyLinksEnabled && result.transactionId) {
-                updatePayload.hendylinks_reference = result.transactionId
-            }
-            if (isBundlePortalEnabled && result.transactionId) {
-                updatePayload.bundleportal_reference = result.transactionId
+                ...shopOrdersStamp(outcome.supplier, outcome.reference),
             }
 
             // Both writes below were previously unchecked: a missing supplier reference
@@ -768,62 +715,21 @@ async function triggerShopFulfillment(
                 'shop_orders',
                 { column: 'id', value: orderId },
                 updatePayload,
-                Object.keys(updatePayload).filter(k => k.endsWith('_reference')),
+                optionalStampKeys(updatePayload),
                 '[Shop Order Processor]'
             )
-            const ordersUpdate: Record<string, string> = { status: 'processing' }
-            if (isCodeCraftEnabled && result.transactionId) {
-                ordersUpdate.codecraft_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'codecraft'
-            }
-            if (isKingFlexyEnabled && result.transactionId) {
-                ordersUpdate.kingflexy_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'kingflexy'
-            }
-            if (isEazyDataEnabled && result.transactionId) {
-                ordersUpdate.eazydata_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'eazydata'
-            }
-            if (isAgentPortalEnabled && result.transactionId) {
-                ordersUpdate.agentportal_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'agentportal'
-            }
-            if (isNetPulseEnabled && result.transactionId) {
-                ordersUpdate.netpulse_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'netpulse'
-            }
-            if (isHendyLinksEnabled && result.transactionId) {
-                ordersUpdate.hendylinks_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'hendylinks'
-            }
-            if (isBundlePortalEnabled && result.transactionId) {
-                ordersUpdate.bundleportal_reference = result.transactionId
-                ordersUpdate.fulfillment_method = 'bundleportal'
+            const ordersUpdate: Record<string, string> = {
+                status: 'processing',
+                ...ordersStamp(outcome.supplier, outcome.reference),
             }
             await updateOrderWithColumnFallback(
                 db,
                 'orders',
                 { column: 'shop_order_id', value: orderId },
                 ordersUpdate,
-                [...Object.keys(ordersUpdate).filter(k => k.endsWith('_reference')), 'fulfillment_method'],
+                optionalStampKeys(ordersUpdate),
                 '[Shop Order Processor]'
             )
-
-            if (!isCodeCraftEnabled && !isKingFlexyEnabled && !isEazyDataEnabled && !isAgentPortalEnabled && !isNetPulseEnabled && !isHendyLinksEnabled && !isBundlePortalEnabled && (result.webhookRef || result.transactionId || result.reference)) {
-                // webhookRef FIRST — see the matching note in order-fulfillment-dispatcher.
-                const dakazinaRef = result.webhookRef || result.transactionId || result.reference
-
-                const { error: refError } = await db
-                    .from('orders')
-                    .update({ dakazina_reference: dakazinaRef })
-                    .eq('shop_order_id', orderId)
-                if (refError) console.error(`[ShopOrderProcessor] Failed to stamp dakazina_reference:`, refError.message)
-
-                await db
-                    .from('shop_orders')
-                    .update({ dakazina_reference: dakazinaRef })
-                    .eq('id', orderId)
-            }
 
             console.log(`[Shop Order Processor] Fulfillment success for order ${orderId} via ${supplierLabel}`)
 
@@ -841,15 +747,15 @@ async function triggerShopFulfillment(
             if (extra.size && extra.shopId) {
                 try {
                     const { sendShopOrderConfirmation } = await import('@/lib/sms/order-confirmations')
-                    const outcome = await sendShopOrderConfirmation(db, {
+                    const smsOutcome = await sendShopOrderConfirmation(db, {
                         shopId: extra.shopId,
                         orderId,
                         kind: 'data',
                         phone,
                         details: { network, size: extra.size },
                     })
-                    if (!outcome.sent) {
-                        console.log(`[Shop Order Processor] No shop SMS for ${orderId}: ${outcome.skipped}`)
+                    if (!smsOutcome.sent) {
+                        console.log(`[Shop Order Processor] No shop SMS for ${orderId}: ${smsOutcome.skipped}`)
                     }
                 } catch (smsErr: any) {
                     console.error(`[Shop Order Processor] Shop order SMS failed for ${orderId}:`, smsErr?.message)
@@ -858,7 +764,7 @@ async function triggerShopFulfillment(
 
         } else {
             // ALL failures → keep order as PENDING — never mark as failed
-            console.warn(`[Shop Order Processor] Fulfillment attempt failed for order ${orderId} via ${supplierLabel}:`, result.error)
+            console.warn(`[Shop Order Processor] Fulfillment attempt failed for order ${orderId} via ${supplierLabel}:`, result.error, describeAttempts(outcome.attempts))
             console.warn(`[Shop Order Processor] Order ${orderId} kept as PENDING for manual review.`)
 
             // MTN whitelist gate (Agent Portal): number auto-submitted to MTN for
@@ -867,7 +773,7 @@ async function triggerShopFulfillment(
 
             await sendAdminNewOrderAlert({
                 ...alertDetails,
-                reason: `Auto-fulfillment (${supplierLabel}) failed: ${result.error || 'Unknown error'}. Order kept pending.`
+                reason: `Auto-fulfillment failed — ${failureReason(outcome)}. Order kept pending.`
             })
         }
 

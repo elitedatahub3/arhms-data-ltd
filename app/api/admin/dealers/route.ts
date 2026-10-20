@@ -2,6 +2,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
+import { restoreFromDealer } from '@/lib/dealer-role-history'
 
 export async function GET(request: NextRequest) {
     try {
@@ -127,19 +128,15 @@ export async function POST(request: NextRequest) {
         }
 
         if (action === 'revoke') {
-            const { error: updateError } = await (supabase
-                .from('users') as any)
-                .update({
-                    role: 'customer',
-                    updated_at: new Date().toISOString(),
-                })
-                .eq('id', userId)
+            // Back to what they were before the dealership (customer, or their agent plan)
+            const result = await restoreFromDealer(supabase as any, userId, { requireExpired: false })
 
-            if (updateError) {
-                return NextResponse.json({ error: updateError.message }, { status: 500 })
+            if (!result.restored) {
+                const message = result.reason === 'not_dealer' ? 'User is not a dealer' : (result.error || 'Failed to revoke dealer')
+                return NextResponse.json({ error: message }, { status: result.reason === 'error' ? 500 : 400 })
             }
 
-            return NextResponse.json({ success: true })
+            return NextResponse.json({ success: true, newRole: result.newRole })
         }
 
         return NextResponse.json({ error: 'Unknown action' }, { status: 400 })

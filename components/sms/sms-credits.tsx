@@ -15,6 +15,7 @@ import { Coins, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { SmsPaymentForm } from '@/components/sms/sms-payment-form'
+import { smsFetch } from '@/lib/sms/sms-fetch'
 
 interface Bundle {
     id: string
@@ -24,7 +25,13 @@ interface Bundle {
     pricePerSms: number
 }
 
-export function SmsCredits({ credits, onPurchased, deBranded = false }: { credits: number; onPurchased: () => void; deBranded?: boolean }) {
+export function SmsCredits({ credits, onPurchased, deBranded = false, portal }: {
+    credits: number
+    onPurchased: () => void
+    deBranded?: boolean
+    /** 'platform' from the SMS Platform pages, so the receipt notification links back there. */
+    portal?: 'platform'
+}) {
     const [bundles, setBundles] = useState<Bundle[]>([])
     const [loading, setLoading] = useState(true)
     const [selected, setSelected] = useState<Bundle | null>(null)
@@ -32,7 +39,7 @@ export function SmsCredits({ credits, onPurchased, deBranded = false }: { credit
     useEffect(() => {
         (async () => {
             try {
-                const res = await fetch('/api/sms/credits', { cache: 'no-store' })
+                const res = await smsFetch(portal ? `/api/sms/credits?portal=${portal}` : '/api/sms/credits', { cache: 'no-store' })
                 const data = await res.json()
                 if (data?.success) setBundles(data.bundles || [])
                 else toast.error(data?.error || 'Could not load bundles')
@@ -42,15 +49,15 @@ export function SmsCredits({ credits, onPurchased, deBranded = false }: { credit
                 setLoading(false)
             }
         })()
-    }, [])
+    }, [portal])
 
     // Captured when the purchase starts, so a balance that was already above
     // zero does not read as "settled" on the first poll.
     const isSettled = useCallback(async () => {
-        const res = await fetch('/api/sms/credits', { cache: 'no-store' })
+        const res = await smsFetch(portal ? `/api/sms/credits?portal=${portal}` : '/api/sms/credits', { cache: 'no-store' })
         const data = await res.json()
         return Number(data?.credits) > credits
-    }, [credits])
+    }, [credits, portal])
 
     const handleSettled = useCallback(() => {
         toast.success(`${selected?.credits?.toLocaleString() ?? ''} SMS credits added`)
@@ -106,7 +113,7 @@ export function SmsCredits({ credits, onPurchased, deBranded = false }: { credit
                         <SmsPaymentForm
                             key={selected.id}
                             endpoint="/api/sms/credits/purchase"
-                            extraBody={{ bundleId: selected.id }}
+                            extraBody={{ bundleId: selected.id, ...(portal ? { portal } : {}) }}
                             amount={selected.price}
                             payLabel="Buy credits"
                             deBranded={deBranded}

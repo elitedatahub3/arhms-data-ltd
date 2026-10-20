@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { validateAdminAccess } from '@/lib/auth-utils'
 import { SMS_UNLOCK_PRICE_KEYS, SMS_PROVIDER_KEY } from '@/lib/sms/sms-purchase'
+import { SMS_PLATFORM_SETTING_KEYS } from '@/lib/sms/platform'
+import { normaliseWhatsApp } from '@/lib/sms/sms-rules'
 import { isKingFlexySmsConfigured } from '@/lib/kingflexy-sms-service'
 import { getActiveSmsProvider } from '@/lib/sms-service'
 
@@ -24,6 +26,10 @@ const SETTING_KEYS = [
     'sms_inline_send_max',
     SMS_PROVIDER_KEY,
     ...SMS_UNLOCK_PRICE_KEYS,
+    // 'true' waives the one-time unlock fee. Credits and sender IDs stay as they are.
+    'sms_free_activation',
+    // SMS Platform: daily limits and sender caps per mode, and the documents WhatsApp.
+    ...SMS_PLATFORM_SETTING_KEYS,
 ]
 
 const unquote = (v: any) => (v === null || v === undefined ? '' : String(v).replace(/^"+|"+$/g, ''))
@@ -46,7 +52,8 @@ export async function GET(request: NextRequest) {
 
         const { data: bundles } = await (supabase as any)
             .from('sms_credit_bundles')
-            .select('id, name, credits, price, sort_order, is_active')
+            // * so the list loads before 20261016010000 adds audience.
+            .select('*')
             .order('sort_order', { ascending: true })
 
         // What Customer SMS will actually send through, which is not always the
@@ -55,7 +62,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             success: true,
             settings,
-            bundles: bundles || [],
+            bundles: (bundles || []).map((b: any) => ({
+                id: b.id, name: b.name, credits: b.credits, price: b.price, sort_order: b.sort_order, is_active: b.is_active,
+                audience: b.audience === 'platform' ? 'platform' : 'shop',
+            })),
             kingflexyConfigured,
             platformGateway: await getActiveSmsProvider('main'),
             customerSmsGateway: await getActiveSmsProvider('storefront'),
@@ -84,7 +94,16 @@ export async function POST(request: NextRequest) {
                 if (!SETTING_KEYS.includes(key)) continue
                 const value = String(raw ?? '').trim()
 
-                if ((SMS_UNLOCK_PRICE_KEYS as readonly string[]).includes(key) || key === 'sms_inline_send_max') {
+                if (key === 'sms_business_docs_whatsapp') {
+                    const wa = value ? normaliseWhatsApp(value) : ''
+                    if (wa === null) {
+                        return NextResponse.json({ error: 'Documents WhatsApp must be a Ghana number, e.g. 233244123456' }, { status: 400 })
+                    }
+                    updates.push({ key, value: wa })
+                    continue
+                }
+
+                if ((SMS_UNLOCK_PRICE_KEYS as readonly string[]).includes(key) || key === 'sms_inline_send_max' || key.startsWith('sms_daily_limit_') || key.startsWith('sms_sender_cap_')) {
                     const n = Number(value)
                     if (!Number.isFinite(n) || n < 0) {
                         return NextResponse.json({ error: `${key} must be a number of zero or more` }, { status: 400 })
@@ -118,7 +137,7 @@ export async function POST(request: NextRequest) {
                     )
                 }
 
-                const row = {
+                const row: Record<string, any> = {
                     name,
                     credits,
                     price,
@@ -126,6 +145,9 @@ export async function POST(request: NextRequest) {
                     is_active: b.is_active !== false,
                     updated_at: new Date().toISOString(),
                 }
+                // Shop rows rely on the column default, so they still save on a
+                // database that has not run 20261016010000 yet.
+                if (b.audience === 'platform') row.audience = 'platform'
 
                 const { error } = b.id
                     ? await (supabase as any).from('sms_credit_bundles').update(row).eq('id', b.id)
@@ -133,6 +155,9 @@ export async function POST(request: NextRequest) {
 
                 if (error) {
                     console.error('[AdminSmsConfig] bundle save failed:', error)
+                    if (error.code === '42703') {
+                        return NextResponse.json({ error: 'Run migration 20261016010000_sms_platform_bundles.sql before adding SMS Platform bundles.' }, { status: 500 })
+                    }
                     return NextResponse.json({ error: `Could not save bundle "${name}"` }, { status: 500 })
                 }
             }

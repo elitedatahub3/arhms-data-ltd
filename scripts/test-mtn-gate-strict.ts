@@ -41,6 +41,24 @@ import path from 'path'
 type UpstreamMode = 'allow' | 'deny' | 'fail'
 let upstreamMode: UpstreamMode = 'deny'
 let upstreamCalls = 0
+/** BundlePortal's verify_number — a second opinion that can only let a number through. */
+let bundlePortalMode: UpstreamMode = 'deny'
+let bundlePortalCalls = 0
+/** How long each stubbed server takes to answer. Honours the caller's timeoutMs like a real abort. */
+let upstreamDelayMs = 0
+let bundlePortalDelayMs = 0
+
+/** Wait `delayMs`, or reject at `timeoutMs` first — what AbortSignal.timeout does to fetch. */
+function answerAfter(delayMs: number, timeoutMs?: number): Promise<void> {
+    if (delayMs <= 0) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+        if (timeoutMs && timeoutMs < delayMs) {
+            setTimeout(() => reject(new Error('The operation was aborted due to timeout')), timeoutMs)
+        } else {
+            setTimeout(resolve, delayMs)
+        }
+    })
+}
 
 const REPO_ROOT = path.resolve(__dirname, '..')
 
@@ -48,14 +66,41 @@ const originalLoad = (Module as any)._load
 ;(Module as any)._load = function (request: string, parent: unknown, isMain: boolean) {
     if (request === '@/lib/agentportal-service') {
         return {
-            verifyMtnWhitelist: async (msisdns: string[]) => {
+            verifyMtnWhitelist: async (msisdns: string[], options?: { timeoutMs?: number }) => {
                 upstreamCalls++
+                try {
+                    await answerAfter(upstreamDelayMs, options?.timeoutMs)
+                } catch (e: any) {
+                    // The real client catches the abort and reports a failure.
+                    return { success: false, allowed: new Set<string>(), error: e.message }
+                }
                 if (upstreamMode === 'fail') {
                     return { success: false, allowed: new Set<string>(), error: 'stubbed outage' }
                 }
                 return {
                     success: true,
                     allowed: upstreamMode === 'allow' ? new Set(msisdns) : new Set<string>(),
+                }
+            },
+        }
+    }
+    if (request === '@/lib/bundleportal-service') {
+        return {
+            verifyMtnNumbers: async (msisdns: string[], _concurrency?: number, options?: { timeoutMs?: number }) => {
+                bundlePortalCalls++
+                try {
+                    await answerAfter(bundlePortalDelayMs, options?.timeoutMs)
+                } catch (e: any) {
+                    return { success: false, allowed: new Set<string>(), inFlight: new Set<string>(), failed: new Set(msisdns), error: e.message }
+                }
+                if (bundlePortalMode === 'fail') {
+                    return { success: false, allowed: new Set<string>(), inFlight: new Set<string>(), failed: new Set(msisdns), error: 'stubbed outage' }
+                }
+                return {
+                    success: true,
+                    allowed: bundlePortalMode === 'allow' ? new Set(msisdns) : new Set<string>(),
+                    inFlight: new Set<string>(),
+                    failed: new Set<string>(),
                 }
             },
         }
@@ -67,22 +112,22 @@ const originalLoad = (Module as any)._load
 }
 
 /**
- * Minimal supabase double. Only the three shapes the gate uses:
- *   .from(t).select(c).eq(k, v)      → settings read
- *   .from(t).select(c).in(k, vals)   → cache read
- *   .from(t).upsert(rows, opts)      → cache write
+ * Minimal supabase double. Only the shapes the gate uses:
+ *   .from('admin_settings').select(c).in('key', keys)   → settings read
+ *   .from(t).select(c).in(k, vals)                      → cache read
+ *   .from(t).upsert(rows, opts)                         → cache write
+ * `settings` maps admin_settings key → value; a missing key is an absent row.
  * Cache always misses, so every case reaches the stubbed upstream.
  */
-function makeSupabase(gateEnabledRow: string | null) {
+function makeSupabase(settings: Record<string, string>) {
     return {
-        from() {
+        from(table: string) {
             return {
                 select() {
                     return {
-                        eq: async () => ({
-                            data: gateEnabledRow === null ? [] : [{ key: 'x', value: gateEnabledRow }],
-                        }),
-                        in: async () => ({ data: [], error: null }),
+                        in: async () => table === 'admin_settings'
+                            ? { data: Object.entries(settings).map(([key, value]) => ({ key, value })), error: null }
+                            : { data: [], error: null },
                     }
                 },
                 upsert: async () => ({ error: null }),
@@ -97,6 +142,8 @@ const {
     checkMtnRegistrationStrict,
     checkMtnRegistrationBatch,
     clearGateSettingsCache,
+    MTN_GATE_KEYS,
+    LEGACY_MTN_GATE_KEY,
     USSD_NOT_REGISTERED_MESSAGE,
     USSD_REGISTRATION_UNVERIFIABLE_MESSAGE,
 } = gate
@@ -110,6 +157,8 @@ interface Case {
     name: string
     enabled: boolean
     upstream: UpstreamMode
+    /** BundlePortal's answer. Defaults to deny. */
+    bundlePortal?: UpstreamMode
     phone: string
     network: string
     wantBlocked: boolean
@@ -154,6 +203,31 @@ const cases: Case[] = [
         enabled: true, upstream: 'deny', phone: TELECEL, network: 'MTN',
         wantBlocked: false, wantBatchGated: false,
     },
+    {
+        name: 'Agent Portal refuses, BundlePortal accepts → allowed',
+        enabled: true, upstream: 'deny', bundlePortal: 'allow', phone: MTN, network: 'MTN',
+        wantBlocked: false, wantBatchGated: false,
+    },
+    {
+        name: 'Agent Portal outage, BundlePortal accepts → allowed (USSD no longer refuses)',
+        enabled: true, upstream: 'fail', bundlePortal: 'allow', phone: MTN, network: 'MTN',
+        wantBlocked: false, wantBatchGated: false,
+    },
+    {
+        name: 'Agent Portal refuses, BundlePortal outage → REFUSED (unchanged)',
+        enabled: true, upstream: 'deny', bundlePortal: 'fail', phone: MTN, network: 'MTN',
+        wantBlocked: true, wantReason: 'unregistered', wantBatchGated: true,
+    },
+    {
+        name: 'both outages → REFUSED on USSD, fail open on web',
+        enabled: true, upstream: 'fail', bundlePortal: 'fail', phone: MTN, network: 'MTN',
+        wantBlocked: true, wantReason: 'unverifiable', wantBatchGated: false,
+    },
+    {
+        name: 'Agent Portal accepts → allowed whatever BundlePortal says',
+        enabled: true, upstream: 'allow', bundlePortal: 'fail', phone: MTN, network: 'MTN',
+        wantBlocked: false, wantBatchGated: false,
+    },
 ]
 
 async function main() {
@@ -162,21 +236,24 @@ async function main() {
 
     for (const c of cases) {
         upstreamMode = c.upstream
+        bundlePortalMode = c.bundlePortal ?? 'deny'
+        bundlePortalCalls = 0
         upstreamCalls = 0
         clearGateSettingsCache()
 
         // Strict (USSD) path. `enabled` is passed in, so the DB stub is irrelevant here.
         const strict = await checkMtnRegistrationStrict(
-            makeSupabase(null), c.phone, c.network, { enabled: c.enabled }
+            makeSupabase({}), c.phone, c.network, { enabled: c.enabled }
         )
-        const strictCalls = upstreamCalls
+        const strictCalls = upstreamCalls + bundlePortalCalls
 
         // Batch (web) path, same inputs, gate state read from the DB stub instead.
         upstreamCalls = 0
         clearGateSettingsCache()
         const batch = await checkMtnRegistrationBatch(
-            makeSupabase(c.enabled ? 'true' : 'false'),
-            [{ phoneNumber: c.phone, packageNetwork: c.network }]
+            makeSupabase({ [MTN_GATE_KEYS.site]: c.enabled ? 'true' : 'false' }),
+            [{ phoneNumber: c.phone, packageNetwork: c.network }],
+            'site'
         )
 
         const problems: string[] = []
@@ -203,6 +280,78 @@ async function main() {
             failed++
         }
     }
+
+    // ── Per-surface toggles ──────────────────────────────────────────────────────
+    // Shop and main site switch independently; a surface whose own key was never
+    // written follows the pre-split legacy key, and an explicit 'false' beats it.
+    console.log('')
+    upstreamMode = 'deny'
+    const surfaceCases: Array<{ name: string; settings: Record<string, string>; shop: boolean; site: boolean }> = [
+        { name: 'no rows → both off', settings: {}, shop: false, site: false },
+        { name: 'shop on, site off', settings: { [MTN_GATE_KEYS.shop]: 'true', [MTN_GATE_KEYS.site]: 'false' }, shop: true, site: false },
+        { name: 'site on, shop off', settings: { [MTN_GATE_KEYS.shop]: 'false', [MTN_GATE_KEYS.site]: 'true' }, shop: false, site: true },
+        { name: 'legacy on, no new rows → both on', settings: { [LEGACY_MTN_GATE_KEY]: 'true' }, shop: true, site: true },
+        { name: 'legacy on, shop explicitly off', settings: { [LEGACY_MTN_GATE_KEY]: 'true', [MTN_GATE_KEYS.shop]: 'false' }, shop: false, site: true },
+    ]
+    for (const sc of surfaceCases) {
+        const got: Record<string, boolean> = {}
+        for (const surface of ['shop', 'site'] as const) {
+            clearGateSettingsCache()
+            const r = await checkMtnRegistrationBatch(
+                makeSupabase(sc.settings), [{ phoneNumber: MTN, packageNetwork: 'MTN' }], surface
+            )
+            got[surface] = r.unregistered.length > 0
+        }
+        if (got.shop === sc.shop && got.site === sc.site) {
+            console.log(`  PASS  ${sc.name}`)
+            passed++
+        } else {
+            console.log(`  FAIL  ${sc.name}: shop=${got.shop} site=${got.site}, want shop=${sc.shop} site=${sc.site}`)
+            failed++
+        }
+    }
+
+    // ── Per-server budgets (USSD) ────────────────────────────────────────────────
+    // Each server gets its own budget, and the first "registered" settles it. These
+    // use the strict path's real defaults, so they take a few seconds of wall time.
+    console.log('')
+    const timingCases: Array<{
+        name: string; ap: UpstreamMode; apDelay: number; bp: UpstreamMode; bpDelay: number
+        wantBlocked: boolean; wantReason?: string; maxMs: number; minMs?: number
+    }> = [
+        { name: 'Server 2 says yes after 3s, Server 1 says no at once -> allowed (was refused at 1.5s)',
+          ap: 'deny', apDelay: 0, bp: 'allow', bpDelay: 3000, wantBlocked: false, maxMs: 3600, minMs: 2900 },
+        { name: 'Server 2 says yes at once, Server 1 hangs 3s -> allowed without waiting',
+          ap: 'allow', apDelay: 3000, bp: 'allow', bpDelay: 0, wantBlocked: false, maxMs: 500 },
+        { name: 'Server 1 says yes at once, Server 2 hangs -> allowed without waiting',
+          ap: 'allow', apDelay: 0, bp: 'deny', bpDelay: 3000, wantBlocked: false, maxMs: 500 },
+        { name: 'Server 1 no at once, Server 2 no after 1s -> waits for both, REFUSED unregistered',
+          ap: 'deny', apDelay: 0, bp: 'deny', bpDelay: 1000, wantBlocked: true, wantReason: 'unregistered', maxMs: 1600, minMs: 900 },
+        { name: 'both servers past their budgets -> REFUSED unverifiable inside ~4s',
+          ap: 'allow', apDelay: 9000, bp: 'allow', bpDelay: 9000, wantBlocked: true, wantReason: 'unverifiable', maxMs: 4600, minMs: 3900 },
+    ]
+    for (const tc of timingCases) {
+        upstreamMode = tc.ap; upstreamDelayMs = tc.apDelay
+        bundlePortalMode = tc.bp; bundlePortalDelayMs = tc.bpDelay
+        const started = Date.now()
+        const r = await checkMtnRegistrationStrict(makeSupabase({}), MTN, 'MTN', { enabled: true })
+        const ms = Date.now() - started
+        const problems: string[] = []
+        if (r.blocked !== tc.wantBlocked) problems.push(`blocked=${r.blocked}, want ${tc.wantBlocked}`)
+        if (tc.wantReason && r.reason !== tc.wantReason) problems.push(`reason=${r.reason}, want ${tc.wantReason}`)
+        if (ms > tc.maxMs) problems.push(`took ${ms}ms, want <= ${tc.maxMs}ms`)
+        if (tc.minMs && ms < tc.minMs) problems.push(`took ${ms}ms, want >= ${tc.minMs}ms`)
+        if (problems.length === 0) {
+            console.log(`  PASS  ${tc.name} (${ms}ms)`)
+            passed++
+        } else {
+            console.log(`  FAIL  ${tc.name}`)
+            for (const p of problems) console.log(`          ${p}`)
+            failed++
+        }
+    }
+    upstreamDelayMs = 0
+    bundlePortalDelayMs = 0
 
     // The messages are read off a feature-phone screen and sent through Hubtel, which
     // throws on non-ASCII and truncates past ~160 chars.

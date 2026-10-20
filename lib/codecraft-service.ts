@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { sanitizeForLog } from '@/lib/safe-log'
+import type { SupplierFailureKind } from '@/lib/supplier-failure'
 
 // CodeCraft Fulfillment Service — Mirrors lib/fulfillment-service.ts architecture exactly
 
@@ -22,6 +23,7 @@ interface FulfillmentResponse {
     error?: string
     apiResponse?: any
     isRateLimited?: boolean
+    failureKind?: SupplierFailureKind
 }
 
 interface StatusResponse {
@@ -278,11 +280,11 @@ export async function fulfillOrder(
 
     if (!checkCircuit()) {
         console.warn(`[CodeCraft] Circuit breaker is OPEN. Order ${orderId} kept pending.`)
-        return { success: false, error: 'Service temporarily unavailable (circuit open)' }
+        return { success: false, error: 'Service temporarily unavailable (circuit open)', failureKind: 'refused' }
     }
 
     if (!CODECRAFT_API_KEY) {
-        return { success: false, error: 'CodeCraft API key not configured' }
+        return { success: false, error: 'CodeCraft API key not configured', failureKind: 'refused' }
     }
 
     try {
@@ -290,12 +292,12 @@ export async function fulfillOrder(
         const sizeMatch = dataSize.match(/[\d.]+/)
         if (!sizeMatch) {
             console.log(`[CodeCraft] Skip: Could not extract numeric volume from "${dataSize}"`)
-            return { success: false, error: `Invalid data size format: ${dataSize}` }
+            return { success: false, error: `Invalid data size format: ${dataSize}`, failureKind: 'refused' }
         }
 
         const gigVolume = Number(sizeMatch[0])
         if (isNaN(gigVolume) || gigVolume <= 0) {
-            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}` }
+            return { success: false, error: `Invalid GB volume parsed from: ${dataSize}`, failureKind: 'refused' }
         }
 
         // ── Strict Routing ──────────────────────────────────────────────────
@@ -312,7 +314,7 @@ export async function fulfillOrder(
         if (!matchedBundle) {
             const available = packageList.map(b => `${b.gig}GB`).join(', ') || 'none'
             console.log(`[CodeCraft] Skip: No ${packageType} ${gigVolume}GB package for ${codecraftNetwork}. Available: ${available}`)
-            return { success: false, error: `No ${packageType} package found for ${gigVolume}GB on ${codecraftNetwork}` }
+            return { success: false, error: `No ${packageType} package found for ${gigVolume}GB on ${codecraftNetwork}`, failureKind: 'refused' }
         }
 
         // ── Phone Normalization ─────────────────────────────────────────────
@@ -358,7 +360,7 @@ export async function fulfillOrder(
                 // Rate limiting — do not retry, return so caller can queue
                 if (response.status === 429) {
                     console.warn(`[CodeCraft] Rate limited (HTTP 429). Order ${orderId} kept pending.`)
-                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true }
+                    return { success: false, error: 'Supplier Rate Limited (429)', isRateLimited: true, failureKind: lastError ? 'unknown' : 'refused' }
                 }
 
                 break // Successful HTTP connection — handle response outside loop
@@ -381,14 +383,14 @@ export async function fulfillOrder(
         if (!response) {
             console.error(`[CodeCraft] All ${maxAttempts} fetch attempts failed for order ${orderId}.`)
             recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to CodeCraft' }
+            return { success: false, error: lastError?.message || 'Persistent network error connecting to CodeCraft', failureKind: 'unknown' }
         }
 
         // ── Attempt JSON Parse ──────────────────────────────────────────────
         const data = await parseJsonSafe(response, '[CodeCraft]')
         if (!data) {
             recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})` }
+            return { success: false, error: `Supplier returned unexpected response format (HTTP ${response.status})`, failureKind: 'unknown' }
         }
         console.log(`[CodeCraft] API response received`, { status: response.status, ok: response.ok })
 
@@ -439,6 +441,7 @@ export async function fulfillOrder(
                 success: false,
                 error: `[${reasonCode}] CodeCraft's upstream ${codecraftNetwork} provider rejected the order (upstream HTTP ${data.http_code ?? 'n/a'}): ${detail}. This is a supplier-side outage — our API key is fine and no order was created.`,
                 apiResponse: sanitizeForLog(data),
+                failureKind: lastError ? 'unknown' : 'refused',
             }
         }
 
@@ -451,16 +454,25 @@ export async function fulfillOrder(
         if (response.status >= 500 || INFRA_FAILURE_CODES.includes(Number(reasonCode))) {
             recordFailure()
         }
+        // Codes that mean CodeCraft turned the order away without creating it. 409
+        // (duplicate), 500 and 502 are left 'unknown': each can follow an order that
+        // did go through, so moving to another supplier could deliver twice.
+        const REFUSAL_CODES = [100, 101, 102, 103, 402, 422, 503, 555]
+        // ...and only when no earlier attempt in this call errored mid-flight, since
+        // there is no idempotency key to stop that one having landed.
+        const failureKind: SupplierFailureKind =
+            response.status < 500 && !lastError && REFUSAL_CODES.includes(Number(reasonCode)) ? 'refused' : 'unknown'
         return {
             success: false,
             error: `[${reasonCode}] ${reasonMsg}`,
             apiResponse: sanitizeForLog(data),
+            failureKind,
         }
 
     } catch (error: any) {
         recordFailure()
         console.error(`[CodeCraft] Exception during fulfillOrder for ${orderId}:`, error.message)
-        return { success: false, error: error.message || 'Unexpected exception' }
+        return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
     }
 }
 

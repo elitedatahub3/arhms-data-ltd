@@ -59,8 +59,11 @@ export async function GET(request: NextRequest) {
                     ),
                     mtn_fulfillment_tracking (
                         status,
-                        api_response,
-                        retry_count
+                        retry_count,
+                        api_note:api_response->>note,
+                        api_fallback:api_response->>fallback,
+                        api_data_txid:api_response->data->>transaction_id,
+                        api_txid:api_response->>transactionId
                     )
                 `, { count: 'exact' })
 
@@ -124,9 +127,15 @@ export async function GET(request: NextRequest) {
                 : []
 
             // Map tracking info to include extracted transaction_id
+            // Only these paths of api_response are pulled (see the select above): the
+            // whole supplier payload, across up to 5000 orders per page walk, was a
+            // large share of the Supabase egress quota. Rebuilt to the old shape so
+            // the page reads it unchanged.
             const mappedTracking = tracking.map((t: any) => ({
-                ...t,
-                transaction_id: t.api_response?.data?.transaction_id || t.api_response?.transactionId || null
+                status: t.status,
+                retry_count: t.retry_count,
+                api_response: { note: t.api_note ?? undefined, fallback: t.api_fallback ?? undefined },
+                transaction_id: t.api_data_txid || t.api_txid || null
             }))
 
             const isShopOrder = order.shop_order_id && order.shop_orders

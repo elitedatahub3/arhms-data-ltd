@@ -145,7 +145,7 @@ export function ShopDashboardSection({
             )}
 
             {/* Quick Share Widget for Easy Promotion */}
-            {shopSlug && <ShopQuickShare shopSlug={shopSlug} />}
+            {shopSlug && <ShopQuickShare shopSlug={shopSlug} shopName={shopName} variant="compact" />}
 
             {/* Profit Wallet Action Center */}
             <ShopWalletWidget wallet={wallet} />

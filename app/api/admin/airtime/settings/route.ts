@@ -12,6 +12,10 @@ const AIRTIME_SETTING_KEYS = [
     'airtime_fee_telecel_agent',
     'airtime_fee_at_customer',
     'airtime_fee_at_agent',
+    // Developer API fee, every API caller. Blank = role fee (lib/api-pricing.ts).
+    'airtime_fee_mtn_api',
+    'airtime_fee_telecel_api',
+    'airtime_fee_at_api',
     'airtime_min_amount',
     'airtime_max_amount',
     'airtime_enabled_mtn',

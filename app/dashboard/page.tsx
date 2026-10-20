@@ -22,7 +22,6 @@ import {
     Phone,
     Zap,
     Receipt,
-    Gift,
 } from 'lucide-react'
 import { RoleGreetingBox } from '@/components/dashboard/RoleGreetingBox'
 import { PromoHeroCarousel } from '@/components/dashboard/PromoHeroCarousel'
@@ -31,6 +30,7 @@ import { BusinessPerformanceWidget } from '@/components/dashboard/BusinessPerfor
 import { ShopDashboardSection } from '@/components/dashboard/ShopDashboardSection'
 import { SubAgentHelpCard } from '@/components/dashboard/SubAgentHelpCard'
 import { TodaysOrdersSummary } from '@/components/dashboard/TodaysOrdersSummary'
+import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
 import { DealerWelcomeModal } from '@/components/dashboard/DealerWelcomeModal'
 import { DealerExpiryBanner } from '@/components/dashboard/DealerExpiryBanner'
 
@@ -287,6 +287,9 @@ export default function DashboardPage() {
             {/* Dynamic Role Greeting Box */}
             <RoleGreetingBox stats={stats!} />
 
+            {/* Live delivery speed per network */}
+            <DeliveryStatusCard className="mb-2" />
+
             {/* Premium Wallet & Business Card */}
             <div className="grid lg:grid-cols-3 gap-6">
                 <Card id="wallet-card" className="lg:col-span-2 overflow-hidden border border-border/70 shadow-sm bg-gradient-to-br from-primary to-blue-700 dark:to-blue-800 group">
@@ -381,7 +384,6 @@ export default function DashboardPage() {
                                 { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
                                 { href: '/dashboard/data-packages', label: 'Buy Data Bundles', icon: Package },
                                 { href: '/dashboard/wallet', label: 'Wallet History', icon: Wallet },
-                                { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                                 { href: '/dashboard/complaints', label: 'Help & Support', icon: AlertCircle },
                                 { href: isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop', label: 'Store Settings', icon: Store },
                             ].map((link, i) => (
