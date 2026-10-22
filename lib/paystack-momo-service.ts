@@ -502,6 +502,14 @@ export async function verifyTransaction(reference: string): Promise<PaystackVeri
                     ? 'failed'
                     : 'pending'
 
+        // About half of MTN approvals sit 'pending' here until Paystack's own re-query
+        // at ~+220s or ~+601s. Ask the Charge API's "check pending charge" too, in case
+        // it learns sooner. It may only UPGRADE to paid — never mark anything failed.
+        if (outcome === 'pending') {
+            const pending = await checkPendingCharge(reference)
+            if (pending) return pending
+        }
+
         return {
             outcome,
             amountPesewas: typeof data.amount === 'number' ? data.amount : null,
@@ -517,6 +525,35 @@ export async function verifyTransaction(reference: string): Promise<PaystackVeri
             message: describePaystackNetworkFailure(err, 'verify'),
             raw: null,
         }
+    }
+}
+
+/**
+ * GET /charge/:reference ("check pending charge"). Returns a paid result when
+ * Paystack reports success there, otherwise null so the caller keeps its own
+ * verdict. Any error is swallowed for the same reason: this is a second opinion.
+ */
+async function checkPendingCharge(reference: string): Promise<PaystackVerifyResult | null> {
+    try {
+        const res = await fetch(`${PAYSTACK_BASE_URL}/charge/${encodeURIComponent(reference)}`, {
+            method: 'GET',
+            headers: authHeaders(),
+            signal: AbortSignal.timeout(5_000),
+        })
+        const json: any = await res.json().catch(() => null)
+        const data = json?.data || {}
+        if (json?.status !== true || mapChargeStatus(data.status) !== 'paid') return null
+
+        console.log('[PaystackMomo] check-pending-charge reported success before verify did:', reference)
+        return {
+            outcome: 'paid',
+            amountPesewas: typeof data.amount === 'number' ? data.amount : null,
+            rawStatus: String(data.status),
+            message: data.gateway_response ? String(data.gateway_response) : 'Confirmed by check pending charge',
+            raw: json,
+        }
+    } catch {
+        return null
     }
 }
 
