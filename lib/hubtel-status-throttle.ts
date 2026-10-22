@@ -156,6 +156,11 @@ export async function claimHubtelStatusCheck(
                 },
             })
             .eq('id', payment.id)
+            // `meta` was read before this call. If another caller settled the payment
+            // since, writing it back would wipe what settlement added (a direct-pay
+            // order's order_refs, which the polling page waits on). Settlement flips
+            // status before writing metadata, so this guard closes that window.
+            .eq('status', 'pending')
     } catch (err: any) {
         // Losing the stamp costs quota accuracy; refusing the check costs a customer
         // their money. The interval and the caller's own limits still bound the

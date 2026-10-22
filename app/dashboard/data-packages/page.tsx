@@ -181,6 +181,28 @@ export default function DataPackagesPage() {
     // Direct payment flow state
     const [pollingRef, setPollingRef] = useState<string | null>(null)
     const [pollingKind, setPollingKind] = useState<'single' | 'bulk'>('single')
+    const [slowConfirm, setSlowConfirm] = useState(false)
+
+    // The customer may leave once they have approved: the reconciliation cron creates
+    // the order when Paystack confirms, whether or not this page is still open.
+    const stopWaitingForPayment = () => {
+        setPollingRef(null)
+        setIsPurchasing(false)
+        setIsSubmittingBulk(false)
+        toast.info('Your bundle will be sent automatically once the network confirms your payment. Check My Orders.')
+    }
+
+    const slowConfirmNotice = pollingRef && slowConfirm ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 text-xs text-amber-900 dark:text-amber-200 space-y-2">
+            <p>
+                Approved already? MTN can take up to 10 minutes to confirm a payment. Keep this
+                page open, or leave — your bundle will be sent automatically once it is confirmed.
+            </p>
+            <button type="button" className="underline font-semibold" onClick={stopWaitingForPayment}>
+                I&apos;ll check My Orders later
+            </button>
+        </div>
+    ) : null
     const [otpRequired, setOtpRequired] = useState(false)
     // Paystack's own instruction for this charge. It differs per number — a one-time
     // password on some, a PIN prompt on others — so fixed copy misinforms whichever
@@ -262,19 +284,26 @@ export default function DataPackagesPage() {
     useEffect(() => {
         if (!pollingRef) return
 
-        let elapsed = 0
+        setSlowConfirm(false)
+        const startedAt = Date.now()
         const POLL_MS = 5000
-        const TIMEOUT_MS = 180000 // 3 minutes
+        // Paystack only learns about many MTN approvals on its own re-query, which
+        // lands ~3.7 or ~10 minutes after the prompt (paid_at clusters at +220s and
+        // +601s). The old 3-minute window gave up just before either, leaving a
+        // customer who had approved staring at "Waiting for approval".
+        const TIMEOUT_MS = 15 * 60 * 1000
+        const SLOW_NOTICE_MS = 45 * 1000
 
         const interval = setInterval(async () => {
-            elapsed += POLL_MS
+            const elapsed = Date.now() - startedAt
+            if (elapsed >= SLOW_NOTICE_MS) setSlowConfirm(true)
 
             if (elapsed >= TIMEOUT_MS) {
                 clearInterval(interval)
                 setPollingRef(null)
                 setIsPurchasing(false)
                 setIsSubmittingBulk(false)
-                toast.error('Still waiting on payment confirmation. Check My Orders in a moment.')
+                toast.info('Still confirming with the network. If you approved the payment, your bundle will be sent automatically — check My Orders.')
                 return
             }
 
@@ -1571,6 +1600,7 @@ export default function DataPackagesPage() {
                                                         )}
                                                     </Button>
                                                 )}
+                                                {slowConfirmNotice}
                                             </div>
                                         </div>
                                     )}
@@ -2059,6 +2089,8 @@ export default function DataPackagesPage() {
                                     </>
                                 )}
                             </button>
+
+                            {slowConfirmNotice}
 
                             {paymentMethod === 'direct' ? (
                                 <p className="text-xs text-center text-muted-foreground">

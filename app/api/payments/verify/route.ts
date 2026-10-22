@@ -116,10 +116,14 @@ export async function GET(request: NextRequest) {
             // after ~2.5 min, handing late approvers to the 5-minute sweep. Paystack's
             // verify endpoint has no Hubtel-style quota, so check early and cover the
             // wallet page's full 3-minute polling window (10s + 25 × 6s).
+            //
+            // Then every 15s out to ~15 minutes: Paystack only learns of many MTN
+            // approvals on its own re-query at ~+220s or ~+601s, and the direct-pay
+            // pages now keep polling that long so the customer sees it land.
             const decision = await claimHubtelStatusCheck(supabase, paymentRecord as any, {
                 graceMs: 10_000,
-                interval: 6_000,
-                maxChecks: 25,
+                interval: (ageMs) => (ageMs < 180_000 ? 6_000 : 15_000),
+                maxChecks: 80,
                 keys: PAYSTACK_MOMO_CLIENT_THROTTLE_KEYS,
             })
 
