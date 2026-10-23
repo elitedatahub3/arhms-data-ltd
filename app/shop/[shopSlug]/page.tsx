@@ -28,7 +28,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         .eq('shop_slug', shopSlug)
         .eq('approval_status', 'approved')
         .eq('is_active', true)
-        .single() as any)
+        .maybeSingle() as any)
 
     if (!shop) {
         return { title: 'Shop Not Found' }
@@ -49,6 +49,112 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     }
 }
 
+async function getShopProfile(supabaseAdmin: any, shopSlug: string) {
+    const slug = (shopSlug || '').trim()
+    if (!slug) return null
+
+    // Attempt 1: Full modern schema including utilities, ussd, airtime fees
+    const fullRes = await (supabaseAdmin
+        .from('shop_profiles')
+        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at, ussd_code, ussd_status, utilities_enabled')
+        .eq('shop_slug', slug)
+        .maybeSingle() as any)
+
+    if (fullRes?.data) {
+        return {
+            ...fullRes.data,
+            utilities_enabled: fullRes.data.utilities_enabled === true,
+            airtime_fee_mtn: fullRes.data.airtime_fee_mtn != null ? Number(fullRes.data.airtime_fee_mtn) : 0,
+            airtime_fee_telecel: fullRes.data.airtime_fee_telecel != null ? Number(fullRes.data.airtime_fee_telecel) : 0,
+            airtime_fee_at: fullRes.data.airtime_fee_at != null ? Number(fullRes.data.airtime_fee_at) : 0,
+        }
+    }
+
+    // If there is no DB error, the shop row genuinely does not exist
+    if (!fullRes?.error) {
+        return null
+    }
+
+    console.warn(`[ShopPage] Full schema query failed for slug "${slug}": ${fullRes.error.message}. Retrying without utilities_enabled...`)
+
+    // Attempt 2: Without utilities_enabled
+    const noUtilsRes = await (supabaseAdmin
+        .from('shop_profiles')
+        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at, ussd_code, ussd_status')
+        .eq('shop_slug', slug)
+        .maybeSingle() as any)
+
+    if (noUtilsRes?.data) {
+        return {
+            ...noUtilsRes.data,
+            utilities_enabled: false,
+            airtime_fee_mtn: noUtilsRes.data.airtime_fee_mtn != null ? Number(noUtilsRes.data.airtime_fee_mtn) : 0,
+            airtime_fee_telecel: noUtilsRes.data.airtime_fee_telecel != null ? Number(noUtilsRes.data.airtime_fee_telecel) : 0,
+            airtime_fee_at: noUtilsRes.data.airtime_fee_at != null ? Number(noUtilsRes.data.airtime_fee_at) : 0,
+        }
+    }
+
+    if (!noUtilsRes?.error) {
+        return null
+    }
+
+    console.warn(`[ShopPage] Secondary query failed for slug "${slug}": ${noUtilsRes.error.message}. Retrying without USSD columns...`)
+
+    // Attempt 3: Without USSD columns
+    const noUssdRes = await (supabaseAdmin
+        .from('shop_profiles')
+        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at')
+        .eq('shop_slug', slug)
+        .maybeSingle() as any)
+
+    if (noUssdRes?.data) {
+        return {
+            ...noUssdRes.data,
+            utilities_enabled: false,
+            ussd_code: null,
+            ussd_status: 'inactive',
+            airtime_fee_mtn: noUssdRes.data.airtime_fee_mtn != null ? Number(noUssdRes.data.airtime_fee_mtn) : 0,
+            airtime_fee_telecel: noUssdRes.data.airtime_fee_telecel != null ? Number(noUssdRes.data.airtime_fee_telecel) : 0,
+            airtime_fee_at: noUssdRes.data.airtime_fee_at != null ? Number(noUssdRes.data.airtime_fee_at) : 0,
+        }
+    }
+
+    if (!noUssdRes?.error) {
+        return null
+    }
+
+    console.warn(`[ShopPage] Fallback query failed for slug "${slug}": ${noUssdRes.error.message}. Falling back to baseline columns...`)
+
+    // Attempt 4: Core baseline columns guaranteed to exist
+    const baselineRes = await (supabaseAdmin
+        .from('shop_profiles')
+        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, brand_color, approval_status, pricing_status, is_active, owner_id')
+        .eq('shop_slug', slug)
+        .maybeSingle() as any)
+
+    if (baselineRes?.data) {
+        return {
+            ...baselineRes.data,
+            banner_url: null,
+            community_link: null,
+            divider_style: 'asymmetric-curve',
+            brand_accent: '#10b981',
+            airtime_fee_mtn: 0,
+            airtime_fee_telecel: 0,
+            airtime_fee_at: 0,
+            ussd_code: null,
+            ussd_status: 'inactive',
+            utilities_enabled: false,
+        }
+    }
+
+    if (baselineRes?.error) {
+        console.error(`[ShopPage] Baseline query failed for slug "${slug}":`, baselineRes.error)
+    }
+
+    return null
+}
+
 export default async function ShopPage({ params }: Props) {
     const { shopSlug } = await params
 
@@ -58,11 +164,7 @@ export default async function ShopPage({ params }: Props) {
     const supabase = await createRouteHandlerClient()
 
     // Fetch shop using service-role so unauthenticated visitors can load the page
-    const { data: shop } = await (supabaseAdmin
-        .from('shop_profiles')
-        .select('id, shop_name, shop_slug, description, owner_phone, owner_email, whatsapp_number, logo_url, banner_url, community_link, divider_style, brand_color, brand_accent, approval_status, pricing_status, is_active, owner_id, airtime_fee_mtn, airtime_fee_telecel, airtime_fee_at, ussd_code, ussd_status, utilities_enabled')
-        .eq('shop_slug', shopSlug)
-        .single() as any)
+    const shop = await getShopProfile(supabaseAdmin, shopSlug)
 
     // Shop doesn't exist or is not profile-approved → 404
     if (!shop || shop.approval_status !== 'approved' || !shop.is_active) {

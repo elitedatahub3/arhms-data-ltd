@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { fetchRecentOrderStatuses } from '@/lib/hendylinks-service'
-import { areCronJobsEnabled, cronDisabledResponse } from '@/lib/cron-control'
+import { areCronJobsEnabled, cronDisabledResponse, isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 
 // HendyLinks reconciliation cron (driven by cron-job.org, every 5 min) — the
 // SAFETY NET, not the primary channel. app/api/webhooks/hendylinks is what
@@ -46,9 +46,8 @@ export async function GET(request: NextRequest) {
     const startedAt = Date.now()
     const outOfTime = () => Date.now() - startedAt > RUN_BUDGET_MS
 
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     const supabase = createServerClient()

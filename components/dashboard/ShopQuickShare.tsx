@@ -24,6 +24,8 @@ const PRINT_QR_SIZE = 1024
 
 export function ShopQuickShare({ shopSlug, shopName, variant = 'full', smsHref = '/dashboard/shop/sms' }: ShopQuickShareProps) {
     const [copied, setCopied] = useState(false)
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io')
+    const shopUrl = `${baseOrigin}/shop/${shopSlug}`
     const [expanded, setExpanded] = useState(variant === 'full')
     const [canNativeShare, setCanNativeShare] = useState(false)
     const printCanvasRef = useRef<HTMLCanvasElement>(null)

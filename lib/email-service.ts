@@ -22,6 +22,8 @@ const DEFAULT_SENDER = {
     email: process.env.BREVO_SENDER_EMAIL || 'ARHMSdatalimited@gmail.com'
 }
 
+const DEFAULT_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io'
+
 interface SendEmailOptions {
     to: string
     toName?: string
@@ -958,7 +960,7 @@ export async function sendPermanentAgentUpgradeSuccessEmail(
     email: string,
     firstName: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Permanent Agent Unlocked! 💎</h1>
         <p class="subtitle">Lifetime access to premium data rates</p>
@@ -1313,7 +1315,7 @@ export async function sendShopPricingApprovedEmail(
     firstName: string,
     shopName: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Pricing Approved! ✅</h1>
         <p class="subtitle">Your shop prices are now live</p>
@@ -1336,7 +1338,7 @@ export async function sendShopPricingRejectedEmail(
     shopName: string,
     reason: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Pricing Needs Revision ⚠️</h1>
         <p class="subtitle">Your pricing submission was returned</p>
@@ -1357,7 +1359,7 @@ export async function sendShopProfileApprovedEmail(
     firstName: string,
     shopName: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Your Shop is Approved! 🎉</h1>
         <p class="subtitle">Welcome to the ARHMS Shop Network</p>
@@ -1383,7 +1385,7 @@ export async function sendShopProfileRejectedEmail(
     shopName: string,
     reason: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Shop Application — Action Required ❌</h1>
         <p class="subtitle">Your shop application needs attention</p>
@@ -1407,7 +1409,7 @@ export async function sendShopWithdrawalProcessedEmail(
     momoNumber: string,
     network: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Payout Successful! 💰</h1>
         <p class="subtitle">Your funds have been sent</p>
@@ -1440,7 +1442,7 @@ export async function sendShopWithdrawalRejectedEmail(
     amount: number,
     adminNote: string
 ): Promise<EmailResult> {
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Withdrawal Request — Action Required ⚠️</h1>
         <p class="subtitle">Your withdrawal request was not approved</p>
@@ -1468,7 +1470,7 @@ export async function sendAdminShopPricingSubmissionAlert(details: {
     shopName: string; ownerName: string; ownerEmail: string; shopId: string; date: string
 }): Promise<EmailResult> {
     const adminEmail = process.env.ADMIN_EMAIL || 'ARHMSdatalimited@gmail.com'
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">New Pricing Submission 🔔</h1>
         <p class="subtitle">A shop owner has submitted pricing for review</p>
@@ -1491,7 +1493,7 @@ export async function sendAdminNewShopRegistrationAlert(details: {
     shopName: string; ownerName: string; ownerEmail: string; date: string
 }): Promise<EmailResult> {
     const adminEmail = process.env.ADMIN_EMAIL || 'ARHMSdatalimited@gmail.com'
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">New Shop Registration 🏪</h1>
         <p class="subtitle">A new shop is awaiting your approval</p>
@@ -1525,7 +1527,7 @@ export async function sendAdminShopWithdrawalRequestAlert(details: {
     isResubmission?: boolean
 }): Promise<EmailResult> {
     const adminEmail = process.env.ADMIN_EMAIL || 'ARHMSdatalimited@gmail.com'
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const badge = details.isResubmission
         ? `<div style="text-align:center;margin:20px 0;"><span style="background:#7c3aed;color:#fff;padding:6px 16px;border-radius:50px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">♻️ Resubmission</span></div>`
         : ''
@@ -1573,7 +1575,7 @@ export async function sendAdminCommissionWithdrawalAlert(details: {
     requestedAt: string
 }, toEmail?: string): Promise<EmailResult> {
     const adminEmail = toEmail || process.env.ADMIN_EMAIL || 'ARHMSdatalimited@gmail.com'
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">Commission Payout Requested 💸</h1>
         <p class="subtitle">An API partner has asked to withdraw their commission earnings</p>
@@ -1606,7 +1608,7 @@ export async function sendAdminNewAfaApplicationAlert(details: {
     region: string
 }, toEmail?: string): Promise<EmailResult> {
     const adminEmail = toEmail || process.env.ADMIN_EMAIL || 'ARHMSdatalimited@gmail.com'
-    const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.ARHMSgh.com'
+    const siteUrl = DEFAULT_SITE_URL
     const content = `
         <h1 class="greeting">New AFA Membership Application 🔔</h1>
         <p class="subtitle">A new application has been submitted for review</p>
@@ -1684,7 +1686,7 @@ export async function sendAdminAirtimeOrderEmail(details: {
             return { success: false, error: 'No recipients found' }
         }
 
-        const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ARHMSgh.com'
+        const siteUrl = DEFAULT_SITE_URL
         const isMashup = details.orderType === 'mashup'
         const themeColor = isMashup ? '#f59e0b' : '#25D366'
         const headerIcon = isMashup ? '🎯' : '📱'

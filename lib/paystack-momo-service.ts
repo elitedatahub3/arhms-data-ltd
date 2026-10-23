@@ -192,7 +192,7 @@ function sanitizeMetadata(value: unknown, depth = 0): unknown {
  */
 export function ussdCustomerEmail(msisdn: string): string {
     const digits = String(msisdn || '').replace(/\D/g, '') || 'unknown'
-    return `${digits}@ussd.arhmsgh.com`
+    return `${digits}@ussd.dataking.qzz.io`
 }
 
 /**

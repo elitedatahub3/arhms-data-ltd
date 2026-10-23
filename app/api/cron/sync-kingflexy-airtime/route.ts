@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { getAirtimeOrderStatus } from '@/lib/airtime-provider'
 import { finalizeAirtimeOrder } from '@/lib/airtime-order-completion'
@@ -39,9 +40,8 @@ const RESCUE_WINDOW_HOURS = 24
 const NEVER_SENT_MARKER = '[NEVER-SENT]'
 
 export async function GET(request: NextRequest) {
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     const supabase = createServerClient() as any
@@ -216,3 +216,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: String(err?.message || err) }, { status: 500 })
     }
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+
