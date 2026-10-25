@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import StorefrontUtilities from '@/components/shop/storefront-utilities'
+import StorefrontMtnCheck from '@/components/shop/storefront-mtn-check'
 import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
 import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
@@ -2162,6 +2163,11 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                             )
                         })}
                     </div>
+                )}
+
+                {/* Check the beneficiary's MTN registration before paying */}
+                {activeTab === 'data' && activeNetwork.toUpperCase().includes('MTN') && (
+                    <StorefrontMtnCheck shopSlug={shop.shop_slug} className="mb-6" />
                 )}
 
                 {/* Search Bar matching screenshot */}
