@@ -17,6 +17,8 @@ export interface PageAccessSettings {
      * hook is the single settings fetch every nav already makes.
      */
     ussd: boolean
+    /** Standard Bundles master switch + its page-access toggle, combined server-side. */
+    standardBundles: boolean
 }
 
 const PAGE_ROUTE_MAP: Record<string, keyof PageAccessSettings> = {
@@ -32,6 +34,7 @@ const PAGE_ROUTE_MAP: Record<string, keyof PageAccessSettings> = {
     '/dashboard/sub/ussd': 'ussd',
     '/dashboard/airtime': 'airtime',
     '/dashboard/utilities': 'utilities',
+    '/dashboard/standard-bundles': 'standardBundles',
 }
 
 function sameSettings(a: PageAccessSettings, b: PageAccessSettings): boolean {
@@ -54,6 +57,8 @@ const DEFAULT_PAGE_ACCESS: PageAccessSettings = {
     // fetch does not blank the nav, but a USSD link shown for a second and
     // then withdrawn is worse than one that never appears.
     ussd: false,
+    // Closed by default for the same reason as USSD.
+    standardBundles: false,
 }
 
 /**
@@ -88,6 +93,7 @@ function loadPageAccess(): Promise<PageAccessSettings | null> {
                 airtime: settingsMap.page_access_airtime !== 'false',
                 utilities: settingsMap.page_access_utilities !== 'false',
                 ussd: settingsMap.ussd_enabled === 'true',
+                standardBundles: settingsMap.standard_bundles_enabled === 'true',
             }
             cached = { value, at: Date.now() }
             return value
