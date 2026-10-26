@@ -58,9 +58,17 @@ export async function POST(request: NextRequest) {
     const product = String(event?.product || '')
     const reference = String(event?.reference || '')
 
-    // Data and airtime orders are reconciled by their own paths; only bill payments
-    // are fulfilled through KingFlexy today. Acknowledge the rest so they are not
-    // retried at us forever.
+    // Standard Bundles: their `reference` is our own reference_code.
+    if (product === 'bundles') {
+        if (!reference) return NextResponse.json({ error: 'Missing reference' }, { status: 400 })
+        const { settleBundleWebhook } = await import('@/lib/bundle-settlement')
+        const outcome = await settleBundleWebhook(event)
+        console.log(`[KingFlexyWebhook] bundles ${reference}: ${outcome}`)
+        return NextResponse.json({ received: true, outcome })
+    }
+
+    // Data and airtime orders are reconciled by their own paths. Acknowledge the
+    // rest so they are not retried at us forever.
     if (product !== 'utilities') {
         console.log(`[KingFlexyWebhook] Ignoring product '${product}' for ${reference}`)
         return NextResponse.json({ received: true, ignored: product })

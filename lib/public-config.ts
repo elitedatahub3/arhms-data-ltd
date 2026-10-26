@@ -33,6 +33,8 @@ export interface PublicConfigData {
     landingRcOnlyEnabled: boolean
     /** USSD master switch, so navs can drop their short-code links. */
     ussdEnabled: boolean
+    /** Standard Bundles master switch AND its page-access toggle, read server-side. */
+    standardBundlesEnabled: boolean
 }
 
 const PUBLIC_SETTING_KEYS = [
@@ -126,6 +128,7 @@ const fallbackConfig: PublicConfigData = {
     // Matches isUssdEnabled(): when the config read fails we assume off, so a
     // dead lookup cannot advertise a service that may not be answering.
     ussdEnabled: false,
+    standardBundlesEnabled: false,
 }
 
 let publicConfigClient: SupabaseClient | null = null
@@ -217,6 +220,30 @@ async function readUssdSwitchValue(): Promise<string | null | undefined> {
     }
 }
 
+/**
+ * Whether the Standard Bundles link should show. Read straight from admin_settings
+ * for the same reason as the USSD switch above: the public view is an allowlist that
+ * production has not always matched, and a key missing from it would hide the link
+ * for everyone. Fails CLOSED — a nav link to a page that answers "not available" is
+ * worse than no link.
+ */
+async function readStandardBundlesNav(): Promise<boolean> {
+    const client = getUssdSwitchClient()
+    if (!client) return false
+    try {
+        const { data, error } = await client
+            .from('admin_settings')
+            .select('key, value')
+            .in('key', ['bundles_enabled', 'page_access_standard_bundles'])
+        if (error) throw error
+        const map = mapRows((data || []) as Array<{ key: string; value: string }>)
+        return map.bundles_enabled === 'true' && map.page_access_standard_bundles !== 'false'
+    } catch {
+        console.error('[PublicConfig] Unable to read the Standard Bundles switch; hiding the link')
+        return false
+    }
+}
+
 function mapRows(rows: Array<{ key: string; value: string }>) {
     return rows.reduce<Record<string, string>>((acc, row) => {
         acc[row.key] = row.value
@@ -232,7 +259,7 @@ function parsePrice(value: string | undefined, fallback: number) {
 async function fetchPublicConfig(): Promise<PublicConfigData> {
     try {
         const supabase = getPublicConfigClient()
-        const [{ data: settingsRows, error: settingsError }, { data: announcementRows, error: announcementsError }, ussdSwitchValue] = await Promise.all([
+        const [{ data: settingsRows, error: settingsError }, { data: announcementRows, error: announcementsError }, ussdSwitchValue, standardBundlesEnabled] = await Promise.all([
             supabase
                 .from('public_admin_settings')
                 .select('key, value')
@@ -245,6 +272,7 @@ async function fetchPublicConfig(): Promise<PublicConfigData> {
                 .order('created_at', { ascending: false })
                 .limit(20),
             readUssdSwitchValue(),
+            readStandardBundlesNav(),
         ])
 
         if (settingsError) throw settingsError
@@ -303,6 +331,7 @@ async function fetchPublicConfig(): Promise<PublicConfigData> {
             })),
             landingRcOnlyEnabled: settings.landing_rc_only_enabled === 'true',
             ussdEnabled,
+            standardBundlesEnabled,
         }
     } catch {
         console.error('[PublicConfig] Unable to fetch public config; using fallback values')
@@ -317,7 +346,8 @@ export const getCachedPublicConfig = unstable_cache(
     // v4: ussdEnabled now comes from admin_settings rather than the public view,
     // where it read false for every caller. Bumped so the USSD links come back on
     // deploy instead of waiting out a cached 'off'.
-    ['public-config-v4'],
+    // v5: added standardBundlesEnabled.
+    ['public-config-v5'],
     {
         revalidate: PUBLIC_CONFIG_REVALIDATE_SECONDS,
         tags: [PUBLIC_CONFIG_CACHE_TAG],
