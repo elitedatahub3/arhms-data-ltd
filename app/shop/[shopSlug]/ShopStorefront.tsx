@@ -248,6 +248,8 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     // either enters a different number or leaves. See /api/shop/initialize for why the
     // storefront refuses where the dashboard offers to hold the order.
     const [registrationPrompt, setRegistrationPrompt] = useState<{ numbers: string[] } | null>(null)
+    // Gate OFF: same check, but only a "Heads up" the guest can proceed past.
+    const [unregisteredWarning, setUnregisteredWarning] = useState(false)
     /** Focused when the guest picks "Try another number", so the fix is one tap away. */
     const beneficiaryRef = useRef<HTMLInputElement>(null)
     const [otpCode, setOtpCode] = useState('')
@@ -708,7 +710,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             : 'Too many payment attempts right now. Please wait a moment and try again.'
     }
 
-    const handleBuyData = async () => {
+    const handleBuyData = async (acknowledgeUnregistered = false) => {
         if (!selectedPackage) { toast.error('Select a package first'); return }
         if (!phone.trim()) { toast.error('Enter the beneficiary number'); return }
 
@@ -743,9 +745,18 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     ...(needsMomoDetails ? { payerPhone: cleanPayPhone, payerNetwork: payNetwork } : {}),
                     guestEmail: email.trim() || undefined,
                     provider: webPaymentProvider,
+                    ...(acknowledgeUnregistered ? { acknowledgeUnregistered: true } : {}),
                 }),
             })
             const data = await res.json()
+
+            // Storefront gate is OFF: the number isn't registered, but the guest may
+            // still go ahead. Nothing has been charged yet.
+            if (res.status === 409 && data?.code === 'MTN_UNREGISTERED_WARNING') {
+                setLoading(false)
+                setUnregisteredWarning(true)
+                return
+            }
 
             // The beneficiary's MTN number isn't registered. Caught before the payment
             // prompt was sent, so the guest has not been charged anything.
@@ -2275,9 +2286,9 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     <div
                         className={cn(
                             "fixed inset-0 z-[70] flex items-end justify-center",
-                            (registrationPrompt || otpRequired) && "hidden"
+                            (registrationPrompt || unregisteredWarning || otpRequired) && "hidden"
                         )}
-                        aria-hidden={!!registrationPrompt || otpRequired}
+                        aria-hidden={!!registrationPrompt || unregisteredWarning || otpRequired}
                     >
                         <div
                             className="absolute inset-0 bg-black/50 backdrop-blur-[2px] animate-in fade-in duration-200"
@@ -2821,6 +2832,34 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     beneficiaryRef.current?.focus()
                 }}
             />
+
+            {/* Beneficiary's MTN number is not registered, but the storefront gate is
+                OFF — warn, and let the guest choose. */}
+            <Dialog open={unregisteredWarning} onOpenChange={(o) => !o && setUnregisteredWarning(false)}>
+                <DialogContent className="w-[95%] max-w-sm rounded-2xl z-[110]">
+                    <DialogHeader>
+                        <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                            <AlertTriangle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                        </div>
+                        <DialogTitle className="text-center">Heads up</DialogTitle>
+                        <DialogDescription className="text-center">
+                            This number isn&apos;t registered with the network yet. Your order may be delayed,
+                            and in some cases could fail. You can still continue if you&apos;d like to try.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid grid-cols-2 gap-3 pt-2">
+                        <Button variant="outline" className="h-11 rounded-xl font-bold" onClick={() => setUnregisteredWarning(false)}>
+                            Cancel
+                        </Button>
+                        <Button
+                            className="h-11 rounded-xl font-bold bg-[#FFCC00] text-black hover:bg-[#FFCC00]/90"
+                            onClick={() => { setUnregisteredWarning(false); handleBuyData(true) }}
+                        >
+                            Proceed Anyway
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }
