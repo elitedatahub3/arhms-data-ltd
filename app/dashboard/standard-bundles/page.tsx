@@ -17,17 +17,17 @@ type NetworkId = 'MTN' | 'Telecel' | 'AT'
 const NETWORKS: { id: NetworkId; label: string; prefixes: string[]; card: string; band: string; chip: string; ring: string; badge: string }[] = [
     {
         id: 'MTN', label: 'MTN', prefixes: ['024', '025', '053', '054', '055', '059', '098'],
-        card: 'bg-[#FFC20E] text-black', band: 'bg-black/10 hover:bg-black/15 text-black', chip: 'bg-black/10 text-black',
+        card: 'bg-[#FFC20E] text-black', band: 'bg-black/10 group-hover:bg-black/15 text-black', chip: 'bg-black/10 text-black',
         ring: 'border-[#FFC20E] ring-2 ring-[#FFC20E]/40', badge: 'bg-[#FFC20E] text-black',
     },
     {
         id: 'Telecel', label: 'Telecel', prefixes: ['020', '050'],
-        card: 'bg-[#E3262F] text-white', band: 'bg-black/15 hover:bg-black/25 text-white', chip: 'bg-white/20 text-white',
+        card: 'bg-[#E3262F] text-white', band: 'bg-black/15 group-hover:bg-black/25 text-white', chip: 'bg-white/20 text-white',
         ring: 'border-[#E3262F] ring-2 ring-[#E3262F]/30', badge: 'bg-[#E3262F] text-white',
     },
     {
         id: 'AT', label: 'AirtelTigo', prefixes: ['026', '027', '028', '056', '057', '058'],
-        card: 'bg-[#2563EB] text-white', band: 'bg-black/15 hover:bg-black/25 text-white', chip: 'bg-white/20 text-white',
+        card: 'bg-[#2563EB] text-white', band: 'bg-black/15 group-hover:bg-black/25 text-white', chip: 'bg-white/20 text-white',
         ring: 'border-[#2563EB] ring-2 ring-[#2563EB]/30', badge: 'bg-[#2563EB] text-white',
     },
 ]
@@ -294,23 +294,26 @@ export default function StandardBundlesPage() {
 
                             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                                 {visibleBundles.map(b => (
-                                    <div key={b.key} className={cn('rounded-2xl overflow-hidden flex flex-col shadow-sm', theme.card)}>
-                                        <div className="flex items-center justify-between p-3">
+                                    <button
+                                        key={b.key}
+                                        type="button"
+                                        onClick={() => openBuy(b)}
+                                        aria-label={`Buy ${b.size} for ${ghs(b.price)}`}
+                                        className={cn('group rounded-2xl overflow-hidden flex flex-col text-left shadow-sm cursor-pointer transition-transform hover:-translate-y-0.5 hover:shadow-md active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2', theme.card)}
+                                    >
+                                        <div className="w-full flex items-center justify-between p-3">
                                             <NetworkMark id={network} className="w-7 h-7 ring-2 ring-white/40" />
                                             <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', theme.chip)}>{network}</span>
                                         </div>
-                                        <div className="flex-1 flex flex-col items-center justify-center text-center px-2 pb-3">
+                                        <div className="w-full flex-1 flex flex-col items-center justify-center text-center px-2 pb-3">
                                             <p className="text-xl sm:text-2xl font-black leading-tight">{b.size}</p>
                                             <p className="text-sm font-bold mt-1">{ghs(b.price)}</p>
                                             {b.validity && <p className="text-[11px] opacity-80 mt-0.5">{b.validity}</p>}
                                         </div>
-                                        <button
-                                            onClick={() => openBuy(b)}
-                                            className={cn('flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold transition-colors', theme.band)}
-                                        >
+                                        <span className={cn('w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold transition-colors', theme.band)}>
                                             <ShoppingCart className="w-4 h-4" /> Buy Now
-                                        </button>
-                                    </div>
+                                        </span>
+                                    </button>
                                 ))}
                             </div>
                             {!visibleBundles.length && <EmptyState icon={Wifi} title="No bundles in this group" text="Try another tab." />}
