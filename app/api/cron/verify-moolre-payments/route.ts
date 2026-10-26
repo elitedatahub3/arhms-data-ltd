@@ -90,6 +90,15 @@ export async function GET(request: NextRequest) {
                             } else {
                                 console.error(`[CronMoolre] ❌ Airtime order ${payment.reference} failed:`, airResult.error)
                             }
+                        } else if (payment.reference.startsWith('BUNPAY-')) {
+                            const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                            const bunResult = await processBundleDirectOrder(payment.reference)
+                            if (bunResult.success || bunResult.alreadyProcessed) {
+                                results.walletCredited++
+                                console.log(`[CronMoolre] Bundle order ${payment.reference} settled`)
+                            } else {
+                                console.error(`[CronMoolre] Bundle order ${payment.reference} failed:`, bunResult.error)
+                            }
                         } else if (isRetiredBoostReference(payment.reference)) {
                             // Confirmed paid, but the product is gone. Throwing leaves the row pending so it is reported every run until refunded.
                             reportRetiredBoostPayment('CronMoolre', payment.reference)

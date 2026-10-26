@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Wifi, Wallet, ShoppingCart, Loader2, History, RefreshCw, CheckCircle2, AlertTriangle, Clock, XCircle, RotateCcw } from 'lucide-react'
+import { Wifi, Wallet, ShoppingCart, Loader2, History, RefreshCw, CheckCircle2, AlertTriangle, Clock, XCircle, RotateCcw, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/contexts/auth-context'
 import { refreshDashboardSummary } from '@/hooks/use-dashboard-summary'
@@ -63,6 +63,13 @@ function newReference() {
     return `BNDL-${Date.now().toString(36).toUpperCase()}-${rand}`
 }
 
+interface DirectQuote { gateway: string; needsMomoDetails: boolean; price: number; fee: number; total: number }
+
+// MTN approvals are often confirmed by the gateway only at ~+220s or ~+601s, so a
+// shorter poll would give up on payments that are about to succeed.
+const DIRECT_POLL_MS = 5000
+const DIRECT_POLL_TIMEOUT_MS = 15 * 60 * 1000
+
 function NetworkMark({ id, className }: { id: NetworkId; className?: string }) {
     const n = NETWORKS.find(x => x.id === id)!
     return (
@@ -88,6 +95,22 @@ export default function StandardBundlesPage() {
     const [phone, setPhone] = useState('')
     const [submitting, setSubmitting] = useState(false)
     const referenceRef = useRef<string | null>(null)
+
+    // Direct Pay: the gateway takes the money, then lib/bundle-order-payments.ts
+    // creates the order. The wallet is never touched.
+    const [payMethod, setPayMethod] = useState<'wallet' | 'direct'>('wallet')
+    const [quote, setQuote] = useState<DirectQuote | null>(null)
+    const [quoteLoading, setQuoteLoading] = useState(false)
+    const [quoteError, setQuoteError] = useState<string | null>(null)
+    const [momoPhone, setMomoPhone] = useState('')
+    const [momoNetwork, setMomoNetwork] = useState<NetworkId | ''>('')
+    const [momoNetworkManual, setMomoNetworkManual] = useState(false)
+    const [directRef, setDirectRef] = useState<string | null>(null)
+    const [otpRequired, setOtpRequired] = useState(false)
+    const [otpCode, setOtpCode] = useState('')
+    const [otpMessage, setOtpMessage] = useState('')
+    const [pollingRef, setPollingRef] = useState<string | null>(null)
+    const [slowNotice, setSlowNotice] = useState(false)
 
     const [orders, setOrders] = useState<Order[]>([])
     const [ordersLoading, setOrdersLoading] = useState(false)
@@ -168,10 +191,215 @@ export default function StandardBundlesPage() {
     function openBuy(b: Bundle) {
         setSelected(b)
         referenceRef.current = newReference()
+        setOtpRequired(false)
+        setOtpCode('')
+        setDirectRef(null)
         if (!phone && dbUser?.phone_number && networkForPhone(dbUser.phone_number) === network) {
             setPhone(String(dbUser.phone_number).replace(/\D/g, '').replace(/^233/, '0'))
         }
     }
+
+    // ── Direct Pay ───────────────────────────────────────────────────────────
+    const momoDigits = momoPhone.replace(/\D/g, '')
+
+    // Prefill the paying number from the profile.
+    useEffect(() => {
+        if (dbUser?.phone_number && !momoPhone) setMomoPhone(String(dbUser.phone_number).replace(/\D/g, '').replace(/^233/, '0'))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dbUser?.phone_number])
+
+    // Follow the paying number's network until the buyer picks one themselves.
+    useEffect(() => {
+        if (momoNetworkManual) return
+        setMomoNetwork(networkForPhone(momoDigits) ?? '')
+    }, [momoDigits, momoNetworkManual])
+
+    // The fee comes from the server, so the figure shown is the figure charged.
+    useEffect(() => {
+        if (payMethod !== 'direct' || !selected || !phoneValid) {
+            setQuote(null)
+            setQuoteError(null)
+            return
+        }
+        let cancelled = false
+        setQuoteLoading(true)
+        setQuoteError(null)
+        const t = setTimeout(async () => {
+            try {
+                const res = await fetch('/api/bundles/gateway-init', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ network, bundleKey: selected.key, phone: phoneDigits, quote: true }),
+                })
+                const body = await res.json().catch(() => ({}))
+                if (cancelled) return
+                if (!res.ok || !body?.success) {
+                    setQuote(null)
+                    setQuoteError(body?.error || 'Could not price Direct Pay')
+                } else {
+                    setQuote(body)
+                }
+            } catch {
+                if (!cancelled) setQuoteError('Could not price Direct Pay')
+            } finally {
+                if (!cancelled) setQuoteLoading(false)
+            }
+        }, 300)
+        return () => { cancelled = true; clearTimeout(t) }
+    }, [payMethod, selected, phoneValid, phoneDigits, network])
+
+    const needsMomo = quote?.needsMomoDetails ?? true
+    const momoReady = !needsMomo || (/^0\d{9}$/.test(momoDigits) && !!momoNetwork)
+
+    function finishDirect(order: any) {
+        setPollingRef(null)
+        setSlowNotice(false)
+        setSubmitting(false)
+        setSelected(null)
+        setDirectRef(null)
+        toast.success(`Payment received. ${order?.bundle_label ? `${order.bundle_label} ` : 'Your bundle '}is on its way to ${order?.beneficiary_phone || 'the number'}.`)
+        refreshDashboardSummary?.()
+        setTab('history')
+        loadOrders()
+    }
+
+    async function callGatewayInit(extra: Record<string, unknown>) {
+        const res = await fetch('/api/bundles/gateway-init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                network,
+                bundleKey: selected?.key,
+                phone: phoneDigits,
+                momoPhone: momoDigits,
+                momoNetwork,
+                ...extra,
+            }),
+        })
+        return { res, body: await res.json().catch(() => ({})) }
+    }
+
+    async function startDirect() {
+        if (!selected || !phoneValid || submitting || !quote) return
+        if (!momoReady) {
+            toast.error('Enter the Mobile Money number and network to pay from')
+            return
+        }
+        setSubmitting(true)
+        try {
+            const { res, body } = await callGatewayInit({})
+
+            // A charge is already live for this number: hand the customer back to it
+            // instead of starting another, which would cancel the code they were sent.
+            if (!res.ok && body?.resumable && body?.reference) {
+                setDirectRef(body.reference)
+                if (body.otpRequired) {
+                    setOtpMessage(body.error || '')
+                    setOtpRequired(true)
+                    setSubmitting(false)
+                } else {
+                    toast.info(body.error || 'A payment prompt is already waiting on your phone.')
+                    setPollingRef(body.reference)
+                }
+                return
+            }
+            if (!res.ok || !body?.success) {
+                if (res.status === 404) loadCatalog(network)
+                throw new Error(body?.error || 'Payment could not be started')
+            }
+
+            if (body.gateway === 'paystack' && body.authorization_url) {
+                window.location.href = body.authorization_url
+                return
+            }
+
+            setDirectRef(body.reference)
+            if (body.otpRequired) {
+                setOtpMessage(body.message || '')
+                setOtpRequired(true)
+                setSubmitting(false)
+                return
+            }
+            toast.success(body.message || 'Payment prompt sent. Approve it on your phone.')
+            setPollingRef(body.reference)
+        } catch (e: any) {
+            toast.error(e?.message || 'Failed to start payment')
+            setSubmitting(false)
+        }
+    }
+
+    async function verifyOtp() {
+        if (!otpCode.trim() || !directRef) {
+            toast.error('Enter the code sent to your phone')
+            return
+        }
+        setSubmitting(true)
+        try {
+            const { res, body } = await callGatewayInit({ otpCode: otpCode.trim(), reference: directRef })
+            if (!res.ok) throw new Error(body?.error || 'Invalid code. Please try again.')
+            setOtpRequired(false)
+            setOtpCode('')
+            toast.success(body?.message || 'Code accepted. Approve the prompt on your phone.')
+            setPollingRef(body?.reference || directRef)
+        } catch (e: any) {
+            toast.error(e?.message || 'Failed to verify the code')
+            setSubmitting(false)
+        }
+    }
+
+    // Paystack hosted-page return leg: resume waiting on the reference in the URL.
+    useEffect(() => {
+        const ref = new URLSearchParams(window.location.search).get('reference')
+        if (ref && ref.startsWith('BUNPAY-')) {
+            setPollingRef(ref)
+            setSubmitting(true)
+            window.history.replaceState(null, '', window.location.pathname)
+        }
+    }, [])
+
+    // Poll until the gateway settles the payment into an order.
+    useEffect(() => {
+        if (!pollingRef) return
+        const startedAt = Date.now()
+        let stopped = false
+
+        const tick = async () => {
+            if (stopped) return
+            const elapsed = Date.now() - startedAt
+            if (elapsed > 3 * 60 * 1000) setSlowNotice(true)
+            if (elapsed >= DIRECT_POLL_TIMEOUT_MS) {
+                stopped = true
+                setPollingRef(null)
+                setSubmitting(false)
+                toast.error('Still waiting on the payment confirmation. If you approved it, your bundle will appear in History once it is confirmed.')
+                return
+            }
+            try {
+                const res = await fetch(`/api/payments/verify?reference=${encodeURIComponent(pollingRef)}`, { headers: { Accept: 'application/json' } })
+                const data = await res.json().catch(() => ({}))
+                if (stopped) return
+                if (data.status === 'completed') {
+                    // The order is written a moment after the payment is claimed.
+                    if (!data.order) return
+                    stopped = true
+                    finishDirect(data.order)
+                } else if (data.status === 'failed') {
+                    stopped = true
+                    setPollingRef(null)
+                    setSlowNotice(false)
+                    setSubmitting(false)
+                    toast.error(data.message || data.error || 'Payment failed or was cancelled. You have not been charged for a bundle.')
+                }
+            } catch {
+                // Network blip: try again on the next tick.
+            }
+        }
+
+        const interval = setInterval(tick, DIRECT_POLL_MS)
+        return () => { stopped = true; clearInterval(interval) }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pollingRef])
 
     async function confirmBuy() {
         if (!selected || !phoneValid || submitting) return
@@ -209,7 +437,7 @@ export default function StandardBundlesPage() {
                     <Wifi className="w-6 h-6 text-sky-500" /> Standard Bundles
                 </h1>
                 <p className="text-sm text-muted-foreground mt-1">
-                    MTN, Telecel and AirtelTigo internet bundles, straight from your wallet.
+                    MTN, Telecel and AirtelTigo internet bundles. Pay from your wallet or with Mobile Money.
                 </p>
             </div>
 
@@ -361,8 +589,18 @@ export default function StandardBundlesPage() {
                 </div>
             )}
 
-            <Dialog open={!!selected} onOpenChange={open => { if (!open && !submitting) setSelected(null) }}>
-                <DialogContent className="sm:max-w-md">
+            {pollingRef && !selected && (
+                <div className="fixed bottom-20 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-40 rounded-2xl border bg-card shadow-lg p-4 flex items-start gap-3">
+                    <Loader2 className="w-5 h-5 animate-spin text-sky-500 shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                        <p className="font-bold">Waiting for your payment</p>
+                        <p className="text-muted-foreground">Approve the prompt on your phone. Your bundle is sent as soon as the payment is confirmed.</p>
+                    </div>
+                </div>
+            )}
+
+            <Dialog open={!!selected} onOpenChange={open => { if (!open && (!submitting || pollingRef)) setSelected(null) }}>
+                <DialogContent className="sm:max-w-md max-h-[92vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle>Buy {theme.label} {selected?.size}</DialogTitle>
                         <DialogDescription>
@@ -370,43 +608,156 @@ export default function StandardBundlesPage() {
                         </DialogDescription>
                     </DialogHeader>
 
-                    <div className="space-y-4">
-                        <div className="space-y-1.5">
-                            <Label htmlFor="bundle-phone">{theme.label} number to receive the bundle</Label>
+                    {pollingRef ? (
+                        <div className="py-4 text-center space-y-3">
+                            <Smartphone className="w-10 h-10 mx-auto text-sky-500" />
+                            <p className="font-bold">Approve the payment on your phone</p>
+                            <p className="text-sm text-muted-foreground">
+                                {slowNotice
+                                    ? 'Still waiting. MTN can take up to 10 minutes to confirm a payment. You can close this; your bundle will still be sent once it is confirmed.'
+                                    : 'Enter your MoMo PIN when the prompt appears. We send the bundle as soon as the payment is confirmed.'}
+                            </p>
+                            <Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" />
+                        </div>
+                    ) : otpRequired ? (
+                        <div className="space-y-3">
+                            <p className="text-sm text-muted-foreground">{otpMessage || 'Enter the one-time code sent to your phone.'}</p>
                             <Input
-                                id="bundle-phone"
                                 inputMode="numeric"
-                                autoComplete="tel"
-                                placeholder={`e.g. ${theme.prefixes[0]}1234567`}
-                                value={phone}
-                                maxLength={10}
-                                onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                autoComplete="one-time-code"
+                                placeholder="Code"
+                                value={otpCode}
+                                maxLength={8}
+                                onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
                             />
-                            {phoneMismatch && (
-                                <p className="text-xs text-red-600 flex items-center gap-1">
-                                    <AlertTriangle className="w-3.5 h-3.5" />
-                                    {phoneNetwork ? `This looks like a ${NETWORKS.find(n => n.id === phoneNetwork)?.label} number.` : 'Unrecognised prefix.'} Enter a {theme.label} number.
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="bundle-phone">{theme.label} number to receive the bundle</Label>
+                                <Input
+                                    id="bundle-phone"
+                                    inputMode="numeric"
+                                    autoComplete="tel"
+                                    placeholder={`e.g. ${theme.prefixes[0]}1234567`}
+                                    value={phone}
+                                    maxLength={10}
+                                    onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                />
+                                {phoneMismatch && (
+                                    <p className="text-xs text-red-600 flex items-center gap-1">
+                                        <AlertTriangle className="w-3.5 h-3.5" />
+                                        {phoneNetwork ? `This looks like a ${NETWORKS.find(n => n.id === phoneNetwork)?.label} number.` : 'Unrecognised prefix.'} Enter a {theme.label} number.
+                                    </p>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                                {([
+                                    { id: 'wallet', icon: Wallet, title: 'Wallet', sub: balance == null ? '—' : `${ghs(balance)} available` },
+                                    { id: 'direct', icon: Smartphone, title: 'Direct Pay', sub: 'Mobile Money' },
+                                ] as const).map(m => (
+                                    <button
+                                        key={m.id}
+                                        type="button"
+                                        onClick={() => setPayMethod(m.id)}
+                                        className={cn(
+                                            'p-3 rounded-xl border flex items-center gap-2 text-left transition-colors',
+                                            payMethod === m.id ? 'border-foreground bg-secondary/60 shadow-sm' : 'hover:border-foreground/30'
+                                        )}
+                                    >
+                                        <m.icon className={cn('w-5 h-5 shrink-0', m.id === 'wallet' ? 'text-emerald-600' : 'text-sky-500')} />
+                                        <span className="min-w-0">
+                                            <span className="block font-bold text-sm">{m.title}</span>
+                                            <span className="block text-xs text-muted-foreground truncate">{m.sub}</span>
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {payMethod === 'direct' && needsMomo && (
+                                <div className="space-y-3">
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="momo-phone">Mobile Money number to pay from</Label>
+                                        <Input
+                                            id="momo-phone"
+                                            inputMode="numeric"
+                                            autoComplete="tel"
+                                            placeholder="0241234567"
+                                            value={momoPhone}
+                                            maxLength={10}
+                                            onChange={e => setMomoPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {NETWORKS.map(n => (
+                                            <button
+                                                key={n.id}
+                                                type="button"
+                                                onClick={() => { setMomoNetwork(n.id); setMomoNetworkManual(true) }}
+                                                className={cn(
+                                                    'py-2 rounded-xl border text-xs font-bold transition-colors',
+                                                    momoNetwork === n.id ? 'border-foreground bg-secondary/60 shadow-sm' : 'text-muted-foreground hover:border-foreground/30'
+                                                )}
+                                            >
+                                                {n.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="rounded-xl bg-secondary/60 p-3 space-y-1.5 text-sm">
+                                <div className="flex justify-between"><span className="text-muted-foreground">Bundle</span><span className="font-bold">{theme.label} {selected?.size}</span></div>
+                                <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-bold">{ghs(selected?.price ?? 0)}</span></div>
+                                {payMethod === 'wallet' ? (
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Wallet after</span><span className={cn('font-bold', insufficient && 'text-red-600')}>{balance == null || !selected ? '—' : ghs(balance - selected.price)}</span></div>
+                                ) : (
+                                    <>
+                                        <div className="flex justify-between"><span className="text-muted-foreground">Payment fee</span><span className="font-bold">{quote ? ghs(quote.fee) : quoteLoading ? '…' : '—'}</span></div>
+                                        <div className="flex justify-between border-t pt-1.5"><span className="text-muted-foreground">You pay</span><span className="font-black">{quote ? ghs(quote.total) : quoteLoading ? '…' : '—'}</span></div>
+                                    </>
+                                )}
+                            </div>
+
+                            {payMethod === 'wallet' && insufficient && (
+                                <p className="text-sm text-red-600">
+                                    Your wallet balance is too low for this bundle.{' '}
+                                    <button type="button" className="underline font-bold" onClick={() => setPayMethod('direct')}>Pay with Mobile Money</button>
+                                    {' '}or <a href="/dashboard/wallet" className="underline font-bold">top up</a>.
                                 </p>
                             )}
+                            {payMethod === 'direct' && quoteError && <p className="text-sm text-red-600">{quoteError}</p>}
+                            {payMethod === 'direct' && !phoneValid && <p className="text-xs text-muted-foreground">Enter the number to receive the bundle to see the total.</p>}
                         </div>
-
-                        <div className="rounded-xl bg-secondary/60 p-3 space-y-1.5 text-sm">
-                            <div className="flex justify-between"><span className="text-muted-foreground">Bundle</span><span className="font-bold">{theme.label} {selected?.size}</span></div>
-                            <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-bold">{ghs(selected?.price ?? 0)}</span></div>
-                            <div className="flex justify-between"><span className="text-muted-foreground">Wallet after</span><span className={cn('font-bold', insufficient && 'text-red-600')}>{balance == null || !selected ? '—' : ghs(balance - selected.price)}</span></div>
-                        </div>
-
-                        {insufficient && (
-                            <p className="text-sm text-red-600">Your wallet balance is too low for this bundle. <a href="/dashboard/wallet" className="underline font-bold">Top up</a></p>
-                        )}
-                    </div>
+                    )}
 
                     <DialogFooter className="gap-2">
-                        <Button variant="outline" onClick={() => setSelected(null)} disabled={submitting}>Cancel</Button>
-                        <Button onClick={confirmBuy} disabled={!phoneValid || insufficient || submitting}>
-                            {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Wallet className="w-4 h-4 mr-2" />}
-                            Pay {ghs(selected?.price ?? 0)} from wallet
-                        </Button>
+                        {pollingRef ? (
+                            <Button variant="outline" onClick={() => setSelected(null)}>Close</Button>
+                        ) : otpRequired ? (
+                            <>
+                                <Button variant="outline" onClick={() => { setOtpRequired(false); setOtpCode('') }} disabled={submitting}>Back</Button>
+                                <Button onClick={verifyOtp} disabled={!otpCode.trim() || submitting}>
+                                    {submitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Confirm code
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <Button variant="outline" onClick={() => setSelected(null)} disabled={submitting}>Cancel</Button>
+                                {payMethod === 'wallet' ? (
+                                    <Button onClick={confirmBuy} disabled={!phoneValid || insufficient || submitting}>
+                                        {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Wallet className="w-4 h-4 mr-2" />}
+                                        Pay {ghs(selected?.price ?? 0)} from wallet
+                                    </Button>
+                                ) : (
+                                    <Button onClick={startDirect} disabled={!phoneValid || !quote || quoteLoading || !momoReady || submitting}>
+                                        {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Smartphone className="w-4 h-4 mr-2" />}
+                                        {quote ? `Pay ${ghs(quote.total)} now` : 'Pay now'}
+                                    </Button>
+                                )}
+                            </>
+                        )}
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
