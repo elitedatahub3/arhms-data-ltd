@@ -87,6 +87,16 @@ export async function GET(request: NextRequest) {
                 if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', orders: placedOrders })
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/data-packages?success=true`)
             }
+            // Direct-pay bundles: the page waits for the order itself. It is written a
+            // moment after the claim, so a null here just means "poll again".
+            if (reference.startsWith('BUNPAY-')) {
+                const { data: bundleOrder } = await (supabase.from('bundle_orders') as any)
+                    .select('id, reference_code, network, bundle_label, beneficiary_phone, total_paid, status, created_at')
+                    .eq('reference_code', reference)
+                    .maybeSingle()
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: bundleOrder || null })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?success=true`)
+            }
             if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful' })
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/wallet?success=true`)
         } else if (paymentRecord.status === 'failed') {
@@ -181,6 +191,17 @@ export async function GET(request: NextRequest) {
                 }
                 if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
+            if (reference.startsWith('BUNPAY-')) {
+                const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                const result = await processBundleDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Bundle purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?success=true`)
             }
 
             // RETIRED: a paid BOOST- for a discontinued product. Say so plainly rather than
@@ -300,6 +321,17 @@ export async function GET(request: NextRequest) {
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
             }
 
+            if (reference.startsWith('BUNPAY-')) {
+                const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                const result = await processBundleDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Bundle purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?success=true`)
+            }
+
             // fall through to process payment below
         }
 
@@ -376,6 +408,17 @@ export async function GET(request: NextRequest) {
                 }
                 if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
+            if (reference.startsWith('BUNPAY-')) {
+                const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                const result = await processBundleDirectOrder(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Bundle purchase failed' }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?error=order_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?success=true`)
             }
 
             // RETIRED: same as above. The wallet settle path below must not see a BOOST-.
@@ -466,6 +509,17 @@ export async function GET(request: NextRequest) {
             }
             if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+        }
+
+        if (reference.startsWith('BUNPAY-')) {
+            const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+            const result = await processBundleDirectOrder(reference, user.id)
+            if (!result.success) {
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.error || 'Bundle purchase failed' }, { status: 500 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?error=order_failed`)
+            }
+            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/standard-bundles?success=true`)
         }
 
         // RETIRED: a BOOST- for a discontinued product. Caught here or it would fall through

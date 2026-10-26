@@ -198,6 +198,10 @@ export async function GET(request: NextRequest) {
                         const { processAirtimeDirectOrder } = await import('@/lib/airtime-order-payments')
                         const r = await processAirtimeDirectOrder(payment.reference)
                         if (!r.success && !r.alreadyProcessed) throw new Error(r.error || 'Airtime order processing failed')
+                    } else if (payment.reference.startsWith('BUNPAY-')) {
+                        const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                        const bunResult = await processBundleDirectOrder(payment.reference)
+                        if (!bunResult.success && !bunResult.alreadyProcessed) throw new Error(bunResult.error || 'Bundle order processing failed')
                     } else if (isRetiredBoostReference(payment.reference)) {
                         // Confirmed paid, but the product is gone. Throwing leaves the row pending so it is reported every run until refunded.
                         reportRetiredBoostPayment('CronPaystackMomo', payment.reference)

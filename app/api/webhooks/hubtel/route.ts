@@ -177,6 +177,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ received: true })
         }
 
+        if (ClientReference.startsWith('BUNPAY-')) {
+            const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+            console.log('[HubtelWebhook] Routing direct-pay bundle order:', ClientReference)
+            await processBundleDirectOrder(ClientReference)
+            return NextResponse.json({ received: true })
+        }
+
         // ── RETIRED: CLASSIFIEDS BOOST ────────────────────────────────────────────
         // Caught rather than dropped: unhandled it would reach the wallet top-up branch below.
         if (isRetiredBoostReference(ClientReference)) {

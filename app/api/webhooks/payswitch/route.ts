@@ -211,6 +211,13 @@ export async function POST(request: NextRequest) {
             return ack()
         }
 
+        if (reference.startsWith('BUNPAY-')) {
+            const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+            console.log('[PayswitchWebhook] Routing direct-pay bundle order:', reference)
+            await processBundleDirectOrder(reference)
+            return ack()
+        }
+
         // RETIRED: BOOST- was the classifieds listing boost. Caught rather than dropped:
         // unhandled it would reach the wallet top-up branch below and credit the payer.
         if (isRetiredBoostReference(reference)) {
