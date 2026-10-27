@@ -12,7 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { getKfBundleOrderStatus } from '@/lib/kingflexy-bundles-service'
 import { finalizeBundleOrder } from '@/lib/bundle-order-completion'
-import { sendBundleToKingFlexy, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
+import { sendBundleToKingFlexy, triggerBundleDispatch, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
 
 export type BundleSettleOutcome =
     | 'completed' | 'refunded' | 'in_flight' | 'resent' | 'not_found_upstream'
@@ -127,4 +127,66 @@ export async function settleBundleWebhook(event: any): Promise<BundleSettleOutco
         hint: isCompleted ? 'completed' : event?.event === 'order.failed' ? 'failed' : undefined,
         hintReason: typeof event?.detail?.reason === 'string' ? event.detail.reason : undefined,
     })
+}
+
+/**
+ * A 'failed' order whose payment is still 'paid' means the refund itself errored
+ * (finalizeBundleOrder gives the claim back when the wallet credit fails). Every
+ * failure path asks for a refund, so this is always owed. Idempotent.
+ */
+export async function retryMissedRefund(order: any): Promise<boolean> {
+    if (order.status !== 'failed' || order.payment_status !== 'paid') return false
+    const res = await finalizeBundleOrder({
+        orderId: order.id,
+        status: 'failed',
+        refund: true,
+        note: 'Refund retried after an earlier failure.',
+        existingOrder: order,
+    })
+    return res.refunded === true
+}
+
+const USER_CHECK_AFTER_MS = 60_000
+const USER_CHECK_LIMIT = 5
+
+/**
+ * Settles one buyer's open orders while they look at their History, so a bundle
+ * KingFlexy failed is refunded even when their webhook never arrives and the cron is
+ * not running. Bounded and idempotent: at most a few orders, each checked at most
+ * once a minute (updated_at is touched after every check).
+ */
+export async function settleOpenOrdersForUser(userId: string): Promise<void> {
+    const supabase = createServerClient() as any
+    const cutoff = new Date(Date.now() - USER_CHECK_AFTER_MS).toISOString()
+
+    const [{ data: inFlight }, { data: owed }, { data: undispatched }] = await Promise.all([
+        supabase.from('bundle_orders').select('*')
+            .eq('user_id', userId).eq('status', 'processing').lt('updated_at', cutoff)
+            .order('updated_at', { ascending: true }).limit(USER_CHECK_LIMIT),
+        supabase.from('bundle_orders').select('*')
+            .eq('user_id', userId).eq('status', 'failed').eq('payment_status', 'paid')
+            .limit(USER_CHECK_LIMIT),
+        supabase.from('bundle_orders').select('id')
+            .eq('user_id', userId).eq('status', 'pending').eq('payment_status', 'paid').lt('created_at', cutoff)
+            .limit(USER_CHECK_LIMIT),
+    ])
+
+    for (const order of (owed || [])) {
+        await retryMissedRefund(order).catch(e => console.error('[BundleSettle] Refund retry failed:', order.reference_code, e))
+    }
+
+    for (const order of (inFlight || [])) {
+        try {
+            const outcome = await reconcileBundleOrder(order, { resendIfMissing: true })
+            if (outcome === 'in_flight' || outcome === 'status_unavailable' || outcome === 'resent' || outcome === 'not_found_upstream') {
+                await supabase.from('bundle_orders').update({ updated_at: new Date().toISOString() }).eq('id', order.id).eq('status', 'processing')
+            }
+        } catch (e) {
+            console.error('[BundleSettle] User-triggered check failed:', order.reference_code, e)
+        }
+    }
+
+    for (const order of (undispatched || [])) {
+        await triggerBundleDispatch(order.id)
+    }
 }

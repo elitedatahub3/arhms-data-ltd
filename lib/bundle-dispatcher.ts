@@ -11,7 +11,7 @@
  */
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { purchaseBundleViaKingFlexy, isBundleNetwork } from '@/lib/kingflexy-bundles-service'
+import { purchaseBundleViaKingFlexy, isBundleNetwork, mapKfBundleStatus } from '@/lib/kingflexy-bundles-service'
 import { finalizeBundleOrder } from '@/lib/bundle-order-completion'
 import { BUNDLE_SETTING_KEYS } from '@/lib/bundle-pricing'
 
@@ -85,7 +85,7 @@ export async function sendBundleToKingFlexy(order: any): Promise<void> {
 
     switch (result.outcome) {
         case 'accepted': {
-            const upstream = String(result.status || '').toLowerCase()
+            const upstream = mapKfBundleStatus(result.status)
             if (upstream === 'completed') {
                 await finalizeBundleOrder({
                     orderId: order.id,

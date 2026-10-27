@@ -54,7 +54,19 @@ export async function finalizeBundleOrder(params: FinalizeBundleOrderParams): Pr
     // back. Claim payment_status first, credit second, and give the claim back if the
     // credit fails.
     let refunded = false
-    const refundAmount = Number(existing.total_paid ?? 0)
+    let refundAmount = Number(existing.total_paid ?? 0)
+
+    // A Direct Pay customer paid the bundle price PLUS the gateway fee. They get all
+    // of it back: an undelivered bundle should cost them nothing.
+    if (refund && existing.payment_method === 'gateway') {
+        const { data: payment } = await supabase
+            .from('wallet_payments')
+            .select('total_amount')
+            .eq('reference', existing.reference_code)
+            .maybeSingle()
+        const paid = Number(payment?.total_amount)
+        if (paid > refundAmount) refundAmount = paid
+    }
 
     if (refund && existing.payment_status === 'paid' && refundAmount > 0) {
         const { data: claim } = await supabase

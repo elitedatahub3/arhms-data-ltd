@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { reconcileBundleOrder } from '@/lib/bundle-settlement'
+import { reconcileBundleOrder, retryMissedRefund } from '@/lib/bundle-settlement'
 import { triggerBundleDispatch, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
 
 /**
@@ -87,6 +87,20 @@ export async function GET(request: NextRequest) {
             const sent = await triggerBundleDispatch(order.id)
             if (sent.dispatched) results.rescued++
             else if (sent.reason !== 'auto-dispatch is off') results.errors.push(`${order.reference_code}: ${sent.reason}`)
+        }
+
+        // ── 4. Failed but never refunded (the wallet credit errored) ─────────
+        const { data: owed } = await supabase
+            .from('bundle_orders')
+            .select('*')
+            .eq('status', 'failed')
+            .eq('payment_status', 'paid')
+            .limit(BATCH)
+
+        for (const order of (owed || [])) {
+            results.checked++
+            if (await retryMissedRefund(order)) bump('refund_retried')
+            else results.errors.push(`${order.reference_code}: refund retry failed`)
         }
 
         return NextResponse.json({ success: true, ...results })

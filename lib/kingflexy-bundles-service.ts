@@ -350,10 +350,12 @@ export async function purchaseBundleViaKingFlexy(params: KfBundlePurchaseParams)
 export type KfBundleStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'refunded'
 
 export function mapKfBundleStatus(raw: unknown): KfBundleStatus {
-    const s = String(raw ?? '').toLowerCase()
-    if (s === 'completed' || s === 'success' || s === 'delivered') return 'completed'
+    const s = String(raw ?? '').trim().toLowerCase()
+    if (s === 'completed' || s === 'success' || s === 'successful' || s === 'delivered') return 'completed'
     if (s === 'refunded' || s === 'refund' || s === 'reversed') return 'refunded'
-    if (s === 'failed' || s === 'cancelled' || s === 'canceled') return 'failed'
+    // An unrecognised failure word would otherwise read as 'pending' and the
+    // customer would wait forever for a refund.
+    if (['failed', 'failure', 'cancelled', 'canceled', 'rejected', 'declined', 'error', 'unsuccessful'].includes(s)) return 'failed'
     if (s === 'processing') return 'processing'
     return 'pending'
 }
