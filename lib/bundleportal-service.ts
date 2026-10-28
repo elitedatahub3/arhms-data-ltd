@@ -26,8 +26,10 @@ import { normaliseSupplierStatus } from '@/lib/order-status-display'
 //     get_transactions as the safety net for missed deliveries.
 //   • Only one order may be in flight per recipient. A second one is refused with
 //     409 pending_order — that is a "retry later", not a failure.
-//   • MTN has three routes (mtn / mtn_2 / mtn_3) with separate catalogues. We use
-//     plain `mtn`, their documented default.
+//   • MTN has three routes (mtn / mtn_2 / mtn_3) with separate catalogues. The
+//     admin picks one in Admin → Fulfillment (fulfillment_settings.bundleportal_mtn_route,
+//     default `mtn`); a size the chosen route doesn't sell is retried on plain `mtn`.
+//     verify_number always asks plain `mtn`.
 
 const BUNDLEPORTAL_API_KEY = process.env.BUNDLEPORTAL_API_KEY || ''
 const BUNDLEPORTAL_API_URL = process.env.BUNDLEPORTAL_API_URL || 'https://api.bundleportal.com/v2'
@@ -84,6 +86,15 @@ function resolveNetwork(network: string): string | null {
     if (n === 'TELECEL' || n === 'VODAFONE') return 'telecel'
     if (n.startsWith('MTN')) return 'mtn'
     return null
+}
+
+/** BundlePortal's MTN routes, each with its own catalogue. */
+export const MTN_ROUTES = ['mtn', 'mtn_2', 'mtn_3'] as const
+export type MtnRoute = typeof MTN_ROUTES[number]
+
+/** The saved route setting, or plain `mtn` when it is missing or unrecognised. */
+export function parseMtnRoute(value: unknown): MtnRoute {
+    return (MTN_ROUTES as readonly string[]).includes(value as string) ? value as MtnRoute : 'mtn'
 }
 
 // ─── Circuit Breaker Helpers ──────────────────────────────────────────────────
@@ -180,13 +191,16 @@ const RETRY_LATER_CODES = new Set(['pending_order', 'network_locked', 'order_cap
  * needs no special handling here: a retry sends the same order_id, and
  * BundlePortal returns the original order (duplicate: true) instead of placing
  * a second one.
+ *
+ * `opts.mtnRoute` is the raw fulfillment_settings.bundleportal_mtn_route value;
+ * anything unrecognised means plain `mtn`.
  */
 export async function fulfillOrder(
     network: string,
     phoneNumber: string,
     dataSize: string,
     orderId: string,
-    opts: { isRetry?: boolean } = {}
+    opts: { isRetry?: boolean; mtnRoute?: string } = {}
 ): Promise<FulfillmentResponse> {
 
     if (!checkCircuit()) {
@@ -216,124 +230,149 @@ export async function fulfillOrder(
             return { success: false, error: `Order id not usable as a BundlePortal order_id: ${orderId}`, failureKind: 'refused' }
         }
 
-        const requestBody = {
-            network: resolvedNetwork,
-            recipient: normalizePhone(phoneNumber),
-            package_size: gigVolume,
-            order_id: orderRef,
+        const recipient = normalizePhone(phoneNumber)
+        // MTN goes out on the route chosen in Admin → Fulfillment (mtn / mtn_2 / mtn_3).
+        const route = resolvedNetwork === 'mtn' ? parseMtnRoute(opts.mtnRoute) : resolvedNetwork
+        const first = await placeOnce({ network: route, recipient, package_size: gigVolume, order_id: orderRef }, orderId, opts)
+
+        // Each MTN route has its own catalogue. A size the chosen route doesn't sell
+        // is a plain rejection that created nothing, so the same order_id is placed
+        // again on `mtn` straight away. Any other failure (balance, key, 5xx, retry
+        // later, number not approved) is returned as it is.
+        if (route !== resolvedNetwork && first.notOnRoute) {
+            console.warn(`[BundlePortal] Order ${orderId}: ${route} refused (${first.error}) — retrying on ${resolvedNetwork}`)
+            const second = await placeOnce({ network: resolvedNetwork, recipient, package_size: gigVolume, order_id: orderRef }, orderId, opts)
+            delete second.notOnRoute
+            return second
         }
-
-        console.log(`[BundlePortal] Order ${orderId} | ${resolvedNetwork} | ${gigVolume}GB | recipient: ${requestBody.recipient}${opts.isRetry ? ' | retry' : ''}`)
-        console.log(`[BundlePortal] Request payload:`, sanitizeForLog(requestBody))
-
-        // ── HTTP call with 3-retry logic ────────────────────────────────────
-        // A retry after a network error is SAFE here, unlike HendyLinks: the same
-        // order_id comes back as the original order, never a second charge.
-        let result: Awaited<ReturnType<typeof callApi>> | null = null
-        let attempt = 0
-        const maxAttempts = 3
-        let lastError: Error | null = null
-        // Whole-call budget across all attempts, so a stalled supplier cannot
-        // overrun the caller's function limit.
-        const fulfillDeadline = Date.now() + 25_000
-
-        while (attempt < maxAttempts) {
-            attempt++
-            try {
-                result = await callApi('place_order', requestBody, Math.max(2_000, fulfillDeadline - Date.now()))
-                break
-            } catch (err: any) {
-                lastError = err
-                console.error(`[BundlePortal] Fetch error on attempt ${attempt}:`, err.message)
-                if (Date.now() >= fulfillDeadline) {
-                    console.warn(`[BundlePortal] Fulfillment budget exhausted after attempt ${attempt} — giving up so the caller can report a failure.`)
-                    break
-                }
-                if (attempt < maxAttempts) {
-                    const delay = 2000 * attempt
-                    console.log(`[BundlePortal] Retrying in ${delay}ms...`)
-                    await new Promise(res => setTimeout(res, delay))
-                }
-            }
-        }
-
-        if (!result) {
-            recordFailure()
-            return { success: false, error: lastError?.message || 'Persistent network error connecting to BundlePortal', failureKind: 'unknown' }
-        }
-
-        const { status: httpStatus, ok, data, rawText } = result
-
-        if (data === null) {
-            console.error(`[BundlePortal] Non-JSON response (HTTP ${httpStatus}):`, rawText.slice(0, 300))
-            recordFailure()
-            return { success: false, error: `Supplier returned unexpected response format (HTTP ${httpStatus})`, failureKind: 'unknown' }
-        }
-
-        const code: string | undefined = data?.code
-        console.log(`[BundlePortal] API response:`, { status: httpStatus, code, reference: data?.data?.reference, orderStatus: data?.data?.status, duplicate: data?.duplicate ?? data?.data?.duplicate })
-
-        // ── Success ─────────────────────────────────────────────────────────
-        // `status` may be "processing" (sent to the network) or "cached" (queued
-        // for manual delivery at their end). Both are real, paid orders.
-        if (ok && data?.success === true) {
-            recordSuccess()
-            const supplierRef = data?.data?.reference ? String(data.data.reference) : orderRef
-            const duplicate = data?.duplicate === true || data?.data?.duplicate === true
-            if (duplicate) {
-                console.warn(`[BundlePortal] Order ${orderId} already existed at supplier as ${supplierRef} — adopted, not re-placed.`)
-            }
-            return {
-                success: true,
-                // Both fields carry the same value on purpose: the dispatcher reads
-                // `transactionId || reference`, but shop-order-processor and both
-                // refulfill paths read `transactionId` alone.
-                reference: supplierRef,
-                transactionId: supplierRef,
-                alreadySubmitted: duplicate || undefined,
-                apiResponse: sanitizeForLog(data),
-            }
-        }
-
-        // ── Error responses ────────────────────────────────────────────────
-        const errMsg = data?.message || data?.error || 'Unknown error'
-
-        if (httpStatus === 429 || httpStatus === 503 || (code && RETRY_LATER_CODES.has(code))) {
-            console.warn(`[BundlePortal] Order ${orderId}: retry later (HTTP ${httpStatus}${code ? ` ${code}` : ''}, retry-after ${result.retryAfter ?? data?.retry_after ?? '?'}). Kept pending.`)
-            return { success: false, error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`, isRateLimited: true, apiResponse: sanitizeForLog(data), failureKind: 'refused' }
-        }
-
-        if (httpStatus === 402) {
-            console.error(`[BundlePortal] Order ${orderId}: Insufficient balance! Top up the BundlePortal wallet.`)
-        } else if (httpStatus === 401) {
-            console.error(`[BundlePortal] Order ${orderId}: Invalid API key — check BUNDLEPORTAL_API_KEY.`)
-        } else if (code === 'not_allowlisted') {
-            console.error(`[BundlePortal] Order ${orderId}: recipient not yet approved for ${resolvedNetwork} — ${errMsg}`)
-        } else if (httpStatus === 403) {
-            console.error(`[BundlePortal] Order ${orderId}: account/channel blocked (${code || 'forbidden'}) — ${errMsg}`)
-        } else if (httpStatus === 400) {
-            console.error(`[BundlePortal] Order ${orderId}: Rejected by supplier — ${errMsg}. They may not sell ${resolvedNetwork} ${gigVolume}GB.`)
-        }
-
-        console.warn(`[BundlePortal] Order ${orderId} not fulfilled: ${errMsg}. Kept pending.`)
-        if (httpStatus >= 500) {
-            recordFailure()
-        }
-        return {
-            success: false,
-            error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`,
-            apiResponse: sanitizeForLog(data),
-            // order_id is idempotent at BundlePortal (a repeat comes back as
-            // duplicate: true, a success), so an explicit rejection below 500 is a
-            // definite no even after a mid-flight error. The retry-later 429/503
-            // branch above is likewise a refusal to create anything yet.
-            failureKind: httpStatus >= 500 ? 'unknown' : 'refused',
-        }
+        delete first.notOnRoute
+        return first
 
     } catch (error: any) {
         recordFailure()
         console.error(`[BundlePortal] Exception during fulfillOrder for ${orderId}:`, error.message)
         return { success: false, error: error.message || 'Unexpected exception', failureKind: 'unknown' }
+    }
+}
+
+/**
+ * One place_order call, with the network-error retries, mapped to a FulfillmentResponse.
+ * `notOnRoute` marks a plain 400/404/422 rejection — what a route that doesn't sell
+ * the size answers — so fulfillOrder can try plain `mtn`.
+ */
+async function placeOnce(
+    requestBody: { network: string; recipient: string; package_size: number; order_id: string },
+    orderId: string,
+    opts: { isRetry?: boolean }
+): Promise<FulfillmentResponse & { notOnRoute?: boolean }> {
+    const { network: resolvedNetwork, package_size: gigVolume, order_id: orderRef } = requestBody
+
+    console.log(`[BundlePortal] Order ${orderId} | ${resolvedNetwork} | ${gigVolume}GB | recipient: ${requestBody.recipient}${opts.isRetry ? ' | retry' : ''}`)
+    console.log(`[BundlePortal] Request payload:`, sanitizeForLog(requestBody))
+
+    // ── HTTP call with 3-retry logic ────────────────────────────────────
+    // A retry after a network error is SAFE here, unlike HendyLinks: the same
+    // order_id comes back as the original order, never a second charge.
+    let result: Awaited<ReturnType<typeof callApi>> | null = null
+    let attempt = 0
+    const maxAttempts = 3
+    let lastError: Error | null = null
+    // Whole-call budget across all attempts, so a stalled supplier cannot
+    // overrun the caller's function limit.
+    const fulfillDeadline = Date.now() + 25_000
+
+    while (attempt < maxAttempts) {
+        attempt++
+        try {
+            result = await callApi('place_order', requestBody, Math.max(2_000, fulfillDeadline - Date.now()))
+            break
+        } catch (err: any) {
+            lastError = err
+            console.error(`[BundlePortal] Fetch error on attempt ${attempt}:`, err.message)
+            if (Date.now() >= fulfillDeadline) {
+                console.warn(`[BundlePortal] Fulfillment budget exhausted after attempt ${attempt} — giving up so the caller can report a failure.`)
+                break
+            }
+            if (attempt < maxAttempts) {
+                const delay = 2000 * attempt
+                console.log(`[BundlePortal] Retrying in ${delay}ms...`)
+                await new Promise(res => setTimeout(res, delay))
+            }
+        }
+    }
+
+    if (!result) {
+        recordFailure()
+        return { success: false, error: lastError?.message || 'Persistent network error connecting to BundlePortal', failureKind: 'unknown' }
+    }
+
+    const { status: httpStatus, ok, data, rawText } = result
+
+    if (data === null) {
+        console.error(`[BundlePortal] Non-JSON response (HTTP ${httpStatus}):`, rawText.slice(0, 300))
+        recordFailure()
+        return { success: false, error: `Supplier returned unexpected response format (HTTP ${httpStatus})`, failureKind: 'unknown' }
+    }
+
+    const code: string | undefined = data?.code
+    console.log(`[BundlePortal] API response:`, { status: httpStatus, code, reference: data?.data?.reference, orderStatus: data?.data?.status, duplicate: data?.duplicate ?? data?.data?.duplicate })
+
+    // ── Success ─────────────────────────────────────────────────────────
+    // `status` may be "processing" (sent to the network) or "cached" (queued
+    // for manual delivery at their end). Both are real, paid orders.
+    if (ok && data?.success === true) {
+        recordSuccess()
+        const supplierRef = data?.data?.reference ? String(data.data.reference) : orderRef
+        const duplicate = data?.duplicate === true || data?.data?.duplicate === true
+        if (duplicate) {
+            console.warn(`[BundlePortal] Order ${orderId} already existed at supplier as ${supplierRef} — adopted, not re-placed.`)
+        }
+        return {
+            success: true,
+            // Both fields carry the same value on purpose: the dispatcher reads
+            // `transactionId || reference`, but shop-order-processor and both
+            // refulfill paths read `transactionId` alone.
+            reference: supplierRef,
+            transactionId: supplierRef,
+            alreadySubmitted: duplicate || undefined,
+            apiResponse: sanitizeForLog(data),
+        }
+    }
+
+    // ── Error responses ────────────────────────────────────────────────
+    const errMsg = data?.message || data?.error || 'Unknown error'
+
+    if (httpStatus === 429 || httpStatus === 503 || (code && RETRY_LATER_CODES.has(code))) {
+        console.warn(`[BundlePortal] Order ${orderId}: retry later (HTTP ${httpStatus}${code ? ` ${code}` : ''}, retry-after ${result.retryAfter ?? data?.retry_after ?? '?'}). Kept pending.`)
+        return { success: false, error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`, isRateLimited: true, apiResponse: sanitizeForLog(data), failureKind: 'refused' }
+    }
+
+    if (httpStatus === 402) {
+        console.error(`[BundlePortal] Order ${orderId}: Insufficient balance! Top up the BundlePortal wallet.`)
+    } else if (httpStatus === 401) {
+        console.error(`[BundlePortal] Order ${orderId}: Invalid API key — check BUNDLEPORTAL_API_KEY.`)
+    } else if (code === 'not_allowlisted') {
+        console.error(`[BundlePortal] Order ${orderId}: recipient not yet approved for ${resolvedNetwork} — ${errMsg}`)
+    } else if (httpStatus === 403) {
+        console.error(`[BundlePortal] Order ${orderId}: account/channel blocked (${code || 'forbidden'}) — ${errMsg}`)
+    } else if (httpStatus === 400) {
+        console.error(`[BundlePortal] Order ${orderId}: Rejected by supplier — ${errMsg}. They may not sell ${resolvedNetwork} ${gigVolume}GB.`)
+    }
+
+    console.warn(`[BundlePortal] Order ${orderId} not fulfilled: ${errMsg}. Kept pending.`)
+    if (httpStatus >= 500) {
+        recordFailure()
+    }
+    return {
+        success: false,
+        error: `${errMsg} (HTTP ${httpStatus}${code ? ` ${code}` : ''})`,
+        apiResponse: sanitizeForLog(data),
+        // order_id is idempotent at BundlePortal (a repeat comes back as
+        // duplicate: true, a success), so an explicit rejection below 500 is a
+        // definite no even after a mid-flight error. The retry-later 429/503
+        // branch above is likewise a refusal to create anything yet.
+        failureKind: httpStatus >= 500 ? 'unknown' : 'refused',
+        notOnRoute: (httpStatus === 400 || httpStatus === 404 || httpStatus === 422) && code !== 'not_allowlisted' || undefined,
     }
 }
 
