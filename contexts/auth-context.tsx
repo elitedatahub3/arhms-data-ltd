@@ -248,10 +248,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const signIn = useCallback(async (email: string, password: string) => {
         // We use the client-side Supabase instance directly to guarantee the session cookie is set natively in the browser.
         // This avoids Vercel Edge stripping Set-Cookie headers from API responses.
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password
-        })
+        // Bounded: on a dropped mobile connection the token request can hang with
+        // no error, and the login button spun forever. If it lands after the
+        // timeout the session is still saved, so the next tap goes straight in.
+        const timeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('SIGN_IN_TIMEOUT')), 20000)
+        )
+        let result: Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>
+        try {
+            result = await Promise.race([
+                supabase.auth.signInWithPassword({ email, password }),
+                timeout,
+            ])
+        } catch (e) {
+            if (e instanceof Error && e.message === 'SIGN_IN_TIMEOUT') {
+                return { error: { message: 'Network is slow. Check your connection and try again.' } as Error }
+            }
+            throw e
+        }
+        const { error } = result
 
         if (error) {
             if (error.message.includes('rate limit') || error.message.includes('Too many')) {

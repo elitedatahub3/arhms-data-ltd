@@ -23,6 +23,7 @@ export default function LoginPage() {
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState('')
     const [lockoutMinutes, setLockoutMinutes] = useState<number | null>(null)
+    const [slowRedirect, setSlowRedirect] = useState(false)
     const { signIn } = useAuth()
     const router = useRouter()
     const [guestUrl, setGuestUrl] = useState('https://arhmsgh.com/shop/demo')
@@ -33,6 +34,19 @@ export default function LoginPage() {
                 setGuestUrl(data.guestStorefrontUrl)
             }
         }).catch(console.error)
+    }, [])
+
+    // iOS Safari restores this page from the back/forward cache with React state
+    // frozen, so coming back here mid-redirect showed a spinner that never ends.
+    useEffect(() => {
+        const onPageShow = (e: PageTransitionEvent) => {
+            if (e.persisted) {
+                setIsLoading(false)
+                setSlowRedirect(false)
+            }
+        }
+        window.addEventListener('pageshow', onPageShow)
+        return () => window.removeEventListener('pageshow', onPageShow)
     }, [])
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -60,7 +74,12 @@ export default function LoginPage() {
             // Keep the spinner up: the browser is still loading /dashboard.
             // Clearing it here would snap the button back to "Login" mid-redirect
             // and make a successful sign-in look like it did nothing.
-            window.location.href = '/dashboard'
+            // replace(), not href: the login page stays out of history, so Back
+            // from the dashboard can't land on a stale spinning login screen.
+            window.location.replace('/dashboard')
+            // A stalled page load on mobile data never errors, it just waits.
+            // Offer a manual retry rather than spinning silently.
+            setTimeout(() => setSlowRedirect(true), 15000)
         } catch (err) {
             setError('An unexpected error occurred')
             setIsLoading(false)
@@ -175,6 +194,13 @@ export default function LoginPage() {
                                     "Login"
                                 )}
                             </Button>
+
+                            {slowRedirect && (
+                                <p className="text-xs text-center text-muted-foreground">
+                                    You're signed in, but the dashboard is slow to load.{' '}
+                                    <a href="/dashboard" className="font-bold text-primary underline">Tap to open it</a>
+                                </p>
+                            )}
                         </form>
 
                         <div className="grid gap-4 mt-8">
