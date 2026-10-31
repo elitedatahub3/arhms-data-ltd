@@ -144,9 +144,10 @@ export async function reconcileBundlePortalOrders(opts: { runBudgetMs?: number; 
     if (missing.length > 0) {
         errors.push(`${missing.length} of ${backlog.size} BundlePortal orders are not in their transaction history (read back to ${scan.oldestSeenAt ?? 'n/a'}) — check them on the BundlePortal dashboard (e.g. ${missing[0].id})`)
     }
+    // Logged only, not pushed: admin asked to stop the "still undelivered after 2h+" push.
     if (staleInFlight.length > 0) {
         const oldest = staleInFlight.reduce((a, b) => (Date.parse(a.order.created_at) <= Date.parse(b.order.created_at) ? a : b))
-        errors.push(`${staleInFlight.length} BundlePortal orders still undelivered after 2h+ (oldest ${hoursOld(oldest.order)}h, supplier says "${oldest.raw}") — chase BundlePortal or refund`)
+        console.warn(`[BundlePortalSync] ${staleInFlight.length} BundlePortal orders still undelivered after 2h+ (oldest ${hoursOld(oldest.order)}h, supplier says "${oldest.raw}") — chase BundlePortal or refund`)
     }
     if (notReached.length > 0) {
         errors.push(`BundlePortal history scan incomplete (${scan.stopReason}, ${scan.pagesRead} pages) — ${notReached.length} of ${backlog.size} orders not checked this run`)
