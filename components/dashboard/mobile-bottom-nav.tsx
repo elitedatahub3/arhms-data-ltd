@@ -31,6 +31,7 @@ import {
     Code2,
     Settings,
     Receipt,
+    Wifi,
 } from 'lucide-react'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useUI } from '@/contexts/ui-context'
@@ -207,6 +208,7 @@ const NAV_VARIANTS = {
             ],
             data: [
                 { href: '/dashboard/data-packages', label: 'Data Packages', icon: Package },
+                { href: '/dashboard/standard-bundles', label: 'Standard Bundles', icon: Wifi },
                 { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                 { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
                 { href: '/dashboard/results-checker', label: 'Results Checker', icon: Tag },
@@ -249,6 +251,7 @@ const NAV_VARIANTS = {
             ],
             data: [
                 { href: '/dashboard/data-packages', label: 'Data Packages', icon: Package },
+                { href: '/dashboard/standard-bundles', label: 'Standard Bundles', icon: Wifi },
                 { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                 { href: '/dashboard/sub/utilities', label: 'Pay Bills', icon: Receipt },
                 { href: '/dashboard/sub/rc', label: 'Results Checker', icon: Tag },

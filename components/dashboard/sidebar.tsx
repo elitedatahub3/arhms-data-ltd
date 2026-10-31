@@ -44,6 +44,7 @@ import {
     Loader2,
     Receipt,
     UserPlus,
+    Wifi,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -57,6 +58,7 @@ const userNavItems = [
     { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
     { href: '/dashboard/upgrade', label: 'Role Upgrade', icon: Crown },
     { href: '/dashboard/data-packages', label: 'Data Packages', icon: Package },
+    { href: '/dashboard/standard-bundles', label: 'Standard Bundles', icon: Wifi },
     { href: '/dashboard/results-checker', label: 'Results Checker', icon: Tag },
     { href: '/dashboard/afa-orders', label: 'AFA Registration', icon: BadgeCheck },
     { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
@@ -99,6 +101,7 @@ const adminNavItems = [
     { href: '/admin/up2u-checker', label: 'UP2U Checker', icon: ShieldCheck },
     { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
     { href: '/admin/airtime', label: 'Airtime', icon: Phone },
+    { href: '/admin/standard-bundles', label: 'Standard Bundles', icon: Wifi },
     { href: '/admin/utilities', label: 'Utility Bills', icon: Receipt },
     { href: '/admin/mashup-orders', label: 'Special MTN Mashup', icon: Zap },
     { href: '/admin/express-orders', label: 'EXPRESS MTN', icon: Zap },

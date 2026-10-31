@@ -111,6 +111,13 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ received: true })
             }
 
+            if (externalref.startsWith('BUNPAY-')) {
+                const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                console.log('[MoolreWebhook] Routing direct-pay bundle order:', externalref)
+                await processBundleDirectOrder(externalref)
+                return NextResponse.json({ received: true })
+            }
+
             // o. RETIRED: BOOST- was the classifieds listing boost. Caught rather than dropped:
             // unhandled it would reach the wallet top-up branch below and credit the payer.
             if (isRetiredBoostReference(externalref)) {

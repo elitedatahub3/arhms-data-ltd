@@ -47,6 +47,9 @@ export function flowFromReference(reference: string): string {
     if (ref.startsWith('AIR-')) return 'airtime'
     // Utilities split the same way: 'UTIL-' is money coming IN for a bill payment,
     // 'UTLB-' is the Commission Services bill payment going OUT.
+    // Money coming IN for a Standard Bundle. (BNDL- is the wallet order itself and
+    // never reaches a gateway.)
+    if (ref.startsWith('BUNPAY-')) return 'bundle_pay'
     if (ref.startsWith('UTIL-')) return 'utility_pay'
     if (ref.startsWith('UTLB-')) return 'utility'
     if (ref.startsWith('agent_upgrade_')) return 'agent_upgrade'
@@ -70,6 +73,7 @@ export const HUBTEL_LOG_FLOWS = [
     'airtime_pay',
     'utility',
     'utility_pay',
+    'bundle_pay',
     'unknown',
 ] as const
 

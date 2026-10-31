@@ -162,6 +162,11 @@ export async function GET(request: NextRequest) {
                                 throw new Error(airResult.error || 'Airtime order processing failed')
                             }
                             console.log(`[CronHubtel] ✅ Airtime order ${payment.reference} settled`)
+                        } else if (payment.reference.startsWith('BUNPAY-')) {
+                            const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
+                            const bunResult = await processBundleDirectOrder(payment.reference)
+                            if (!bunResult.success && !bunResult.alreadyProcessed) throw new Error(bunResult.error || 'Bundle order processing failed')
+                            console.log(`[CronHubtel] ✅ Bundle order ${payment.reference} settled`)
                         } else if (isRetiredBoostReference(payment.reference)) {
                             // Confirmed paid, but the product is gone. Throwing leaves the row pending so it is reported every run until refunded.
                             reportRetiredBoostPayment('CronHubtel', payment.reference)

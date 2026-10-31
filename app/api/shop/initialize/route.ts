@@ -20,7 +20,13 @@ import {
     markPaystackMomoPending,
     clearPaystackMomoPending,
 } from '@/lib/paystack-momo-checkout'
-import { checkMtnRegistration, registrationRequiredBody } from '@/lib/mtn-registration-gate'
+import {
+    checkMtnRegistration,
+    checkMtnRegistrationAdvisory,
+    isMtnGateEnabled,
+    MTN_UNREGISTERED_WARNING,
+    registrationRequiredBody,
+} from '@/lib/mtn-registration-gate'
 import { saveShopMeta, getShopMeta, deleteShopMeta } from '@/lib/shop-meta-store'
 import { ownerCostPrice } from '@/lib/shop-price-limits'
 
@@ -283,10 +289,25 @@ export async function POST(request: NextRequest) {
         // storefront, unlike the dashboard and the public API: a guest has no account,
         // so a held order is one they can neither track nor chase. Refusing the sale is
         // kinder than banking it against a two-week wait they cannot follow up on.
+        //
+        // With the Shop Storefronts toggle OFF the sale is not refused, but the guest is
+        // warned first ("Heads up") and must send acknowledgeUnregistered to go ahead.
+        // An OTP resubmit (existingRef) already got past the warning, so skip it there.
         if (orderType !== 'airtime') {
-            const gate = await checkMtnRegistration(db, cleanPhone, pkgNetwork, 'shop')
-            if (gate.gated) {
-                return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
+            if (await isMtnGateEnabled(db, 'shop')) {
+                const gate = await checkMtnRegistration(db, cleanPhone, pkgNetwork, 'shop')
+                if (gate.gated) {
+                    return NextResponse.json(registrationRequiredBody([gate.normalizedNumber]), { status: 409 })
+                }
+            } else if (body.acknowledgeUnregistered !== true && !existingRef) {
+                const advisory = await checkMtnRegistrationAdvisory(db, cleanPhone, pkgNetwork)
+                if (advisory.gated) {
+                    return NextResponse.json({
+                        error: "This number isn't registered with the network yet",
+                        code: MTN_UNREGISTERED_WARNING,
+                        phoneNumber: advisory.normalizedNumber,
+                    }, { status: 409 })
+                }
             }
         }
 

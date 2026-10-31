@@ -75,6 +75,9 @@ const rateLimiters = redis ? {
     supplierBalance: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(10, '1 m') }),
     // ── Orders & Purchases ─────────────────────────────────────
     airtimeCreate: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(5, '1 m') }),
+    bundleCreate: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(6, '1 m') }),
+    // Looser than bundleCreate: the Direct Pay dialog also calls this for its fee quote.
+    bundleGatewayInit: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(20, '1 m') }),
     ordersPurchase: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(5, '1 m') }),
     ordersBulk: new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(3, '1 m') }),
     // Open to every logged-in user, and each call consumes shared Agent Portal quota
@@ -485,6 +488,12 @@ export async function middleware(request: NextRequest) {
             identifier = ip
         } else if (pathname === '/api/airtime/create') {
             limiter = rateLimiters?.airtimeCreate
+            identifier = authUser?.id ? `${authUser.id}-${ip}` : ip
+        } else if (pathname === '/api/bundles/create') {
+            limiter = rateLimiters?.bundleCreate
+            identifier = authUser?.id ? `${authUser.id}-${ip}` : ip
+        } else if (pathname === '/api/bundles/gateway-init') {
+            limiter = rateLimiters?.bundleGatewayInit
             identifier = authUser?.id ? `${authUser.id}-${ip}` : ip
         } else if (pathname === '/api/orders/purchase') {
             limiter = rateLimiters?.ordersPurchase

@@ -77,9 +77,20 @@ interface FulfillmentSettings {
     bundleportal_networks: Record<string, boolean>
     /** network → supplier tried when the primary definitely refuses (lib/supplier-router). */
     fallback: Record<string, SupplierId | null>
+    /** BundlePortal's MTN route (lib/bundleportal-service MTN_ROUTES). Sizes it doesn't sell retry on plain mtn. */
+    bundleportal_mtn_route: BpMtnRoute
 }
 
 const NETWORKS = ['MTN', 'Telecel', 'AT-iShare', 'AT-BigTime']
+
+// Mirrors MTN_ROUTES in lib/bundleportal-service, kept local so this client page
+// doesn't bundle the supplier service.
+const BP_MTN_ROUTES = [
+    { id: 'mtn', label: 'MTN' },
+    { id: 'mtn_2', label: 'MTN 2' },
+    { id: 'mtn_3', label: 'MTN 3' },
+] as const
+type BpMtnRoute = typeof BP_MTN_ROUTES[number]['id']
 
 // Supplier id → the FulfillmentSettings key holding its per-network toggles.
 // Exactly one supplier may be active per network (the dispatcher halts on
@@ -164,7 +175,8 @@ export default function FulfillmentPage() {
         netpulse_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
         hendylinks_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
         bundleportal_networks: NETWORKS.reduce((acc, n) => ({ ...acc, [n]: false }), {}),
-        fallback: {}
+        fallback: {},
+        bundleportal_mtn_route: 'mtn'
     })
     const [isSavingSettings, setIsSavingSettings] = useState(false)
 
@@ -376,7 +388,10 @@ export default function FulfillmentPage() {
                 fallback: NETWORKS.reduce((acc, n) => ({
                     ...acc,
                     [n]: isSupplierId(dbFulfillmentSettings.fallback?.[n]) ? dbFulfillmentSettings.fallback[n] : null
-                }), {} as Record<string, SupplierId | null>)
+                }), {} as Record<string, SupplierId | null>),
+                bundleportal_mtn_route: BP_MTN_ROUTES.some(r => r.id === dbFulfillmentSettings.bundleportal_mtn_route)
+                    ? dbFulfillmentSettings.bundleportal_mtn_route
+                    : 'mtn'
             })
 
             // Load cron settings
@@ -445,7 +460,7 @@ export default function FulfillmentPage() {
         try {
             const updates = [
                 { key: 'auto_fulfillment_enabled', value: String(newSettings.is_global_enabled) },
-                { key: 'fulfillment_settings', value: JSON.stringify({ networks: newSettings.networks, codecraft_networks: newSettings.codecraft_networks, kingflexy_networks: newSettings.kingflexy_networks, eazydata_networks: newSettings.eazydata_networks, agentportal_networks: newSettings.agentportal_networks, netpulse_networks: newSettings.netpulse_networks, hendylinks_networks: newSettings.hendylinks_networks, bundleportal_networks: newSettings.bundleportal_networks, fallback: newSettings.fallback }) }
+                { key: 'fulfillment_settings', value: JSON.stringify({ networks: newSettings.networks, codecraft_networks: newSettings.codecraft_networks, kingflexy_networks: newSettings.kingflexy_networks, eazydata_networks: newSettings.eazydata_networks, agentportal_networks: newSettings.agentportal_networks, netpulse_networks: newSettings.netpulse_networks, hendylinks_networks: newSettings.hendylinks_networks, bundleportal_networks: newSettings.bundleportal_networks, fallback: newSettings.fallback, bundleportal_mtn_route: newSettings.bundleportal_mtn_route }) }
             ]
 
             const { error } = await (supabase
@@ -1739,7 +1754,33 @@ export default function FulfillmentPage() {
                                         <div className={`w-1.5 h-1.5 rounded-full ${settings.bundleportal_networks[net] ? 'bg-rose-500' : 'bg-gray-300'}`} />
                                         <span className="font-bold text-rose-600 dark:text-rose-400">BundlePortal</span>
                                         {settings.bundleportal_networks[net] && <span className="text-rose-500 font-semibold">· Active</span>}
+                                        {net === 'MTN' && settings.bundleportal_networks[net] && (
+                                            <span className="text-rose-500 font-semibold">· {BP_MTN_ROUTES.find(r => r.id === settings.bundleportal_mtn_route)?.label}</span>
+                                        )}
                                     </div>
+                                    {net === 'MTN' && (
+                                        <div className="mt-2">
+                                            <div className="flex rounded-md border overflow-hidden">
+                                                {BP_MTN_ROUTES.map(r => (
+                                                    <button
+                                                        key={r.id}
+                                                        id={`bp-mtn-route-${r.id}`}
+                                                        type="button"
+                                                        className={`flex-1 h-6 text-[10px] md:text-xs font-semibold transition-colors disabled:opacity-50 ${settings.bundleportal_mtn_route === r.id ? 'bg-rose-500 text-white' : 'hover:bg-muted'}`}
+                                                        onClick={() => {
+                                                            if (settings.bundleportal_mtn_route !== r.id) saveSettings({ ...settings, bundleportal_mtn_route: r.id })
+                                                        }}
+                                                        disabled={isSavingSettings}
+                                                    >
+                                                        {r.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground mt-1">
+                                                Orders use this BundlePortal route; sizes it doesn&apos;t sell retry on MTN.
+                                            </p>
+                                        </div>
+                                    )}
                                 </CardContent>
                             </Card>
                         ))}
@@ -1839,8 +1880,9 @@ export default function FulfillmentPage() {
                     <p className="text-xs text-muted-foreground">
                         When a switch is ON, an MTN number that isn&apos;t registered yet is <strong>refused
                         outright</strong> on that surface — nothing is charged and no order is created, and a bulk
-                        order is refused whole if any one number in it is unregistered. When OFF, that surface goes
-                        through silently. The developer API is never affected: those orders sit pending until MTN
+                        order is refused whole if any one number in it is unregistered. When OFF, the main site goes
+                        through silently, and shop storefronts show a &quot;Heads up&quot; warning the guest can
+                        proceed past. The developer API is never affected: those orders sit pending until MTN
                         enables the number. A number goes through if either Agent Portal has registered it or
                         BundlePortal accepts it, whichever supplier is currently fulfilling MTN, so some sales
                         your active supplier could have delivered may still be turned away. Checking a number also submits it for registration — turning a switch

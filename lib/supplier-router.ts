@@ -41,7 +41,7 @@ export interface SupplierResult {
 }
 
 type FulfillFn = (
-    network: string, phone: string, size: string, orderId: string, opts?: { isRetry?: boolean }
+    network: string, phone: string, size: string, orderId: string, opts?: { isRetry?: boolean; mtnRoute?: string }
 ) => Promise<SupplierResult>
 
 export interface SupplierDef {
@@ -232,7 +232,7 @@ export function supplierReference(supplier: SupplierDef, result: SupplierResult)
     return result.transactionId || result.reference
 }
 
-async function callSupplier(s: SupplierDef, p: FulfillParams): Promise<SupplierResult> {
+async function callSupplier(s: SupplierDef, p: FulfillParams, config: FulfillmentConfig): Promise<SupplierResult> {
     try {
         const { fulfillOrder } = await s.load()
         if (s.id === 'hendylinks') {
@@ -244,7 +244,11 @@ async function callSupplier(s: SupplierDef, p: FulfillParams): Promise<SupplierR
             // order_id is BundlePortal's idempotency key; reuse the storefront id the
             // first attempt used so a silent success comes back as a duplicate.
             const key = p.mode === 'retry' ? (p.shopOrderId || p.orderId) : p.orderId
-            return await fulfillOrder(p.network, p.phone, p.size, key, { isRetry: p.mode === 'retry' })
+            // bundleportal_mtn_route picks the MTN route (mtn / mtn_2 / mtn_3); the service validates it.
+            return await fulfillOrder(p.network, p.phone, p.size, key, {
+                isRetry: p.mode === 'retry',
+                mtnRoute: config.settings?.bundleportal_mtn_route,
+            })
         }
         return await fulfillOrder(p.network, p.phone, p.size, p.orderId)
     } catch (err: any) {
@@ -301,7 +305,7 @@ export async function fulfillWithFallback(p: FulfillParams): Promise<FulfillOutc
             await p.onBeforeAttempt(supplier).catch(err =>
                 console.error(`[SupplierRouter] onBeforeAttempt failed for ${p.orderId}:`, err?.message))
         }
-        const result = await callSupplier(supplier, p)
+        const result = await callSupplier(supplier, p, config)
         const attempt = attemptOf(supplier, result)
         added.push(attempt)
         last = { supplier, result }

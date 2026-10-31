@@ -134,6 +134,9 @@ export const USSD_REGISTRATION_UNVERIFIABLE_MESSAGE =
 /** Error code every gated route returns, and every client checks for. */
 export const MTN_NOT_REGISTERED = 'MTN_NOT_REGISTERED'
 
+/** Storefront with its gate OFF: a warning the guest may proceed past (acknowledgeUnregistered). */
+export const MTN_UNREGISTERED_WARNING = 'MTN_UNREGISTERED_WARNING'
+
 export type RegistrationStatus = 'registered' | 'unregistered' | 'unknown'
 
 export type RegistrationGateResult =
@@ -467,10 +470,38 @@ export async function checkMtnRegistrationBatch(
     entries: Array<{ phoneNumber: string; packageNetwork: string }>,
     surface: GateSurface
 ): Promise<BatchGateResult> {
-    const empty: BatchGateResult = { unregistered: [], statusByNumber: new Map() }
-
     const settings = await loadGateSettings(supabase)
-    if (!settings[surface]) return empty
+    if (!settings[surface]) return { unregistered: [], statusByNumber: new Map() }
+
+    return runRegistrationCheck(supabase, entries)
+}
+
+/** True when the admin toggle for `surface` is on, i.e. unregistered numbers are refused. */
+export async function isMtnGateEnabled(supabase: any, surface: GateSurface): Promise<boolean> {
+    const settings = await loadGateSettings(supabase)
+    return settings[surface]
+}
+
+/**
+ * Same check, ignoring the toggle. Used by the storefront when its gate is OFF: the sale
+ * is not refused, but the guest is warned ("Heads up") and must choose to proceed.
+ * Fails open like the gated form — an 'unknown' never warns.
+ */
+export async function checkMtnRegistrationAdvisory(
+    supabase: any,
+    rawPhone: string,
+    packageNetwork: string
+): Promise<RegistrationGateResult> {
+    const { unregistered } = await runRegistrationCheck(supabase, [{ phoneNumber: rawPhone, packageNetwork }])
+    if (unregistered.length === 0) return { gated: false }
+    return { gated: true, normalizedNumber: unregistered[0] }
+}
+
+async function runRegistrationCheck(
+    supabase: any,
+    entries: Array<{ phoneNumber: string; packageNetwork: string }>
+): Promise<BatchGateResult> {
+    const empty: BatchGateResult = { unregistered: [], statusByNumber: new Map() }
 
     const candidates = collectCandidates(entries)
     if (candidates.size === 0) return empty
