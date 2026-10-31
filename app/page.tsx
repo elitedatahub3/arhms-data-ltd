@@ -1,18 +1,18 @@
 import { getPublicConfig } from '@/lib/public-config'
 import { createServerClient } from '@/lib/supabase'
-import dynamic from 'next/dynamic'
+import nextDynamic from 'next/dynamic'
 import { unstable_cache } from 'next/cache'
 
 // Lazy-load the 44KB LandingClientShell so it's split into a separate
 // JS chunk — prevents tab crashes on low-end phones with 512MB RAM
-const LandingClientShell = dynamic(
+const LandingClientShell = nextDynamic(
     () => import('@/components/landing/LandingClientShell').then(m => ({ default: m.LandingClientShell })),
     { loading: () => null }
 )
 
 // Alternate homepage that advertises only the Results Checker product.
 // Rendered when the `landing_rc_only_enabled` admin toggle is ON.
-const ResultCheckerLanding = dynamic(
+const ResultCheckerLanding = nextDynamic(
     () => import('@/components/landing/ResultCheckerLanding').then(m => ({ default: m.ResultCheckerLanding })),
     { loading: () => null }
 )
@@ -21,7 +21,10 @@ const ResultCheckerLanding = dynamic(
 // NOTE: the root layout opts every route out of static rendering, so this export
 // on its own never cached anything — each landing view re-ran the queries below.
 // The data is cached explicitly with unstable_cache instead.
-export const revalidate = 600
+// force-dynamic makes that explicit for the build too: prerendering "/" kept
+// running past Next's 60s per-page limit and failed whole deploys, for a page
+// that is rendered per request anyway.
+export const dynamic = 'force-dynamic'
 const LANDING_DATA_REVALIDATE_SECONDS = 600
 
 // The oldest approved, active, priced shop — the fallback "Buy as Guest" target.
