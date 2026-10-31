@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { getCookieDomain } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { Redis } from '@upstash/redis'
@@ -9,6 +10,9 @@ import { Ratelimit } from '@upstash/ratelimit'
 // NEVER add a wildcard (*) here. Never reflect the raw Origin.
 // ============================================================
 const STATIC_ALLOWED_ORIGINS = [
+    'https://dataking.qzz.io',
+    'https://www.dataking.qzz.io',
+    'https://marketplace.dataking.qzz.io',
     'https://arhms-data-ltd.vercel.app',
     'https://project-d3owc.vercel.app',
     'https://arhmsgh.com',
@@ -126,6 +130,14 @@ function getSubdomain(request: NextRequest): string | null {
         return localMatch ? localMatch[1] : null
     }
 
+    // Dataking domain (dataking.qzz.io, www.dataking.qzz.io, marketplace.dataking.qzz.io)
+    if (host.endsWith('dataking.qzz.io')) {
+        if (parts.length > 3 && parts[0] !== 'www') {
+            return parts[0]
+        }
+        return null
+    }
+
     // Standard domain (arhmsgh.com, www.arhmsgh.com, marketplace.arhmsgh.com)
     if (host.endsWith('arhmsgh.com')) {
         // marketplace.arhmsgh.com -> 'marketplace'
@@ -179,6 +191,21 @@ function isTrustedOrigin(request: NextRequest, origin: string | null): boolean {
     if (!origin) return false
     // Static allowlist + env-derived origins
     if (ALLOWED_ORIGINS.has(origin) || origin === request.nextUrl.origin) return true
+
+    // Check if origin hostname matches or is a subdomain of dataking.qzz.io or arhmsgh.com
+    try {
+        const originUrl = new URL(origin)
+        const host = originUrl.hostname
+        if (
+            host === 'dataking.qzz.io' ||
+            host.endsWith('.dataking.qzz.io') ||
+            host === 'arhmsgh.com' ||
+            host.endsWith('.arhmsgh.com')
+        ) {
+            return true
+        }
+    } catch {}
+
     // x-forwarded-host check: Vercel proxy may normalize the host so the Origin
     // header matches the forwarded host rather than nextUrl.origin.
     const forwardedHost = request.headers.get('x-forwarded-host')
@@ -237,11 +264,55 @@ export async function middleware(request: NextRequest) {
     // /auth/* keeps its old behaviour of going to
     // the same path on the main domain, so an old login link still lands somewhere useful.
     if (isMarketplace) {
-        const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://arhmsgh.com'
+        const mainDomain = process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io'
         const target = pathname.startsWith('/auth')
             ? new URL(pathname + request.nextUrl.search, mainDomain)
             : new URL('/' + request.nextUrl.search, mainDomain)
         return NextResponse.redirect(target)
+    }
+
+    // === REFERRAL LINK CAPTURE ===
+    // ?ref=CODE is stashed into a cookie and stripped from the URL, ABOVE every
+    // guard below. This is the ONLY place in the app that writes this cookie.
+    //
+    // It has to run first, for three reasons:
+    //   * An already-signed-in visitor tapping a friend's link is bounced to
+    //     /dashboard by the /auth/* guard further down. Capturing here means the
+    //     code survives that bounce instead of being silently eaten.
+    //   * Google OAuth loses query params entirely — Supabase matches redirectTo
+    //     against an allow-list, so a query string breaks the exact match (see the
+    //     mkt_oauth_next cookie in components/google-sign-in-button.tsx). A
+    //     first-party cookie is the established workaround in this codebase.
+    //   * /auth/signup is statically prerendered, so the page reads this cookie via
+    //     document.cookie rather than useSearchParams — which would force a
+    //     Suspense boundary and change the build output.
+    //
+    // Redirecting to the same URL minus ?ref also stops a user who re-shares the
+    // page they landed on from leaking someone else's code.
+    //
+    // Not httpOnly: the signup page reads it to render "Referred by X". A user can
+    // therefore forge it, but all that does is attribute THEMSELVES to a referrer
+    // of their choosing — identical to typing a code into the form. Zero privilege.
+    //
+    // The name is duplicated from REFERRAL_COOKIE in lib/referrals.ts rather than
+    // imported: that module pulls in node:crypto for IP hashing, which must not be
+    // dragged into the edge middleware bundle.
+    const refParam = request.nextUrl.searchParams.get('ref')
+    if (refParam && !pathname.startsWith('/api') && /^[A-Z0-9]{5,24}$/i.test(refParam)) {
+        const cleanUrl = new URL(request.url)
+        cleanUrl.searchParams.delete('ref')
+        const stash = NextResponse.redirect(cleanUrl)
+        const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.hostname
+        const refCookieDomain = getCookieDomain(host.split(':')[0])
+        stash.cookies.set('arhms_ref', refParam.toUpperCase(), {
+            path: '/',
+            maxAge: 60 * 60 * 24 * 30,
+            sameSite: 'lax',
+            httpOnly: false,
+            secure: process.env.NODE_ENV === 'production',
+            ...(refCookieDomain ? { domain: refCookieDomain } : {}),
+        })
+        return addNoCacheHeaders(stash)
     }
 
     // === RETIRED: CLASSIFIEDS AND MARKETPLACE PATHS ===
@@ -277,6 +348,9 @@ export async function middleware(request: NextRequest) {
         request: { headers: request.headers },
     })
 
+    const requestHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.hostname
+    const authCookieDomain = getCookieDomain(requestHost.split(':')[0])
+
     const supabase = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -288,9 +362,10 @@ export async function middleware(request: NextRequest) {
                 setAll(cookiesToSet) {
                     cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
                     res = NextResponse.next({ request })
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        res.cookies.set(name, value, options)
-                    )
+                    cookiesToSet.forEach(({ name, value, options }) => {
+                        const opts = { path: '/', ...options, ...(authCookieDomain && { domain: authCookieDomain }) }
+                        res.cookies.set(name, value, opts)
+                    })
                 },
             },
         }
@@ -595,6 +670,7 @@ export async function middleware(request: NextRequest) {
                         httpOnly: true,
                         sameSite: 'lax',
                         secure: process.env.NODE_ENV === 'production',
+                        ...(authCookieDomain ? { domain: authCookieDomain } : {}),
                     })
                 }
             } catch (error) {
@@ -636,6 +712,7 @@ export async function middleware(request: NextRequest) {
                         httpOnly: true,
                         sameSite: 'lax',
                         secure: process.env.NODE_ENV === 'production',
+                        ...(authCookieDomain ? { domain: authCookieDomain } : {}),
                     })
                 } catch (error) {
                     console.error('[Middleware] Sub-agent check failed, failing open:', error)

@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { calculatePaystackFee, generateReferenceCode } from '@/lib/utils'
@@ -73,11 +73,25 @@ export async function POST(request: NextRequest) {
         let shop: { id: string; shop_name: string; owner_id: string; utility_fee_percent: number; utilities_enabled: boolean } | null = null
 
         if (typeof shopSlug === 'string' && shopSlug.trim()) {
-            const { data: shopRow } = await supabase
+            let shopRow: any = null
+            const shopRes = await supabase
                 .from('shop_profiles')
                 .select('id, shop_name, owner_id, utility_fee_percent, utilities_enabled, approval_status, is_active')
                 .eq('shop_slug', shopSlug.trim())
                 .maybeSingle()
+
+            if (shopRes?.data) {
+                shopRow = shopRes.data
+            } else if (shopRes?.error) {
+                const fallbackRes = await supabase
+                    .from('shop_profiles')
+                    .select('id, shop_name, owner_id, approval_status, is_active')
+                    .eq('shop_slug', shopSlug.trim())
+                    .maybeSingle()
+                if (fallbackRes?.data) {
+                    shopRow = { ...fallbackRes.data, utility_fee_percent: 0, utilities_enabled: false }
+                }
+            }
 
             if (!shopRow || shopRow.approval_status !== 'approved' || shopRow.is_active !== true) {
                 return NextResponse.json({ error: 'Shop not found' }, { status: 404 })
@@ -504,7 +518,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: moolreResponse.error || 'Failed to initialize mobile money payment' }, { status: 500 })
         }
 
-        if (moolreResponse.status === '200_OTP_REQ') {
+        if (moolreResponse.status === '200_OTP_REQ' || (!otpCode && moolreResponse.success)) {
             return NextResponse.json({
                 success: true,
                 gateway: 'moolre',

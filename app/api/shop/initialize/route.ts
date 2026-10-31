@@ -336,6 +336,26 @@ export async function POST(request: NextRequest) {
 
         // ── PAYSTACK BRANCH ──────────────────────────────────────────────────────
         if (shopProvider === 'paystack') {
+            const requestOrigin = request.headers.get('origin') ||
+                (request.headers.get('x-forwarded-host') ? `${request.headers.get('x-forwarded-proto') || 'https'}://${request.headers.get('x-forwarded-host')}` : null) ||
+                (request.headers.get('host') ? `https://${request.headers.get('host')}` : null) ||
+                process.env.NEXT_PUBLIC_APP_URL ||
+                'https://www.dataking.qzz.io'
+
+                const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        email: validatedGuestEmail || `guest-${cleanPhone}@checkout.dataking.qzz.io`,
+                        amount: totalAmount, // already in pesewas
+                        reference: shopRef,
+                        callback_url: `${requestOrigin.replace(/\/$/, '')}/shop/${shopSlug}/success?reference=${shopRef}`,
+                        metadata: fullMetadata,
+                    }),
+                })
             // Paystack echoes the metadata back, but the stored copy is what opens the
             // ledger row the reconciliation cron settles from if no webhook arrives.
             if (!existingRef) {
@@ -559,7 +579,7 @@ export async function POST(request: NextRequest) {
             console.log('[ShopInit] OTP verified successfully. Sending follow-up payment request.')
             moolreResponse = await initiatePayment({
                 amount: totalAmount / 100,
-                payerPhone: cleanPhone,
+                payerPhone: payerClean,
                 channel: channelId,
                 externalRef: shopRef,
             })
@@ -587,7 +607,7 @@ export async function POST(request: NextRequest) {
             console.error('[ShopInit] could not record duplicate-click guard:', e)
         }
 
-        return NextResponse.json({ success: true, gateway: 'moolre', reference: shopRef, message: 'Payment prompt sent to your phone. Please approve to complete your order.' })
+        return NextResponse.json({ success: true, gateway: 'moolre', reference: shopRef, otpRequired: false, message: 'Payment prompt sent to your phone. Please approve to complete your order.' })
     } catch (error) {
         console.error('[Shop Initialize] Error:', error)
         // Order metadata lives in Redis, so an exhausted quota or an outage stops

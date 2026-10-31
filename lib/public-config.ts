@@ -97,7 +97,7 @@ const STOREFRONT_AIRTIME_KEYS = PUBLIC_SETTING_KEYS.filter(key =>
 )
 
 const fallbackConfig: PublicConfigData = {
-    guestStorefrontUrl: 'https://arhmsgh.com/shop/demo',
+    guestStorefrontUrl: '/shop/demo',
     whatsappGroupLink: '',
     whatsappChannelLink: '',
     whatsappAdminNumber: '',
