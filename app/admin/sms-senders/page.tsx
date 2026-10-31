@@ -276,7 +276,7 @@ function SenderQueue() {
                             <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                     <p className="font-mono text-xl font-black">{row.sender}</p>
-                                    {providerSenders && !providerSenders.some(x => x.toLowerCase() === row.sender.toLowerCase()) && (
+                                    {providerSenders && !providerSenders.some(x => x.toLowerCase().replace(/[^a-z0-9]/g, '') === row.sender.toLowerCase().replace(/[^a-z0-9]/g, '')) && (
                                         <p className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-amber-100 dark:bg-amber-950/40 px-2 py-1 text-xs font-semibold text-amber-800 dark:text-amber-300">
                                             <AlertTriangle className="w-3.5 h-3.5" />
                                             Not registered on the KingFlexy account — sends under it will be rejected

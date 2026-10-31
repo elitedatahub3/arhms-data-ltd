@@ -170,6 +170,32 @@ function configError(): string | null {
     return null
 }
 
+// ─── Sender spelling ─────────────────────────────────────────────────────────
+// KingFlexy matches the sender EXACTLY, and the networks register names
+// without spaces: a shop that asked for "AMINEX HUB" is live there as
+// "AMINEXHUB", and sending the spaced form comes back 400 "Sender ID is not
+// approved for your account" for every recipient. So the name we hold is
+// translated to KingFlexy's own spelling before each send.
+const SENDERS_TTL_MS = 5 * 60_000
+let registeredSendersCache: { at: number; senders: string[] } | null = null
+
+function senderKey(name: string): string {
+    return name.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+async function resolveKingFlexySender(sender: string): Promise<string> {
+    if (!registeredSendersCache || Date.now() - registeredSendersCache.at > SENDERS_TTL_MS) {
+        const list = await fetchKingFlexySenders()
+        // A failed lookup is not cached, and the send goes out as stored.
+        if (list.ok) registeredSendersCache = { at: Date.now(), senders: list.senders.map(s => s.sender) }
+    }
+    const registered = registeredSendersCache?.senders ?? []
+    if (registered.includes(sender)) return sender
+
+    const key = senderKey(sender)
+    return registered.find(s => senderKey(s) === key) ?? sender
+}
+
 export interface KfBulkResult {
     ok: boolean
     /** Their campaign id — our handle for delivery reports later. */
@@ -205,10 +231,12 @@ export async function sendKingFlexyBulkSMS(params: {
         return { ok: false, sent: 0, failed: params.recipients.length, error: `A single call carries at most ${KF_MAX_RECIPIENTS_PER_CALL} recipients` }
     }
 
+    const sender = params.sender ? await resolveKingFlexySender(params.sender) : undefined
+
     const res = await kfRequest('POST', '/sms/send', {
         message: params.message,
         recipients: params.recipients,
-        ...(params.sender ? { sender: params.sender } : {}),
+        ...(sender ? { sender } : {}),
         ...(params.reference ? { reference: params.reference } : {}),
     })
 
@@ -225,7 +253,9 @@ export async function sendKingFlexyBulkSMS(params: {
         if (res.status === 400) {
             // Nearly always the sender ID: it must be registered on OUR
             // KingFlexy account, not merely approved in our own admin.
-            console.error('[KingFlexySMS] Rejected (400):', message, '— sender:', params.sender)
+            console.error('[KingFlexySMS] Rejected (400):', message, '— sender:', sender, sender !== params.sender ? `(stored as "${params.sender}")` : '')
+            // A name registered since the list was cached should not wait out the TTL.
+            registeredSendersCache = null
         }
         if (res.status === 403) {
             console.error('[KingFlexySMS] 403 — wrong key type or account suspended at KingFlexy.')
