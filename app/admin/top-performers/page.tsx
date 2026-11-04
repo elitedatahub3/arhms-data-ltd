@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { cn, formatCurrency } from '@/lib/utils'
-import { OfficialStrip, RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
+import { RankRow, leaderTotalOf, prizeFor } from '@/components/top-performers/RankRow'
 
 type Board = 'dashboard' | 'shop'
 
@@ -33,7 +33,7 @@ interface Winner {
     claimed_at: string | null
 }
 
-interface PreviewEntry { rank: number | null; name: string; total: number; isOfficial: boolean }
+interface PreviewEntry { rank: number | null; position: number; name: string; total: number; isOfficial: boolean }
 
 const BOARD_LABEL: Record<Board, string> = { dashboard: 'Dashboard Sales', shop: 'Shop Sales' }
 const PLACES = ['1st', '2nd', '3rd']
@@ -241,7 +241,7 @@ export default function AdminTopPerformersPage() {
                                                 {competitors.length === 0
                                                     ? 'Nobody has a completed sale yet'
                                                     : second
-                                                        ? `${first.name} leads by ${formatCurrency(first.total - second.total)}`
+                                                        ? `${first.name} leads the prize race by ${formatCurrency(first.total - second.total)}`
                                                         : `${first.name} is the only seller so far`}
                                             </p>
                                         </div>
@@ -249,18 +249,22 @@ export default function AdminTopPerformersPage() {
                                             Top {competitors.length}
                                         </span>
                                     </div>
-                                    {competitors.length === 0 ? (
+                                    {entries.length === 0 ? (
                                         <p className="rounded-xl bg-card px-3 py-8 text-center text-sm text-muted-foreground">
                                             The first completed sale this month takes the top spot.
                                         </p>
                                     ) : (
                                         <ol className="max-h-[34rem] space-y-0.5 overflow-y-auto rounded-xl bg-card p-1.5 pr-2">
-                                            {competitors.map(e => (
-                                                <RankRow key={e.rank} entry={e} leaderTotal={leaderTotalOf(competitors)} />
+                                            {entries.map(e => (
+                                                <RankRow
+                                                    key={e.position}
+                                                    entry={e}
+                                                    leaderTotal={leaderTotalOf(entries)}
+                                                    prize={config.rankingsOnly ? '' : prizeFor(e, config.prizes[board])}
+                                                />
                                             ))}
                                         </ol>
                                     )}
-                                    <OfficialStrip entries={entries.filter(e => e.isOfficial)} />
                                 </div>
                             )
                         })}

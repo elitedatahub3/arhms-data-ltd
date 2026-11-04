@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
-import { getUserRank, monthKey, parseMonthParam, readTopPerformersConfig, type Board } from '@/lib/top-performers'
+import { getBoard, getUserRank, monthKey, parseMonthParam, readTopPerformersConfig, type Board } from '@/lib/top-performers'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,8 +33,16 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        const rank = await getUserRank(board, month, user.id)
-        return NextResponse.json({ board, month, ...rank }, { headers: { 'Cache-Control': 'private, no-store' } })
+        const [rank, entries] = await Promise.all([getUserRank(board, month, user.id), getBoard(board, month)])
+        // Place on the board as sellers see it: official accounts count toward it.
+        // Off the top 30, it is the prize rank plus every official account ahead.
+        const listed = entries.find(e => e.userId === user.id)
+        const position = listed
+            ? listed.position
+            : rank.rank === null && !rank.isOfficial
+                ? null
+                : (rank.rank ?? 0) + entries.filter(e => e.isOfficial && e.total > rank.total).length + (rank.isOfficial ? 1 : 0)
+        return NextResponse.json({ board, month, ...rank, position }, { headers: { 'Cache-Control': 'private, no-store' } })
     } catch (error: any) {
         console.error('[TopPerformers] Rank read failed:', error?.message || error)
         return NextResponse.json({ error: 'Could not check your rank right now.' }, { status: 500 })

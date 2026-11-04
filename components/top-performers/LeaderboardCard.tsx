@@ -4,13 +4,15 @@ import { useState } from 'react'
 import { Award, CalendarClock, Crown, Loader2, Medal, RefreshCw, Search, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn, formatCurrency } from '@/lib/utils'
-import { OfficialStrip, RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
+import { RankRow, leaderTotalOf, prizeFor } from '@/components/top-performers/RankRow'
 
 export type Board = 'dashboard' | 'shop'
 
 export interface LeaderboardEntry {
-    /** null for official accounts: shown by sales, never ranked or awarded. */
+    /** Prize rank. null for official accounts, which never win. */
     rank: number | null
+    /** Place on the board by sales, official accounts included. */
+    position: number
     name: string
     total: number
     isOfficial: boolean
@@ -56,6 +58,7 @@ const PLACE_STYLES = [
 ]
 
 function PodiumColumn({ entry, place, prize }: { entry?: LeaderboardEntry; place: number; prize: string }) {
+    const official = !!entry?.isOfficial
     const style = PLACE_STYLES[place - 1]
     const Icon = style.icon
     return (
@@ -74,7 +77,11 @@ function PodiumColumn({ entry, place, prize }: { entry?: LeaderboardEntry; place
                 <span className="mt-1.5 w-full truncate text-xs font-bold sm:text-sm">{entry ? entry.name : '—'}</span>
                 <span className="text-[11px] font-semibold opacity-80">{entry ? formatCurrency(entry.total) : 'Open spot'}</span>
             </div>
-            {prize && (
+            {official ? (
+                <span className="w-full rounded-lg bg-primary/10 px-1.5 py-1 text-center text-[10px] font-bold leading-tight text-primary">
+                    Official, no prize
+                </span>
+            ) : prize && (
                 <span className={cn('w-full rounded-lg px-1.5 py-1 text-center text-[10px] font-bold uppercase leading-tight', style.chip)}>
                     {prize}
                 </span>
@@ -101,11 +108,16 @@ export function LeaderboardCard({
     const [checking, setChecking] = useState(false)
     const [myRank, setMyRank] = useState<string | null>(null)
 
-    const byRank = (rank: number) => entries.find(e => e.rank === rank)
-    // Ranked sellers off the podium; official accounts get their own strip below.
-    const rest = entries.filter(e => e.rank !== null && e.rank > 3)
-    const officials = entries.filter(e => e.isOfficial)
+    const atPlace = (position: number) => entries.find(e => e.position === position)
+    const rest = entries.filter(e => e.position > 3)
     const leaderTotal = leaderTotalOf(entries)
+
+    // Podium prize chips. Official accounts skip the prize, so prizes go to the
+    // competing sellers in order; an empty spot shows the next prize up for grabs.
+    const podiumPrizes = (() => {
+        let next = 0
+        return [1, 2, 3].map(place => (atPlace(place)?.isOfficial ? '' : prizes[next++] || ''))
+    })()
 
     const checkMyRank = async () => {
         setChecking(true)
@@ -115,9 +127,9 @@ export function LeaderboardCard({
             if (!res.ok) throw new Error(body.error || 'Could not check your rank')
             setMyRank(
                 body.isOfficial
-                    ? `Official accounts are shown for reference and are not ranked. Sales in ${monthLabel}: ${formatCurrency(body.total)}.`
+                    ? `You are #${body.position} with ${formatCurrency(body.total)} in ${monthLabel}. Official accounts do not win prizes.`
                     : body.rank
-                    ? `You are #${body.rank} of ${body.participants} with ${formatCurrency(body.total)} in ${monthLabel}.`
+                    ? `You are #${body.position ?? body.rank} with ${formatCurrency(body.total)} in ${monthLabel}.`
                     : `You have no completed ${board === 'shop' ? 'shop sales' : 'purchases'} in ${monthLabel} yet.`
             )
         } catch (e: any) {
@@ -164,9 +176,9 @@ export function LeaderboardCard({
 
             {/* Podium: 2 - 1 - 3 */}
             <div className="mx-auto mt-6 flex w-full max-w-md items-end gap-2 sm:gap-3">
-                <PodiumColumn entry={byRank(2)} place={2} prize={prizes[1]} />
-                <PodiumColumn entry={byRank(1)} place={1} prize={prizes[0]} />
-                <PodiumColumn entry={byRank(3)} place={3} prize={prizes[2]} />
+                <PodiumColumn entry={atPlace(2)} place={2} prize={podiumPrizes[1]} />
+                <PodiumColumn entry={atPlace(1)} place={1} prize={podiumPrizes[0]} />
+                <PodiumColumn entry={atPlace(3)} place={3} prize={podiumPrizes[2]} />
             </div>
 
             <div className="mt-6 flex-1 rounded-2xl border border-border/70 bg-secondary/30 p-2">
@@ -179,11 +191,10 @@ export function LeaderboardCard({
                 ) : (
                     <ol className="max-h-[30rem] space-y-0.5 overflow-y-auto pr-1">
                         {rest.map(entry => (
-                            <RankRow key={entry.rank} entry={entry} leaderTotal={leaderTotal} />
+                            <RankRow key={entry.position} entry={entry} leaderTotal={leaderTotal} prize={prizeFor(entry, prizes)} />
                         ))}
                     </ol>
                 )}
-                <OfficialStrip entries={officials} />
             </div>
 
             <div className="mt-4 space-y-2">

@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     const lastMonth = previousMonthKey()
 
     const strip = (entries: BoardEntry[]) =>
-        entries.map(({ rank, name, total, userId, isOfficial }) => ({ rank, name, total, isOfficial, isMe: userId === user.id }))
+        entries.map(({ rank, position, name, total, userId, isOfficial }) => ({ rank, position, name, total, isOfficial, isMe: userId === user.id }))
 
     try {
         const [dashboard, shop, lastDashboard, lastShop, { data: winnerRows }] = await Promise.all([

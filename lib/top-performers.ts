@@ -48,8 +48,10 @@ export const DEFAULT_CONFIG: TopPerformersConfig = {
 }
 
 export interface BoardEntry {
-    /** Competitive rank. null for official (admin) accounts, which show but never compete. */
+    /** Prize rank among competing sellers. null for official (admin) accounts, which never win. */
     rank: number | null
+    /** Place on the board by sales, counting everyone (official accounts included). What sellers see. */
+    position: number
     userId: string
     name: string
     total: number
@@ -179,8 +181,10 @@ export async function fetchBoard(board: Board, key: string, limit = BOARD_LIMIT)
         p_limit: limit,
     })
     if (error) throw new Error(`top_performers_month(${board}, ${key}): ${error.message}`)
-    return ((data || []) as any[]).map(row => ({
+    // Rows arrive ordered by sales, so the place on the board is the row's index.
+    return ((data || []) as any[]).map((row, i) => ({
         rank: row.rank == null ? null : Number(row.rank),
+        position: i + 1,
         userId: row.user_id,
         name: row.display_name,
         total: Number(row.total),
@@ -193,8 +197,8 @@ export function getBoard(board: Board, key: string): Promise<BoardEntry[]> {
     const current = key === monthKey()
     return unstable_cache(
         () => fetchBoard(board, key),
-        // v2: official accounts included, rank nullable.
-        ['top-performers-board-v2', board, key],
+        // v2: official accounts included, rank nullable. v3: position.
+        ['top-performers-board-v3', board, key],
         { revalidate: current ? 300 : 3600, tags: [TOP_PERFORMERS_CACHE_TAG] }
     )()
 }

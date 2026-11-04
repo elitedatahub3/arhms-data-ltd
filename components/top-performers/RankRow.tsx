@@ -4,8 +4,10 @@ import { BadgeCheck } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 
 export interface RankRowEntry {
-    /** null for official accounts: shown by sales, never ranked. */
+    /** Prize rank. null for official accounts, which never win. */
     rank: number | null
+    /** Place on the board by sales, official accounts included. */
+    position: number
     name: string
     total: number
     isOfficial?: boolean
@@ -21,50 +23,48 @@ const MEDAL: Record<number, { chip: string; bar: string }> = {
 
 /**
  * One leaderboard line: place, name, sales, and a thin bar showing how close the
- * seller is to the leader, so the race reads at a glance down the list.
+ * seller is to #1, so the race reads at a glance down the list.
  *
- * `leaderTotal` is the top COMPETING seller's total. Official rows that outsell
- * them simply fill the bar.
+ * `prize` is set when this seller holds a prize place but sits below the podium
+ * (official accounts above them took the top spots).
  */
-export function RankRow({ entry, leaderTotal }: { entry: RankRowEntry; leaderTotal: number }) {
-    const medal = entry.rank ? MEDAL[entry.rank] : undefined
+export function RankRow({ entry, leaderTotal, prize }: { entry: RankRowEntry; leaderTotal: number; prize?: string }) {
+    const medal = MEDAL[entry.position]
     const share = leaderTotal > 0 ? Math.min(100, Math.max(3, (entry.total / leaderTotal) * 100)) : 0
 
     return (
         <li
             className={cn(
                 'rounded-xl px-3 py-2.5 transition-colors',
-                // Official rows live in their own strip and never get the "you" highlight —
-                // a ring there reads as "this one is winning".
-                entry.isMe && !entry.isOfficial && 'bg-primary/10 ring-1 ring-primary/40',
-                !entry.isMe && !entry.isOfficial && 'hover:bg-secondary/60'
+                entry.isMe ? 'bg-primary/10 ring-1 ring-primary/40' : 'hover:bg-secondary/60'
             )}
         >
             <div className="flex items-center gap-3">
-                {entry.isOfficial ? (
-                    <span
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary"
-                        title="Official account: not ranked"
-                    >
-                        <BadgeCheck className="h-4 w-4" />
-                    </span>
-                ) : (
-                    <span
-                        className={cn(
-                            'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums',
-                            medal ? medal.chip : 'bg-card text-muted-foreground shadow-sm ring-1 ring-border/60'
-                        )}
-                    >
-                        {entry.rank}
-                    </span>
-                )}
+                <span
+                    className={cn(
+                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums',
+                        medal ? medal.chip : 'bg-card text-muted-foreground shadow-sm ring-1 ring-border/60'
+                    )}
+                >
+                    {entry.position}
+                </span>
 
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
                     <span className={cn('truncate text-sm text-foreground', medal ? 'font-bold' : 'font-semibold')}>
                         {entry.name}
                     </span>
                     {entry.isOfficial && (
-                        <span className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">Official</span>
+                        <span
+                            className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary"
+                            title="Official ARHMS account: does not win prizes"
+                        >
+                            <BadgeCheck className="h-3 w-3" /> Official
+                        </span>
+                    )}
+                    {prize && (
+                        <span className="shrink-0 truncate rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
+                            {prize}
+                        </span>
                     )}
                     {entry.isMe && <span className="shrink-0 text-xs font-bold text-primary">You</span>}
                 </span>
@@ -74,35 +74,22 @@ export function RankRow({ entry, leaderTotal }: { entry: RankRowEntry; leaderTot
                 </span>
             </div>
 
-            {/* Official accounts are not in the race, so they get no progress bar. */}
-            {!entry.isOfficial && (
-                <div className="ml-10 mt-1.5 h-1 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
-                    <div className={cn('h-full rounded-full', medal ? medal.bar : 'bg-primary/60')} style={{ width: `${share}%` }} />
-                </div>
-            )}
+            <div className="ml-10 mt-1.5 h-1 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
+                <div className={cn('h-full rounded-full', medal ? medal.bar : 'bg-primary/60')} style={{ width: `${share}%` }} />
+            </div>
         </li>
     )
 }
 
-/**
- * Official accounts in their own strip under the ranked list, so the numbered
- * places run unbroken and nobody reads an admin shop as the leader.
- */
-export function OfficialStrip({ entries }: { entries: RankRowEntry[] }) {
-    if (entries.length === 0) return null
-    return (
-        <div className="mt-3 rounded-xl border border-dashed border-border bg-card/60 p-1.5">
-            <p className="px-3 pb-1 pt-1.5 text-xs font-semibold text-muted-foreground">Official accounts (not ranked)</p>
-            <ul className="space-y-0.5">
-                {entries.map(e => (
-                    <RankRow key={`official-${e.name}-${e.total}`} entry={e} leaderTotal={0} />
-                ))}
-            </ul>
-        </div>
-    )
+/** The #1 total on the board: the 100% mark for every bar. */
+export function leaderTotalOf(entries: RankRowEntry[]): number {
+    return Math.max(0, ...entries.map(e => e.total))
 }
 
-/** The top competing seller's total: the 100% mark for every bar. */
-export function leaderTotalOf(entries: RankRowEntry[]): number {
-    return entries.find(e => e.rank === 1)?.total ?? Math.max(0, ...entries.filter(e => !e.isOfficial).map(e => e.total))
+/**
+ * The prize a seller holds, if any. Official accounts never take one, so prizes
+ * follow the competing sellers wherever they sit on the board.
+ */
+export function prizeFor(entry: RankRowEntry, prizes: readonly string[]): string {
+    return !entry.isOfficial && entry.rank !== null && entry.rank <= 3 ? prizes[entry.rank - 1] || '' : ''
 }
