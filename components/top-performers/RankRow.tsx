@@ -34,8 +34,9 @@ export function RankRow({ entry, leaderTotal }: { entry: RankRowEntry; leaderTot
         <li
             className={cn(
                 'rounded-xl px-3 py-2.5 transition-colors',
-                entry.isMe && 'bg-primary/10 ring-1 ring-primary/40',
-                entry.isOfficial && !entry.isMe && 'bg-primary/[0.04]',
+                // Official rows live in their own strip and never get the "you" highlight —
+                // a ring there reads as "this one is winning".
+                entry.isMe && !entry.isOfficial && 'bg-primary/10 ring-1 ring-primary/40',
                 !entry.isMe && !entry.isOfficial && 'hover:bg-secondary/60'
             )}
         >
@@ -73,17 +74,35 @@ export function RankRow({ entry, leaderTotal }: { entry: RankRowEntry; leaderTot
                 </span>
             </div>
 
-            <div className="ml-10 mt-1.5 h-1 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
-                <div
-                    className={cn('h-full rounded-full', entry.isOfficial ? 'bg-primary/40' : medal ? medal.bar : 'bg-primary/60')}
-                    style={{ width: `${share}%` }}
-                />
-            </div>
+            {/* Official accounts are not in the race, so they get no progress bar. */}
+            {!entry.isOfficial && (
+                <div className="ml-10 mt-1.5 h-1 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
+                    <div className={cn('h-full rounded-full', medal ? medal.bar : 'bg-primary/60')} style={{ width: `${share}%` }} />
+                </div>
+            )}
         </li>
+    )
+}
+
+/**
+ * Official accounts in their own strip under the ranked list, so the numbered
+ * places run unbroken and nobody reads an admin shop as the leader.
+ */
+export function OfficialStrip({ entries }: { entries: RankRowEntry[] }) {
+    if (entries.length === 0) return null
+    return (
+        <div className="mt-3 rounded-xl border border-dashed border-border bg-card/60 p-1.5">
+            <p className="px-3 pb-1 pt-1.5 text-xs font-semibold text-muted-foreground">Official accounts (not ranked)</p>
+            <ul className="space-y-0.5">
+                {entries.map(e => (
+                    <RankRow key={`official-${e.name}-${e.total}`} entry={e} leaderTotal={0} />
+                ))}
+            </ul>
+        </div>
     )
 }
 
 /** The top competing seller's total: the 100% mark for every bar. */
 export function leaderTotalOf(entries: RankRowEntry[]): number {
-    return entries.find(e => e.rank === 1)?.total ?? Math.max(0, ...entries.map(e => e.total))
+    return entries.find(e => e.rank === 1)?.total ?? Math.max(0, ...entries.filter(e => !e.isOfficial).map(e => e.total))
 }

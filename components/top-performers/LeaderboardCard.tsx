@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Award, CalendarClock, Crown, Loader2, Medal, RefreshCw, Search, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn, formatCurrency } from '@/lib/utils'
-import { RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
+import { OfficialStrip, RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
 
 export type Board = 'dashboard' | 'shop'
 
@@ -102,9 +102,9 @@ export function LeaderboardCard({
     const [myRank, setMyRank] = useState<string | null>(null)
 
     const byRank = (rank: number) => entries.find(e => e.rank === rank)
-    // Everyone off the podium, by sales — official accounts included wherever they fall.
-    const rest = entries.filter(e => e.rank === null || e.rank > 3)
-    const hasOfficial = entries.some(e => e.isOfficial)
+    // Ranked sellers off the podium; official accounts get their own strip below.
+    const rest = entries.filter(e => e.rank !== null && e.rank > 3)
+    const officials = entries.filter(e => e.isOfficial)
     const leaderTotal = leaderTotalOf(entries)
 
     const checkMyRank = async () => {
@@ -179,14 +179,11 @@ export function LeaderboardCard({
                 ) : (
                     <ol className="max-h-[30rem] space-y-0.5 overflow-y-auto pr-1">
                         {rest.map(entry => (
-                            <RankRow
-                                key={entry.rank ?? `official-${entry.name}-${entry.total}`}
-                                entry={entry}
-                                leaderTotal={leaderTotal}
-                            />
+                            <RankRow key={entry.rank} entry={entry} leaderTotal={leaderTotal} />
                         ))}
                     </ol>
                 )}
+                <OfficialStrip entries={officials} />
             </div>
 
             <div className="mt-4 space-y-2">
@@ -195,9 +192,6 @@ export function LeaderboardCard({
                     Check my rank
                 </Button>
                 {myRank && <p className="text-sm font-medium text-foreground">{myRank}</p>}
-                {hasOfficial && (
-                    <p className="text-xs text-muted-foreground">Official ARHMS accounts are shown for reference and do not compete for prizes.</p>
-                )}
                 <p className="text-xs text-muted-foreground">Pending, processing, failed and refunded orders do not count.</p>
             </div>
         </section>

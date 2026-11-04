@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { cn, formatCurrency } from '@/lib/utils'
-import { RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
+import { OfficialStrip, RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
 
 type Board = 'dashboard' | 'shop'
 
@@ -249,21 +249,18 @@ export default function AdminTopPerformersPage() {
                                             Top {competitors.length}
                                         </span>
                                     </div>
-                                    {entries.length === 0 ? (
+                                    {competitors.length === 0 ? (
                                         <p className="rounded-xl bg-card px-3 py-8 text-center text-sm text-muted-foreground">
                                             The first completed sale this month takes the top spot.
                                         </p>
                                     ) : (
                                         <ol className="max-h-[34rem] space-y-0.5 overflow-y-auto rounded-xl bg-card p-1.5 pr-2">
-                                            {entries.map(e => (
-                                                <RankRow
-                                                    key={`${e.rank ?? 'official'}-${e.name}-${e.total}`}
-                                                    entry={e}
-                                                    leaderTotal={leaderTotalOf(entries)}
-                                                />
+                                            {competitors.map(e => (
+                                                <RankRow key={e.rank} entry={e} leaderTotal={leaderTotalOf(competitors)} />
                                             ))}
                                         </ol>
                                     )}
+                                    <OfficialStrip entries={entries.filter(e => e.isOfficial)} />
                                 </div>
                             )
                         })}
