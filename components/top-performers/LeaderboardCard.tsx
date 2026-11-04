@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Award, CalendarClock, Crown, Loader2, Medal, RefreshCw, Search, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn, formatCurrency } from '@/lib/utils'
+import { RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
 
 export type Board = 'dashboard' | 'shop'
 
@@ -104,6 +105,7 @@ export function LeaderboardCard({
     // Everyone off the podium, by sales — official accounts included wherever they fall.
     const rest = entries.filter(e => e.rank === null || e.rank > 3)
     const hasOfficial = entries.some(e => e.isOfficial)
+    const leaderTotal = leaderTotalOf(entries)
 
     const checkMyRank = async () => {
         setChecking(true)
@@ -175,32 +177,13 @@ export function LeaderboardCard({
                 ) : rest.length === 0 ? (
                     <p className="px-3 py-6 text-center text-sm text-muted-foreground">Places 4 and below are still open.</p>
                 ) : (
-                    <ol className="max-h-[28rem] space-y-1 overflow-y-auto">
+                    <ol className="max-h-[30rem] space-y-0.5 overflow-y-auto pr-1">
                         {rest.map(entry => (
-                            <li
+                            <RankRow
                                 key={entry.rank ?? `official-${entry.name}-${entry.total}`}
-                                className={cn(
-                                    'flex items-center gap-3 rounded-xl px-3 py-2.5',
-                                    entry.isMe ? 'bg-primary/10 ring-1 ring-primary/40' : 'hover:bg-secondary/60'
-                                )}
-                            >
-                                {entry.isOfficial ? (
-                                    <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold uppercase text-primary">
-                                        Official
-                                    </span>
-                                ) : (
-                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card text-xs font-bold text-muted-foreground shadow-sm">
-                                        {entry.rank}
-                                    </span>
-                                )}
-                                <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-                                    {entry.name}
-                                    {entry.isMe && <span className="ml-1.5 text-xs font-bold text-primary">(you)</span>}
-                                </span>
-                                <span className="shrink-0 text-sm font-medium tabular-nums text-muted-foreground">
-                                    {formatCurrency(entry.total)}
-                                </span>
-                            </li>
+                                entry={entry}
+                                leaderTotal={leaderTotal}
+                            />
                         ))}
                     </ol>
                 )}

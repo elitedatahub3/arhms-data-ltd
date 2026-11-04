@@ -1,13 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, RefreshCw, Save, Send, Trophy, Undo2 } from 'lucide-react'
+import { CheckCircle2, LayoutGrid, Loader2, RefreshCw, Save, Send, Store, Trophy, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { cn, formatCurrency } from '@/lib/utils'
+import { RankRow, leaderTotalOf } from '@/components/top-performers/RankRow'
 
 type Board = 'dashboard' | 'shop'
 
@@ -209,30 +210,63 @@ export default function AdminTopPerformersPage() {
             {/* Live preview */}
             <section className="card-premium p-4 sm:p-6">
                 <h2 className="text-lg font-bold">This month so far (top 30)</h2>
-                <p className="text-xs text-muted-foreground">Refreshes every 5 minutes. Admin accounts show as Official and never win.</p>
+                <p className="text-xs text-muted-foreground">
+                    Refreshes every 5 minutes. Bars show each seller against the leader. Admin accounts show as Official and never win.
+                </p>
                 {!preview ? (
                     <p className="mt-4 text-sm text-muted-foreground">Preview unavailable. Has migration 20261104000000_top_performers been run?</p>
                 ) : (
                     <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        {(['dashboard', 'shop'] as Board[]).map(board => (
-                            <div key={board} className="rounded-xl border border-border p-3">
-                                <p className="mb-2 text-sm font-bold">{BOARD_LABEL[board]}</p>
-                                {preview[board].length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">No completed sales yet.</p>
-                                ) : (
-                                    <ol className="max-h-[32rem] space-y-1 overflow-y-auto pr-1 text-sm">
-                                        {preview[board].map(e => (
-                                            <li key={`${e.rank ?? 'official'}-${e.name}`} className="flex justify-between gap-3">
-                                                <span className="truncate">
-                                                    <span className="font-bold text-muted-foreground">{e.isOfficial ? 'Official' : `#${e.rank}`}</span> {e.name}
-                                                </span>
-                                                <span className="tabular-nums text-muted-foreground">{formatCurrency(e.total)}</span>
-                                            </li>
-                                        ))}
-                                    </ol>
-                                )}
-                            </div>
-                        ))}
+                        {(['dashboard', 'shop'] as Board[]).map(board => {
+                            const entries = preview[board]
+                            const competitors = entries.filter(e => !e.isOfficial)
+                            const [first, second] = competitors
+                            const BoardIcon = board === 'dashboard' ? LayoutGrid : Store
+                            return (
+                                <div key={board} className="flex flex-col rounded-2xl border border-border/70 bg-secondary/20 p-3 sm:p-4">
+                                    <div className="mb-3 flex items-center gap-3">
+                                        <span
+                                            className={cn(
+                                                'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white shadow-sm',
+                                                board === 'dashboard'
+                                                    ? 'bg-gradient-to-br from-blue-500 to-indigo-600'
+                                                    : 'bg-gradient-to-br from-emerald-500 to-teal-600'
+                                            )}
+                                        >
+                                            <BoardIcon className="h-4 w-4" />
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-bold">{BOARD_LABEL[board]}</p>
+                                            <p className="text-xs text-muted-foreground">
+                                                {competitors.length === 0
+                                                    ? 'Nobody has a completed sale yet'
+                                                    : second
+                                                        ? `${first.name} leads by ${formatCurrency(first.total - second.total)}`
+                                                        : `${first.name} is the only seller so far`}
+                                            </p>
+                                        </div>
+                                        <span className="shrink-0 rounded-full bg-card px-2.5 py-1 text-xs font-semibold tabular-nums text-muted-foreground ring-1 ring-border/60">
+                                            Top {competitors.length}
+                                        </span>
+                                    </div>
+                                    {entries.length === 0 ? (
+                                        <p className="rounded-xl bg-card px-3 py-8 text-center text-sm text-muted-foreground">
+                                            The first completed sale this month takes the top spot.
+                                        </p>
+                                    ) : (
+                                        <ol className="max-h-[34rem] space-y-0.5 overflow-y-auto rounded-xl bg-card p-1.5 pr-2">
+                                            {entries.map(e => (
+                                                <RankRow
+                                                    key={`${e.rank ?? 'official'}-${e.name}-${e.total}`}
+                                                    entry={e}
+                                                    leaderTotal={leaderTotalOf(entries)}
+                                                />
+                                            ))}
+                                        </ol>
+                                    )}
+                                </div>
+                            )
+                        })}
                     </div>
                 )}
             </section>
