@@ -19,7 +19,7 @@ export interface PageAccessSettings {
     ussd: boolean
     /** Standard Bundles master switch + its page-access toggle, combined server-side. */
     standardBundles: boolean
-    /** Top Performers leaderboard switch. */
+    /** Top Performers leaderboard switch. Not in PAGE_ROUTE_MAP: the nav link always shows and the page itself says "coming soon" while it is off. */
     topPerformers: boolean
 }
 
@@ -37,7 +37,6 @@ const PAGE_ROUTE_MAP: Record<string, keyof PageAccessSettings> = {
     '/dashboard/airtime': 'airtime',
     '/dashboard/utilities': 'utilities',
     '/dashboard/standard-bundles': 'standardBundles',
-    '/dashboard/top-performers': 'topPerformers',
 }
 
 function sameSettings(a: PageAccessSettings, b: PageAccessSettings): boolean {
