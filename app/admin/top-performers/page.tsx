@@ -32,7 +32,7 @@ interface Winner {
     claimed_at: string | null
 }
 
-interface PreviewEntry { rank: number; name: string; total: number }
+interface PreviewEntry { rank: number | null; name: string; total: number; isOfficial: boolean }
 
 const BOARD_LABEL: Record<Board, string> = { dashboard: 'Dashboard Sales', shop: 'Shop Sales' }
 const PLACES = ['1st', '2nd', '3rd']
@@ -209,7 +209,7 @@ export default function AdminTopPerformersPage() {
             {/* Live preview */}
             <section className="card-premium p-4 sm:p-6">
                 <h2 className="text-lg font-bold">This month so far</h2>
-                <p className="text-xs text-muted-foreground">Refreshes every 5 minutes. Admin accounts never rank.</p>
+                <p className="text-xs text-muted-foreground">Refreshes every 5 minutes. Admin accounts show as Official and never win.</p>
                 {!preview ? (
                     <p className="mt-4 text-sm text-muted-foreground">Preview unavailable. Has migration 20261104000000_top_performers been run?</p>
                 ) : (
@@ -222,8 +222,10 @@ export default function AdminTopPerformersPage() {
                                 ) : (
                                     <ol className="space-y-1 text-sm">
                                         {preview[board].slice(0, 10).map(e => (
-                                            <li key={e.rank} className="flex justify-between gap-3">
-                                                <span className="truncate"><span className="font-bold text-muted-foreground">#{e.rank}</span> {e.name}</span>
+                                            <li key={`${e.rank ?? 'official'}-${e.name}`} className="flex justify-between gap-3">
+                                                <span className="truncate">
+                                                    <span className="font-bold text-muted-foreground">{e.isOfficial ? 'Official' : `#${e.rank}`}</span> {e.name}
+                                                </span>
                                                 <span className="tabular-nums text-muted-foreground">{formatCurrency(e.total)}</span>
                                             </li>
                                         ))}

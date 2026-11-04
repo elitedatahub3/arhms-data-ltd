@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     const lastMonth = previousMonthKey()
 
     const strip = (entries: BoardEntry[]) =>
-        entries.map(({ rank, name, total, userId }) => ({ rank, name, total, isMe: userId === user.id }))
+        entries.map(({ rank, name, total, userId, isOfficial }) => ({ rank, name, total, isOfficial, isMe: userId === user.id }))
 
     try {
         const [dashboard, shop, lastDashboard, lastShop, { data: winnerRows }] = await Promise.all([
@@ -66,8 +66,10 @@ export async function GET(request: NextRequest) {
             const frozen = (winnerRows || []).filter((w: any) => w.board === board)
             const top3 = frozen.length
                 ? frozen.map((w: any) => ({ rank: w.rank, name: w.display_name, total: Number(w.total) }))
-                : lastBoards[board].slice(0, 3).map(({ rank, name, total }) => ({ rank, name, total }))
-            const mine = lastBoards[board].find(e => e.userId === user.id)
+                : lastBoards[board]
+                    .filter(e => !e.isOfficial && e.rank !== null && e.rank <= 3)
+                    .map(({ rank, name, total }) => ({ rank, name, total }))
+            const mine = lastBoards[board].find(e => e.userId === user.id && e.rank !== null)
             return [board, { top3, myPlacement: mine ? { rank: mine.rank, total: mine.total } : null }]
         }))
 

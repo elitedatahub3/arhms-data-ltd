@@ -48,10 +48,12 @@ export const DEFAULT_CONFIG: TopPerformersConfig = {
 }
 
 export interface BoardEntry {
-    rank: number
+    /** Competitive rank. null for official (admin) accounts, which show but never compete. */
+    rank: number | null
     userId: string
     name: string
     total: number
+    isOfficial: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +166,11 @@ export function visiblePrizes(config: TopPerformersConfig): Record<Board, [strin
 // Boards
 // ---------------------------------------------------------------------------
 
-/** Uncached — the cron uses this so the frozen winners are read fresh. */
+/**
+ * Uncached — the cron uses this so the frozen winners are read fresh. `limit`
+ * counts competing sellers; official accounts that outsold the last of them ride
+ * along, ordered by sales.
+ */
 export async function fetchBoard(board: Board, key: string, limit = BOARD_LIMIT): Promise<BoardEntry[]> {
     const db = createServerClient() as any
     const { data, error } = await db.rpc('top_performers_month', {
@@ -174,10 +180,11 @@ export async function fetchBoard(board: Board, key: string, limit = BOARD_LIMIT)
     })
     if (error) throw new Error(`top_performers_month(${board}, ${key}): ${error.message}`)
     return ((data || []) as any[]).map(row => ({
-        rank: Number(row.rank),
+        rank: row.rank == null ? null : Number(row.rank),
         userId: row.user_id,
         name: row.display_name,
         total: Number(row.total),
+        isOfficial: !!row.is_official,
     }))
 }
 
@@ -186,7 +193,8 @@ export function getBoard(board: Board, key: string): Promise<BoardEntry[]> {
     const current = key === monthKey()
     return unstable_cache(
         () => fetchBoard(board, key),
-        ['top-performers-board-v1', board, key],
+        // v2: official accounts included, rank nullable.
+        ['top-performers-board-v2', board, key],
         { revalidate: current ? 300 : 3600, tags: [TOP_PERFORMERS_CACHE_TAG] }
     )()
 }
@@ -195,6 +203,7 @@ export interface UserRank {
     rank: number | null
     total: number
     participants: number
+    isOfficial: boolean
 }
 
 /** One user's place on a board. Not cached: it is asked for on demand. */
@@ -211,6 +220,7 @@ export async function getUserRank(board: Board, key: string, userId: string): Pr
         rank: row?.rank == null ? null : Number(row.rank),
         total: Number(row?.total ?? 0),
         participants: Number(row?.participants ?? 0),
+        isOfficial: !!row?.is_official,
     }
 }
 

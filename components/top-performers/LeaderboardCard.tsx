@@ -8,9 +8,11 @@ import { cn, formatCurrency } from '@/lib/utils'
 export type Board = 'dashboard' | 'shop'
 
 export interface LeaderboardEntry {
-    rank: number
+    /** null for official accounts: shown by sales, never ranked or awarded. */
+    rank: number | null
     name: string
     total: number
+    isOfficial: boolean
     isMe: boolean
 }
 
@@ -99,7 +101,9 @@ export function LeaderboardCard({
     const [myRank, setMyRank] = useState<string | null>(null)
 
     const byRank = (rank: number) => entries.find(e => e.rank === rank)
-    const rest = entries.filter(e => e.rank > 3)
+    // Everyone off the podium, by sales — official accounts included wherever they fall.
+    const rest = entries.filter(e => e.rank === null || e.rank > 3)
+    const hasOfficial = entries.some(e => e.isOfficial)
 
     const checkMyRank = async () => {
         setChecking(true)
@@ -108,7 +112,9 @@ export function LeaderboardCard({
             const body = await res.json()
             if (!res.ok) throw new Error(body.error || 'Could not check your rank')
             setMyRank(
-                body.rank
+                body.isOfficial
+                    ? `Official accounts are shown for reference and are not ranked. Sales in ${monthLabel}: ${formatCurrency(body.total)}.`
+                    : body.rank
                     ? `You are #${body.rank} of ${body.participants} with ${formatCurrency(body.total)} in ${monthLabel}.`
                     : `You have no completed ${board === 'shop' ? 'shop sales' : 'purchases'} in ${monthLabel} yet.`
             )
@@ -172,15 +178,21 @@ export function LeaderboardCard({
                     <ol className="max-h-[28rem] space-y-1 overflow-y-auto">
                         {rest.map(entry => (
                             <li
-                                key={entry.rank}
+                                key={entry.rank ?? `official-${entry.name}-${entry.total}`}
                                 className={cn(
                                     'flex items-center gap-3 rounded-xl px-3 py-2.5',
                                     entry.isMe ? 'bg-primary/10 ring-1 ring-primary/40' : 'hover:bg-secondary/60'
                                 )}
                             >
-                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card text-xs font-bold text-muted-foreground shadow-sm">
-                                    {entry.rank}
-                                </span>
+                                {entry.isOfficial ? (
+                                    <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold uppercase text-primary">
+                                        Official
+                                    </span>
+                                ) : (
+                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card text-xs font-bold text-muted-foreground shadow-sm">
+                                        {entry.rank}
+                                    </span>
+                                )}
                                 <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
                                     {entry.name}
                                     {entry.isMe && <span className="ml-1.5 text-xs font-bold text-primary">(you)</span>}
@@ -200,6 +212,9 @@ export function LeaderboardCard({
                     Check my rank
                 </Button>
                 {myRank && <p className="text-sm font-medium text-foreground">{myRank}</p>}
+                {hasOfficial && (
+                    <p className="text-xs text-muted-foreground">Official ARHMS accounts are shown for reference and do not compete for prizes.</p>
+                )}
                 <p className="text-xs text-muted-foreground">Pending, processing, failed and refunded orders do not count.</p>
             </div>
         </section>

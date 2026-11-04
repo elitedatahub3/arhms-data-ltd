@@ -63,17 +63,18 @@ export async function finalizeMonth(key: string, config: TopPerformersConfig, op
             result.alreadyFrozen.push(board)
             continue
         }
-        const top3 = await fetchBoard(board, key, 3)
+        // Official (admin) accounts show on the board but never win.
+        const top3 = (await fetchBoard(board, key, 3)).filter(e => !e.isOfficial && e.rank !== null && e.rank <= 3)
         if (!top3.length) continue
 
         const rows = top3.map(entry => ({
             month,
             board,
-            rank: entry.rank,
+            rank: entry.rank as number,
             user_id: entry.userId,
             display_name: entry.name,
             total: entry.total,
-            prize_label: config.rankingsOnly ? null : (config.prizes[board][entry.rank - 1] || null),
+            prize_label: config.rankingsOnly ? null : (config.prizes[board][(entry.rank as number) - 1] || null),
         }))
 
         if (opts.dry) {
