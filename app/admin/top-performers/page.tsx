@@ -208,7 +208,7 @@ export default function AdminTopPerformersPage() {
 
             {/* Live preview */}
             <section className="card-premium p-4 sm:p-6">
-                <h2 className="text-lg font-bold">This month so far</h2>
+                <h2 className="text-lg font-bold">This month so far (top 30)</h2>
                 <p className="text-xs text-muted-foreground">Refreshes every 5 minutes. Admin accounts show as Official and never win.</p>
                 {!preview ? (
                     <p className="mt-4 text-sm text-muted-foreground">Preview unavailable. Has migration 20261104000000_top_performers been run?</p>
@@ -220,8 +220,8 @@ export default function AdminTopPerformersPage() {
                                 {preview[board].length === 0 ? (
                                     <p className="text-sm text-muted-foreground">No completed sales yet.</p>
                                 ) : (
-                                    <ol className="space-y-1 text-sm">
-                                        {preview[board].slice(0, 10).map(e => (
+                                    <ol className="max-h-[32rem] space-y-1 overflow-y-auto pr-1 text-sm">
+                                        {preview[board].map(e => (
                                             <li key={`${e.rank ?? 'official'}-${e.name}`} className="flex justify-between gap-3">
                                                 <span className="truncate">
                                                     <span className="font-bold text-muted-foreground">{e.isOfficial ? 'Official' : `#${e.rank}`}</span> {e.name}
