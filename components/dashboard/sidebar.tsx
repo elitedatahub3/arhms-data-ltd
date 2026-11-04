@@ -46,6 +46,7 @@ import {
     Gift,
     UserPlus,
     Wifi,
+    Trophy,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -65,6 +66,7 @@ const userNavItems = [
     { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
     { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
     { href: '/dashboard/my-orders', label: 'Orders', icon: ShoppingCart },
+    { href: '/dashboard/top-performers', label: 'Top Performers', icon: Trophy },
     { href: '/dashboard/shop/sub-agents', label: 'Sub-Agents', icon: UserPlus },
     { href: '/dashboard/wallet', label: 'Wallet', icon: Wallet },
     { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
@@ -124,6 +126,7 @@ const adminNavItems = [
     { href: '/admin/hubtel-payments', label: 'Hubtel Payments', icon: Banknote },
     { href: '/admin/profits-history', label: 'Profits', icon: Wallet },
     { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
+    { href: '/admin/top-performers', label: 'Top Performers', icon: Trophy },
     { href: '/admin/settings', label: 'Settings', icon: Settings },
     { href: '/admin/vouchers', label: 'Results Checker', icon: Tag },
 ]

@@ -19,6 +19,7 @@ export async function GET() {
             ...config.pageAccess,
             ussd_enabled: String(config.ussdEnabled),
             standard_bundles_enabled: String(config.standardBundlesEnabled),
+            top_performers_enabled: String(config.topPerformersEnabled),
         }, {
             headers: {
                 'Cache-Control': 'no-store, must-revalidate',

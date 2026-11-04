@@ -19,6 +19,8 @@ export interface PageAccessSettings {
     ussd: boolean
     /** Standard Bundles master switch + its page-access toggle, combined server-side. */
     standardBundles: boolean
+    /** Top Performers leaderboard switch. */
+    topPerformers: boolean
 }
 
 const PAGE_ROUTE_MAP: Record<string, keyof PageAccessSettings> = {
@@ -35,6 +37,7 @@ const PAGE_ROUTE_MAP: Record<string, keyof PageAccessSettings> = {
     '/dashboard/airtime': 'airtime',
     '/dashboard/utilities': 'utilities',
     '/dashboard/standard-bundles': 'standardBundles',
+    '/dashboard/top-performers': 'topPerformers',
 }
 
 function sameSettings(a: PageAccessSettings, b: PageAccessSettings): boolean {
@@ -59,6 +62,8 @@ const DEFAULT_PAGE_ACCESS: PageAccessSettings = {
     ussd: false,
     // Closed by default for the same reason as USSD.
     standardBundles: false,
+    // Closed by default too: no link until the switch is confirmed on.
+    topPerformers: false,
 }
 
 /**
@@ -94,6 +99,7 @@ function loadPageAccess(): Promise<PageAccessSettings | null> {
                 utilities: settingsMap.page_access_utilities !== 'false',
                 ussd: settingsMap.ussd_enabled === 'true',
                 standardBundles: settingsMap.standard_bundles_enabled === 'true',
+                topPerformers: settingsMap.top_performers_enabled === 'true',
             }
             cached = { value, at: Date.now() }
             return value

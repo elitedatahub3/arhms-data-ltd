@@ -35,6 +35,8 @@ export interface PublicConfigData {
     ussdEnabled: boolean
     /** Standard Bundles master switch AND its page-access toggle, read server-side. */
     standardBundlesEnabled: boolean
+    /** Top Performers leaderboard switch, read server-side like the two above. */
+    topPerformersEnabled: boolean
 }
 
 const PUBLIC_SETTING_KEYS = [
@@ -129,6 +131,7 @@ const fallbackConfig: PublicConfigData = {
     // dead lookup cannot advertise a service that may not be answering.
     ussdEnabled: false,
     standardBundlesEnabled: false,
+    topPerformersEnabled: false,
 }
 
 let publicConfigClient: SupabaseClient | null = null
@@ -244,6 +247,24 @@ async function readStandardBundlesNav(): Promise<boolean> {
     }
 }
 
+/** Whether the Top Performers link should show. Same reasoning and fail-closed default as above. */
+async function readTopPerformersNav(): Promise<boolean> {
+    const client = getUssdSwitchClient()
+    if (!client) return false
+    try {
+        const { data, error } = await client
+            .from('admin_settings')
+            .select('value')
+            .eq('key', 'top_performers_enabled')
+            .maybeSingle()
+        if (error) throw error
+        return (data as { value: string } | null)?.value === 'true'
+    } catch {
+        console.error('[PublicConfig] Unable to read the Top Performers switch; hiding the link')
+        return false
+    }
+}
+
 function mapRows(rows: Array<{ key: string; value: string }>) {
     return rows.reduce<Record<string, string>>((acc, row) => {
         acc[row.key] = row.value
@@ -259,7 +280,7 @@ function parsePrice(value: string | undefined, fallback: number) {
 async function fetchPublicConfig(): Promise<PublicConfigData> {
     try {
         const supabase = getPublicConfigClient()
-        const [{ data: settingsRows, error: settingsError }, { data: announcementRows, error: announcementsError }, ussdSwitchValue, standardBundlesEnabled] = await Promise.all([
+        const [{ data: settingsRows, error: settingsError }, { data: announcementRows, error: announcementsError }, ussdSwitchValue, standardBundlesEnabled, topPerformersEnabled] = await Promise.all([
             supabase
                 .from('public_admin_settings')
                 .select('key, value')
@@ -273,6 +294,7 @@ async function fetchPublicConfig(): Promise<PublicConfigData> {
                 .limit(20),
             readUssdSwitchValue(),
             readStandardBundlesNav(),
+            readTopPerformersNav(),
         ])
 
         if (settingsError) throw settingsError
@@ -332,6 +354,7 @@ async function fetchPublicConfig(): Promise<PublicConfigData> {
             landingRcOnlyEnabled: settings.landing_rc_only_enabled === 'true',
             ussdEnabled,
             standardBundlesEnabled,
+            topPerformersEnabled,
         }
     } catch {
         console.error('[PublicConfig] Unable to fetch public config; using fallback values')
@@ -347,7 +370,8 @@ export const getCachedPublicConfig = unstable_cache(
     // where it read false for every caller. Bumped so the USSD links come back on
     // deploy instead of waiting out a cached 'off'.
     // v5: added standardBundlesEnabled.
-    ['public-config-v5'],
+    // v6: added topPerformersEnabled.
+    ['public-config-v6'],
     {
         revalidate: PUBLIC_CONFIG_REVALIDATE_SECONDS,
         tags: [PUBLIC_CONFIG_CACHE_TAG],

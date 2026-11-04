@@ -33,6 +33,7 @@ import {
     Receipt,
     Gift,
     Wifi,
+    Trophy,
 } from 'lucide-react'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useUI } from '@/contexts/ui-context'
@@ -200,6 +201,7 @@ const NAV_VARIANTS = {
                 { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+                { href: '/dashboard/top-performers', label: 'Top Performers', icon: Trophy },
                 { href: '/dashboard/upgrade', label: 'Role Upgrade', icon: Crown },
                 { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
@@ -245,6 +247,7 @@ const NAV_VARIANTS = {
                 { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                 { href: '/dashboard/transactions', label: 'Transactions', icon: Activity },
                 { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
+                { href: '/dashboard/top-performers', label: 'Top Performers', icon: Trophy },
                 { href: '/dashboard/sms', label: 'SMS Platform', icon: Send },
                 { href: '/dashboard/install', label: 'Download App', icon: Download },
             ],
@@ -289,6 +292,7 @@ const NAV_VARIANTS = {
                 { href: '/admin/email-broadcast', label: 'Email', icon: Send },
                 { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
                 { href: '/admin/referrals', label: 'Referrals', icon: Gift },
+                { href: '/admin/top-performers', label: 'Top Performers', icon: Trophy },
                 { href: '/admin/settings', label: 'Settings', icon: Settings },
             ],
             orders: [

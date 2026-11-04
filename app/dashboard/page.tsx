@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/auth-context'
+import { usePageAccess } from '@/hooks/use-page-access'
 import { supabase } from '@/lib/supabase'
 import { cn, formatCurrency } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,6 +24,7 @@ import {
     Zap,
     Receipt,
     Gift,
+    Trophy,
 } from 'lucide-react'
 import { RoleGreetingBox } from '@/components/dashboard/RoleGreetingBox'
 import { PromoHeroCarousel } from '@/components/dashboard/PromoHeroCarousel'
@@ -67,6 +69,7 @@ interface ShopStatus {
 
 export default function DashboardPage() {
     const { dbUser, isSubAgent } = useAuth()
+    const { isPageAccessible } = usePageAccess()
     const [stats, setStats] = useState<DashboardStats | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [shopStatus, setShopStatus] = useState<ShopStatus>({
@@ -380,11 +383,12 @@ export default function DashboardPage() {
                                 { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                                 { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
                                 { href: '/dashboard/data-packages', label: 'Buy Data Bundles', icon: Package },
+                                { href: '/dashboard/top-performers', label: 'Top Performers', icon: Trophy },
                                 { href: '/dashboard/wallet', label: 'Wallet History', icon: Wallet },
                                 { href: '/dashboard/refer', label: 'Refer & Earn', icon: Gift },
                                 { href: '/dashboard/complaints', label: 'Help & Support', icon: AlertCircle },
                                 { href: isSubAgent ? '/dashboard/sub/shop' : '/dashboard/shop', label: 'Store Settings', icon: Store },
-                            ].map((link, i) => (
+                            ].filter(link => isPageAccessible(link.href)).map((link, i) => (
                                 <Link key={i} href={link.href}>
                                     <div className="flex items-center gap-3 p-3 rounded-xl hover:bg-secondary/50 transition-colors group cursor-pointer">
                                         <div className="w-9 h-9 rounded-lg bg-secondary flex items-center justify-center group-hover:bg-primary/10 group-hover:text-primary transition-colors">
