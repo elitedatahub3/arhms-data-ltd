@@ -250,6 +250,8 @@ export default function ShopOverviewPage() {
         }
     }, [dbUser, isAdmin, isSubAdmin, filter])
 
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io')
+    const shopUrl = shop ? `${baseOrigin}/shop/${shop.shop_slug}` : ''
     const shopUrl = shop ? buildShopUrl(shop.shop_slug) : ''
 
     const copyLink = async () => {

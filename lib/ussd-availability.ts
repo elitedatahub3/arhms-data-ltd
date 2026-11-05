@@ -52,7 +52,7 @@ export function isUssdEnabled(
  * the Hubtel call throw, and a long one gets truncated mid-sentence.
  */
 export const USSD_OFFLINE_MESSAGE =
-    'ARHMS USSD is currently unavailable. Please buy at arhmsgh.com. Thank you.'
+    'USSD is currently unavailable. Please buy at dataking.qzz.io. Thank you.'
 
 /** Shown wherever someone tries to buy or manage a short code while USSD is off. */
 export const USSD_UNAVAILABLE_MESSAGE =

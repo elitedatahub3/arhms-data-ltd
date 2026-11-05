@@ -38,7 +38,7 @@ export const LANGS: { id: Lang; label: string }[] = [
 // valid their key is, with nothing in the response to explain why. Verified:
 //   > Host: www.arhmsgh.com   Authorization: <key>   -> 307
 //   > Host: arhmsgh.com       (no Authorization)     -> 401
-export const BASE = 'https://arhmsgh.com'
+export const BASE = process.env.NEXT_PUBLIC_APP_URL || 'https://www.dataking.qzz.io'
 export const STANDARD_KEY_SAMPLE   = 'kf_live_your_api_key_here'
 export const COMMISSION_KEY_SAMPLE = 'kf_cs_live_your_commission_key_here'
 

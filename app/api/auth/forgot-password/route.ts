@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { getCookieDomain } from '@/lib/supabase'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -10,6 +11,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Email is required' }, { status: 400 })
     }
 
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || ''
+    const domain = getCookieDomain(host.split(':')[0])
     const cookieStore = await cookies()
     const supabase = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -22,7 +25,8 @@ export async function POST(request: NextRequest) {
                 setAll(cookiesToSet) {
                     try {
                         cookiesToSet.forEach(({ name, value, options }) => {
-                            cookieStore.set(name, value, options)
+                            const opts = { path: '/', ...options, ...(domain && { domain }) }
+                            cookieStore.set(name, value, opts)
                         })
                     } catch {}
                 },
@@ -30,8 +34,9 @@ export async function POST(request: NextRequest) {
         }
     )
 
+    const siteBase = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || (host ? `https://${host}` : 'https://www.dataking.qzz.io')
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/update-password`
+      redirectTo: `${siteBase}/auth/update-password`
     })
 
     if (error) {

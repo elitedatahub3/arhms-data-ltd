@@ -40,7 +40,7 @@ export default function PhoneSetupPage() {
             })
 
             if (res.status === 401) {
-                window.location.href = 'https://www.arhmsgh.com/dashboard'
+                window.location.href = '/dashboard'
                 return
             }
 
@@ -58,7 +58,7 @@ export default function PhoneSetupPage() {
             }
 
             // Google users always get otpBypassed — go straight to dashboard
-            window.location.href = 'https://www.arhmsgh.com/dashboard'
+            window.location.href = '/dashboard'
         } catch {
             setError('Connection error. Please try again.')
         } finally {

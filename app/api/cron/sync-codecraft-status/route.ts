@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkOrderStatus } from '@/lib/codecraft-service'
-import { areCronJobsEnabled, cronDisabledResponse } from '@/lib/cron-control'
+import { areCronJobsEnabled, cronDisabledResponse, isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 
 // ─── Shared Package Type Resolver ─────────────────────────────────────────────
 function resolvePackageType(network: string, gigValue: number): 'regular' | 'bigtime' {
@@ -46,9 +46,8 @@ export async function GET(request: NextRequest) {
     const outOfTime = () => Date.now() - startedAt > RUN_BUDGET_MS
 
     // Verify cron secret
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     const supabase = createServerClient()
@@ -210,3 +209,10 @@ export async function GET(request: NextRequest) {
         errors,
     })
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+

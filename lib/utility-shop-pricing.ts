@@ -102,11 +102,25 @@ interface ShopRow {
  * lib/pricing/chain-cost.ts uses for data.
  */
 async function resolveChainShops(db: any, sellingShopId: string): Promise<ShopRow[]> {
-    const { data: shop } = await db
+    let shop: any = null
+    const shopRes = await db
         .from('shop_profiles')
         .select('id, owner_id, shop_name, utility_fee_percent, utilities_enabled')
         .eq('id', sellingShopId)
         .maybeSingle()
+
+    if (shopRes?.data) {
+        shop = shopRes.data
+    } else if (shopRes?.error) {
+        const fallback = await db
+            .from('shop_profiles')
+            .select('id, owner_id, shop_name')
+            .eq('id', sellingShopId)
+            .maybeSingle()
+        if (fallback?.data) {
+            shop = { ...fallback.data, utility_fee_percent: 0, utilities_enabled: false }
+        }
+    }
 
     if (!shop) return []
 
@@ -114,11 +128,26 @@ async function resolveChainShops(db: any, sellingShopId: string): Promise<ShopRo
 
     const ancestors = await resolveSubAgentChain(db, (shop as ShopRow).owner_id)
     for (const a of ancestors) {
-        const { data: up } = await db
+        let up: any = null
+        const upRes = await db
             .from('shop_profiles')
             .select('id, owner_id, shop_name, utility_fee_percent, utilities_enabled')
             .eq('id', a.shopId)
             .maybeSingle()
+
+        if (upRes?.data) {
+            up = upRes.data
+        } else if (upRes?.error) {
+            const fallback = await db
+                .from('shop_profiles')
+                .select('id, owner_id, shop_name')
+                .eq('id', a.shopId)
+                .maybeSingle()
+            if (fallback?.data) {
+                up = { ...fallback.data, utility_fee_percent: 0, utilities_enabled: false }
+            }
+        }
+
         if (up) chain.push(up as ShopRow)
     }
 

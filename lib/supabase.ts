@@ -2,15 +2,41 @@ import { createBrowserClient as createSSRBrowserClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { Database } from '@/types/supabase'
 
-// Determine cookie domain: prod uses .arhmsgh.com (shared with subdomains), dev/preview uses default
-const getCookieDomain = () => {
-    if (typeof window === 'undefined') return undefined
-    const host = window.location.hostname
-    // Production: .arhmsgh.com (covers arhmsgh.com, www.arhmsgh.com and any other subdomain)
+// Determine cookie domain: prod uses .dataking.qzz.io or .arhmsgh.com (shared with subdomains), dev/preview uses default
+export const getCookieDomain = (hostOverride?: string) => {
+    let host = hostOverride
+    if (!host && typeof window !== 'undefined') {
+        host = window.location.hostname
+    }
+    if (!host && process.env.NEXT_PUBLIC_APP_URL) {
+        try {
+            host = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname
+        } catch {}
+    }
+    if (!host) return undefined
+
+    // Strip port if present
+    host = host.split(':')[0].toLowerCase()
+
+    // Localhost / IP / Vercel preview: host-scoped cookies (undefined)
+    if (
+        host === 'localhost' ||
+        host.includes('localhost') ||
+        host.endsWith('.vercel.app') ||
+        host === '127.0.0.1' ||
+        host === '::1'
+    ) {
+        return undefined
+    }
+
+    if (host.endsWith('dataking.qzz.io')) {
+        return '.dataking.qzz.io'
+    }
+
     if (host.endsWith('arhmsgh.com')) {
         return '.arhmsgh.com'
     }
-    // Local/preview: use default (host-scoped)
+
     return undefined
 }
 
@@ -34,7 +60,14 @@ export const supabase = createSSRBrowserClient<Database>(
                 if (typeof document === 'undefined') return
                 cookiesToSet.forEach(({ name, value, options }) => {
                     const cookieDomain = getCookieDomain()
-                    const opts = { ...options, ...(cookieDomain && { domain: cookieDomain }) }
+                    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:'
+                    const opts = {
+                        path: '/',
+                        sameSite: 'lax',
+                        ...(isHttps ? { secure: true } : {}),
+                        ...options,
+                        ...(cookieDomain ? { domain: cookieDomain } : {})
+                    }
                     const optString = Object.entries(opts)
                         .map(([k, v]) => {
                             if (k === 'domain') return `Domain=${v}`
@@ -48,6 +81,14 @@ export const supabase = createSSRBrowserClient<Database>(
                         .filter(Boolean)
                         .join('; ')
                     document.cookie = `${name}=${value}; ${optString}`
+
+                    // If cookie domain is active, also clear any duplicate host-only cookie when expiring
+                    if (cookieDomain) {
+                        const isExpired = options?.maxAge === 0 || (options?.expires && new Date(options.expires).getTime() <= Date.now())
+                        if (isExpired) {
+                            document.cookie = `${name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`
+                        }
+                    }
                 })
             },
         },

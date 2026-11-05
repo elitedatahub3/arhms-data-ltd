@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkOrderStatus } from '@/lib/netpulse-service'
-import { areCronJobsEnabled, cronDisabledResponse } from '@/lib/cron-control'
+import { areCronJobsEnabled, cronDisabledResponse, isCronAuthorized, cronUnauthorizedResponse } from '@/lib/cron-control'
 
 // NetPulse has no webhook — polling GET /api/v1/order-status/{reference} is the
 // ONLY way an order reaches a terminal state. Mirrors sync-eazydata-status.
@@ -25,9 +25,8 @@ export async function GET(request: NextRequest) {
     const startedAt = Date.now()
     const outOfTime = () => Date.now() - startedAt > RUN_BUDGET_MS
 
-    const authHeader = request.headers.get('authorization')
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!isCronAuthorized(request)) {
+        return cronUnauthorizedResponse()
     }
 
     const supabase = createServerClient()
@@ -228,3 +227,10 @@ export async function GET(request: NextRequest) {
         errors,
     })
 }
+
+// Accept any method (cron-job.org's sent method doesn't always match its UI); auth-gated.
+export const POST = GET
+export const PUT = GET
+export const PATCH = GET
+export const DELETE = GET
+
