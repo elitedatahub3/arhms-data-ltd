@@ -68,6 +68,14 @@ const FAILURE_CUTOFF_MINUTES = 60
 /** Upper bound on the query. Without it one stuck row is re-checked forever. */
 const ABANDON_AFTER_MINUTES = 24 * 60
 const MAX_CRON_CHECKS = 10
+/**
+ * Part B1 bounds. Thirty days so the first runs also reach registrations stranded
+ * before the sweep existed; abandoned prompts are failed after FAILURE_CUTOFF_MINUTES
+ * and drop out, so the set stays small.
+ */
+const AFA_SWEEP_WINDOW_MINUTES = 30 * 24 * 60
+const AFA_SWEEP_LIMIT = 20
+const AFA_SWEEP_TIME_BUDGET_MS = 38_000
 const BATCH_LIMIT = 10
 /** Check on every run while a late approval is still likely. */
 const EVERY_RUN_MINUTES = 35
@@ -123,6 +131,8 @@ export async function GET(request: NextRequest) {
         throttled: 0,
         abandoned: 0,
         guestChecked: 0,
+        afaTableChecked: 0,
+        afaTableSettled: 0,
         guestSettled: 0,
         guestReleased: 0,
         ledgerChecked: 0,
@@ -358,6 +368,7 @@ export async function GET(request: NextRequest) {
     // the marker written at initiate. Only this rail writes it, so the sweep cannot
     // pick up a payment belonging to another gateway. For SHOP- this is now the
     // legacy path (Part B0 covers it durably); it still carries afa / rc / rc_shop.
+    const markerRefs = new Set<string>()
     try {
         let cursor = 0
         const keys: string[] = []
@@ -375,6 +386,7 @@ export async function GET(request: NextRequest) {
 
         for (const key of keys) {
             const reference = key.replace('paystack_momo:pending:', '')
+            markerRefs.add(reference)
             if (ledgerHandled.has(reference)) continue
             try {
                 const rawInfo = await redis.get<any>(key)
@@ -433,6 +445,62 @@ export async function GET(request: NextRequest) {
     } catch (err: any) {
         console.error('[CronPaystackMomo] Part B failed:', err)
         results.errors.push(`guestFlows: ${err?.message ?? 'unknown'}`)
+    }
+
+    // ── PART B1: storefront AFA, read from the table ────────────────────────────
+    // Part B only finds an AFA charge through its Redis marker. A marker lost to a
+    // Redis outage or quota left a paid registration unsettled for good — no
+    // application in the admin queue and no profit for the shop. Most unpaid
+    // storefront AFA rows had never been checked once after the prompt. The order
+    // row itself is durable, so sweep it directly. A non-Paystack reference just
+    // answers 'pending' and ages out of the window.
+    try {
+        const { data: afaRows, error: afaError } = await (supabase.from('afa_orders') as any)
+            .select('reference_code, created_at')
+            .eq('source', 'storefront')
+            .in('payment_status', UNSETTLED_PAYMENT_STATUSES)
+            .like('reference_code', 'AFA-SHOP-%')
+            .lt('created_at', minutesAgo(CALLBACK_GRACE_MINUTES))
+            .gt('created_at', minutesAgo(AFA_SWEEP_WINDOW_MINUTES))
+            .order('created_at', { ascending: false })
+            .limit(AFA_SWEEP_LIMIT)
+        if (afaError) throw new Error(afaError.message)
+
+        for (const row of (afaRows || [])) {
+            const reference = String(row.reference_code)
+            if (markerRefs.has(reference) || ledgerHandled.has(reference)) continue
+            // Leave Parts C1/C2 their share of maxDuration; the rest wait for next run.
+            if (Date.now() - startTime > AFA_SWEEP_TIME_BUDGET_MS) break
+            try {
+                results.afaTableChecked++
+                const verified = await verifyTransaction(reference)
+                const ageMs = Date.now() - new Date(row.created_at).getTime()
+
+                if (verified.outcome === 'paid') {
+                    const paidAmountKobo = verified.amountPesewas ?? 0
+                    const settled = await settleGuestOrder(supabase, reference, 'afa', paidAmountKobo)
+                    await logStatusCheck({
+                        clientReference: reference,
+                        status: settled.success ? 'success' : 'failed',
+                        amount: paidAmountKobo / 100,
+                        message: settled.success
+                            ? 'Settled by reconciliation cron (afa_orders sweep) — no callback was received.'
+                            : `Paid but not settled: ${settled.error ?? 'unknown'}. Will retry.`,
+                        raw: verified.raw,
+                    })
+                    if (settled.success) results.afaTableSettled++
+                } else if (verified.outcome === 'failed' && ageMs > FAILURE_CUTOFF_MINUTES * 60 * 1000) {
+                    await releaseGuestOrder(supabase, reference, 'afa')
+                    results.guestReleased++
+                }
+            } catch (err: any) {
+                console.error('[CronPaystackMomo] AFA sweep error on', reference, err?.message)
+                results.errors.push(`${reference}: ${err?.message ?? 'unknown'}`)
+            }
+        }
+    } catch (err: any) {
+        console.error('[CronPaystackMomo] Part B1 failed:', err)
+        results.errors.push(`afaTable: ${err?.message ?? 'unknown'}`)
     }
 
     // ── PART C1: USSD sales ─────────────────────────────────────────────────────
