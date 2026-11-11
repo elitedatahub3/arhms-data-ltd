@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
     validateApiKey, isApiError, apiSuccess, apiError,
-    logApiRequest, getClientIp,
+    logApiRequest, getClientIp, apiMtnNotRegistered,
 } from '@/lib/api-auth'
+import { checkMtnRegistrationBatch } from '@/lib/mtn-registration-gate'
 import { generateReferenceCode } from '@/lib/utils'
 
 const ENDPOINT = '/api/v1/data/bulk'
@@ -87,9 +88,19 @@ export async function POST(request: NextRequest) {
         totalCost += price
     }
 
-    // NOTE: the MTN registration gate deliberately does NOT run here. This endpoint no
-    // longer returns 409 MTN_NOT_REGISTERED, and acknowledge_registration is accepted
-    // but ignored — see app/api/orders/purchase/route.ts for the reasoning.
+    // acknowledge_registration is accepted but ignored.
+    // MTN registration gate, admin switch "API Users" (off by default). One check for the
+    // whole batch, before the wallet is touched: if any number is unregistered the batch
+    // is refused whole and nothing is charged. When off, nothing changes.
+    const gate = await checkMtnRegistrationBatch(
+        supabase,
+        resolved.map((r) => ({ phoneNumber: r.phone, packageNetwork: r.pkg.network })),
+        'api'
+    )
+    if (gate.unregistered.length > 0) {
+        logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'POST', statusCode: 409, responseTimeMs: Date.now() - startTime, ip, errorMessage: 'MTN number not registered' })
+        return apiMtnNotRegistered(gate.unregistered)
+    }
 
     // Single atomic wallet deduction for total
     const { data: deductResult, error: deductError } = await (supabase as any).rpc('deduct_wallet_balance', {

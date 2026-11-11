@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server'
 import {
     validateApiKey, isApiError, apiSuccessV2, apiError,
-    logApiRequest, getClientIp, enforceRateLimit,
+    logApiRequest, getClientIp, enforceRateLimit, apiMtnNotRegistered,
 } from '@/lib/api-auth'
+import { checkMtnRegistration } from '@/lib/mtn-registration-gate'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { generateReferenceCode } from '@/lib/utils'
 import { fulfillApiDataOrder } from '@/lib/api-data-fulfillment'
@@ -98,9 +99,14 @@ export async function POST(request: NextRequest) {
         return apiError(404, `No available package found for ${network} ${volume_gb}.`)
     }
 
-    // NOTE: the MTN registration gate deliberately does NOT run here — an unregistered
-    // recipient takes the fulfillment-time path instead. See
-    // app/api/orders/purchase/route.ts for the full reasoning.
+    // MTN registration gate, admin switch "API Users" (off by default). Runs before the
+    // wallet is touched, so a refusal charges nothing and creates no order. When off, an
+    // unregistered recipient takes the fulfillment-time path as before.
+    const gate = await checkMtnRegistration(supabase, cleanPhone, pkg.network, 'api')
+    if (gate.gated) {
+        logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'POST', statusCode: 409, responseTimeMs: Date.now() - startTime, ip, errorMessage: 'MTN number not registered' })
+        return apiMtnNotRegistered([gate.normalizedNumber])
+    }
 
     // Admin-set API price, else the caller's role price — see lib/api-pricing.ts.
     const pricing = await loadApiPricingContext(supabase, userId, userRole)

@@ -266,6 +266,22 @@ export function apiError(code: number, message: string): NextResponse {
 }
 
 /**
+ * 409 for a data order refused by the MTN registration gate (admin switch "API Users").
+ * Nothing was charged and no order exists. `type` lets an integrator tell it apart from
+ * a duplicate-reference 409; `numbers` are the recipients that are not registered yet.
+ */
+export function apiMtnNotRegistered(numbers: string[]): NextResponse {
+    const single = numbers.length === 1
+    const message = single
+        ? `MTN number ${numbers[0]} is not registered yet. Nothing was charged; retry once it is registered.`
+        : `${numbers.length} MTN numbers are not registered yet: ${numbers.join(', ')}. Nothing was charged; remove them and retry.`
+    return NextResponse.json(
+        { success: false, error: { code: 409, type: 'MTN_NOT_REGISTERED', message, numbers } },
+        { status: 409 }
+    )
+}
+
+/**
  * Run a write once the response is on its way, without letting the platform freeze the
  * function before the write lands.
  *

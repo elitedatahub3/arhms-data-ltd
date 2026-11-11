@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server'
 import {
     validateApiKey, isApiError, apiSuccessV2, apiError,
-    logApiRequest, getClientIp, enforceRateLimit,
+    logApiRequest, getClientIp, enforceRateLimit, apiMtnNotRegistered,
 } from '@/lib/api-auth'
+import { checkMtnRegistrationBatch } from '@/lib/mtn-registration-gate'
 import { generateReferenceCode } from '@/lib/utils'
 import {
     dataNetworkError, normaliseRecipient, findPackageForSize, isDuplicateReferenceError,
@@ -115,6 +116,19 @@ export async function POST(request: NextRequest) {
     }
 
     totalCost = Math.round((totalCost + Number.EPSILON) * 100) / 100
+
+    // MTN registration gate, admin switch "API Users" (off by default). One check for the
+    // whole batch, before the wallet is touched: if any number is unregistered the batch
+    // is refused whole and nothing is charged. When off, nothing changes.
+    const gate = await checkMtnRegistrationBatch(
+        supabase,
+        resolved.map((r) => ({ phoneNumber: r.phone, packageNetwork: r.pkg.network })),
+        'api'
+    )
+    if (gate.unregistered.length > 0) {
+        logApiRequest({ apiKeyId, userId, endpoint: ENDPOINT, method: 'POST', statusCode: 409, responseTimeMs: Date.now() - startTime, ip, errorMessage: 'MTN number not registered' })
+        return apiMtnNotRegistered(gate.unregistered)
+    }
 
     const { data: deductResult, error: deductError } = await (supabase as any).rpc('deduct_wallet_balance', {
         p_user_id: userId,

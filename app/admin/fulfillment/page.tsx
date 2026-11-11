@@ -242,7 +242,7 @@ export default function FulfillmentPage() {
     // MTN registration gate — refuses orders to unregistered MTN numbers. One switch per
     // surface: 'shop' is the storefronts, 'site' is the main site (dashboard + USSD).
     // The developer API is never gated. Off unless the DB says otherwise.
-    const [mtnGate, setMtnGate] = useState<Record<MtnGateSurface, boolean>>({ shop: false, site: false })
+    const [mtnGate, setMtnGate] = useState<Record<MtnGateSurface, boolean>>({ shop: false, site: false, api: false })
     const [savingMtnGate, setSavingMtnGate] = useState<MtnGateSurface | null>(null)
 
     useEffect(() => {
@@ -339,6 +339,7 @@ export default function FulfillmentPage() {
                     'cron_auto_complete_delay_minutes',
                     MTN_GATE_KEYS.shop,
                     MTN_GATE_KEYS.site,
+                    MTN_GATE_KEYS.api,
                     LEGACY_MTN_GATE_KEY,
                 ])
 
@@ -414,7 +415,7 @@ export default function FulfillmentPage() {
             setCronRefulfillDelay(map.cron_auto_refulfill_delay_minutes || '5')
             setCronAutoCompleteEnabled(map.cron_auto_complete_enabled === 'true')
             setCronAutoCompleteDelay(map.cron_auto_complete_delay_minutes || '30')
-            setMtnGate({ shop: mtnGateFromMap(map, 'shop'), site: mtnGateFromMap(map, 'site') })
+            setMtnGate({ shop: mtnGateFromMap(map, 'shop'), site: mtnGateFromMap(map, 'site'), api: mtnGateFromMap(map, 'api') })
         } catch (error) {
             console.error('Failed to fetch settings:', error)
         }
@@ -456,9 +457,10 @@ export default function FulfillmentPage() {
             const { error } = await (supabase.from('admin_settings') as any).upsert([
                 { key: MTN_GATE_KEYS.shop, value: String(next.shop) },
                 { key: MTN_GATE_KEYS.site, value: String(next.site) },
+                { key: MTN_GATE_KEYS.api, value: String(next.api) },
             ])
             if (error) throw error
-            const where = surface === 'shop' ? 'shop storefronts' : 'the main site and USSD'
+            const where = surface === 'shop' ? 'shop storefronts' : surface === 'api' ? 'the developer API' : 'the main site and USSD'
             toast.success(enabled
                 ? `Unregistered MTN numbers are now refused on ${where}`
                 : `MTN registration check turned off for ${where}`)
@@ -2022,7 +2024,8 @@ export default function FulfillmentPage() {
                         outright</strong> on that surface — nothing is charged and no order is created, and a bulk
                         order is refused whole if any one number in it is unregistered. When OFF, the main site goes
                         through silently, and shop storefronts show a &quot;Heads up&quot; warning the guest can
-                        proceed past. The developer API is never affected: those orders sit pending until MTN
+                        proceed past. For API users, a single order is refused with a 409 (MTN_NOT_REGISTERED) and a
+                        bulk order is refused whole; with that switch OFF, API orders sit pending until MTN
                         enables the number. A number goes through if either Agent Portal has registered it or
                         BundlePortal accepts it, whichever supplier is currently fulfilling MTN, so some sales
                         your active supplier could have delivered may still be turned away. Checking a number also submits it for registration — turning a switch
@@ -2038,6 +2041,11 @@ export default function FulfillmentPage() {
                             surface: 'shop',
                             title: '🛍️ Shop Storefronts',
                             detail: 'Guest checkouts on every shop storefront.',
+                        },
+                        {
+                            surface: 'api',
+                            title: '🔌 API Users',
+                            detail: 'Developer API data orders (v1 and v2, single and bulk).',
                         },
                     ] as const).map(({ surface, title, detail }) => (
                         <div key={surface} className="flex items-center gap-3 p-3 bg-background rounded-xl border">

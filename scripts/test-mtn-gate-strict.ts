@@ -372,7 +372,7 @@ async function main() {
 
     // ── Surface wiring ───────────────────────────────────────────────────────────
     // Which routes import this module is a product decision, not an implementation
-    // detail: API v1 is ungated ON PURPOSE, and each dashboard purchase route is gated
+    // detail: the developer API is gated only by its own "API Users" switch, and each dashboard purchase route is gated
     // ON PURPOSE. Either is exactly the kind of thing a later refactor flips by
     // accident, and no type error or unit test would catch it — so assert the import
     // graph directly.
@@ -381,8 +381,6 @@ async function main() {
     const pathMod = require('path') as typeof import('path')
 
     const MUST_NOT_GATE = [
-        'app/api/v1/data/purchase/route.ts',
-        'app/api/v1/data/bulk/route.ts',
         // The page reads the 409 body and shows the dialog. It must not import the gate
         // module itself — that would pull the supplier client into the browser bundle.
         'app/dashboard/data-packages/page.tsx',
@@ -410,6 +408,20 @@ async function main() {
             console.log(`  PASS  ${file} is ungated`)
             passed++
         }
+    }
+    // The developer API data routes are gated, and ONLY under the 'api' surface: gating them
+    // under 'site' would let the main-site switch start refusing integrators' orders.
+    const API_GATED = [
+        'app/api/v1/data/purchase/route.ts',
+        'app/api/v1/data/bulk/route.ts',
+        'app/api/v2/data/purchase/route.ts',
+        'app/api/v2/data/bulk/route.ts',
+    ]
+    for (const file of API_GATED) {
+        const src = fs.readFileSync(pathMod.join(REPO_ROOT, file), 'utf8')
+        const ok = importsGate(file) && /'api'\s*\)/.test(src) && !/'(site|shop)'\s*\)/.test(src)
+        console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${file} is gated by the API Users switch only`)
+        if (ok) passed++; else failed++
     }
     for (const file of MUST_GATE) {
         if (importsGate(file)) {

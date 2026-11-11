@@ -207,7 +207,7 @@ let settingsCache: { value: GateSettings; expiresAt: number } | null = null
 async function loadGateSettings(supabase: any): Promise<GateSettings> {
     if (settingsCache && settingsCache.expiresAt > Date.now()) return settingsCache.value
 
-    const disabled: GateSettings = { shop: false, site: false }
+    const disabled: GateSettings = { shop: false, site: false, api: false }
 
     try {
         const { data, error } = await supabase
@@ -223,6 +223,7 @@ async function loadGateSettings(supabase: any): Promise<GateSettings> {
         const value: GateSettings = {
             shop: resolveGateEnabled(raw, 'shop'),
             site: resolveGateEnabled(raw, 'site'),
+            api: resolveGateEnabled(raw, 'api'),
         }
 
         settingsCache = { value, expiresAt: Date.now() + SETTINGS_TTL_MS }
