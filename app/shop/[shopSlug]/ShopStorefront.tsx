@@ -276,6 +276,11 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     })
     const [afaEmail, setAfaEmail] = useState('')
     const [afaIdError, setAfaIdError] = useState<string | null>(null)
+    // The applicant is registered on afaForm.phone; the MoMo prompt goes here, so
+    // someone else's wallet may pay for the registration.
+    const [afaPayPhone, setAfaPayPhone] = useState('')
+    const [afaPayNetwork, setAfaPayNetwork] = useState<PayNetwork | null>(null)
+    const [afaPayNetworkManual, setAfaPayNetworkManual] = useState(false)
 
     const { isInstallable, isInstalled, isIOS, installPwa } = usePwa()
 
@@ -710,6 +715,12 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
         setAirtimePayNetwork(detectPayNetwork(effectiveAirtimePayPhone))
     }, [effectiveAirtimePayPhone, airtimePayNetworkManual])
 
+    const effectiveAfaPayPhone = afaPayPhone.replace(/\s+/g, '')
+    useEffect(() => {
+        if (afaPayNetworkManual) return
+        setAfaPayNetwork(detectPayNetwork(effectiveAfaPayPhone))
+    }, [effectiveAfaPayPhone, afaPayNetworkManual])
+
     const closeDataCheckout = () => {
         setSelectedPackage(null)
         setErrorMsg(null)
@@ -1097,6 +1108,15 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
 
         const cleanPhone = afaForm.phone.replace(/\s+/g, '')
 
+        if (needsMomoDetails) {
+            if (!effectiveAfaPayPhone) { toast.error('Enter the Mobile Money number to charge'); return }
+            if (!/^(0\d{9}|233\d{9})$/.test(effectiveAfaPayPhone)) {
+                toast.error('Invalid Mobile Money number. Use format: 0XXXXXXXXX')
+                return
+            }
+            if (!afaPayNetwork) { toast.error('Select the Mobile Money network to pay from'); return }
+        }
+
         setLoading(true)
         try {
             const res = await fetch('/api/shop/afa/initialize', {
@@ -1106,6 +1126,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     shopSlug: shop.shop_slug,
                     formData: { ...afaForm, phone: cleanPhone },
                     customerEmail: afaEmail.trim() || undefined,
+                    ...(needsMomoDetails ? { payerPhone: effectiveAfaPayPhone, payerNetwork: afaPayNetwork } : {}),
                     provider: webPaymentProvider,
                 })
             })
@@ -1179,6 +1200,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 shopSlug: shop.shop_slug,
                 formData: { ...afaForm, phone: afaForm.phone.replace(/\s+/g, '') },
                 customerEmail: afaEmail.trim() || undefined,
+                ...(needsMomoDetails ? { payerPhone: effectiveAfaPayPhone, payerNetwork: afaPayNetwork } : {}),
                 otpCode: otpCode.trim(),
                 reference: otpReference,
                 provider: webPaymentProvider
@@ -2069,7 +2091,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
 
                             <div className="space-y-2">
                                 <Label className={SHEET_LABEL_CLASS}>
-                                    Phone number <span className="font-semibold text-gray-400">(gets the payment prompt)</span>
+                                    Phone number <span className="font-semibold text-gray-400">{needsMomoDetails ? '(to register)' : '(gets the payment prompt)'}</span>
                                 </Label>
                                 <input
                                     type="tel" inputMode="tel"
@@ -2163,6 +2185,45 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     className={SHEET_FIELD_CLASS}
                                 />
                             </div>
+
+                            {/* Payer — typed on its own; any wallet on any network may pay.
+                                Paystack collects this on its own page, so hide it there. */}
+                            {needsMomoDetails && (
+                                <div className="space-y-2">
+                                    <Label className={SHEET_LABEL_CLASS}>
+                                        Mobile Money number <span className="font-semibold text-gray-400">(to pay)</span>
+                                    </Label>
+                                    <input
+                                        type="tel" inputMode="numeric"
+                                        value={afaPayPhone}
+                                        onChange={(e) => setAfaPayPhone(e.target.value)}
+                                        placeholder="0241234567"
+                                        className={SHEET_FIELD_CLASS}
+                                    />
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {([
+                                            { id: 'MTN', label: 'MTN', dot: 'bg-[#FFCC00]' },
+                                            { id: 'Telecel', label: 'Telecel', dot: 'bg-[#da291c]' },
+                                            { id: 'AT', label: 'AirtelTigo', dot: 'bg-[#2463eb]' },
+                                        ] as { id: PayNetwork; label: string; dot: string }[]).map(({ id, label, dot }) => (
+                                            <button
+                                                key={id}
+                                                type="button"
+                                                onClick={() => { setAfaPayNetwork(id); setAfaPayNetworkManual(true) }}
+                                                className={cn(
+                                                    'flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition-all',
+                                                    afaPayNetwork === id
+                                                        ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                                                        : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                                                )}
+                                            >
+                                                <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', dot)} />
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Cost + action, pinned like the sheet's action bar. Unlike a bundle

@@ -53,6 +53,8 @@ export async function POST(request: NextRequest) {
             shopSlug,
             formData,
             customerEmail,
+            payerPhone,
+            payerNetwork,
             otpCode,
             reference: existingRef,
         } = body
@@ -75,6 +77,24 @@ export async function POST(request: NextRequest) {
         if (!/^(0\d{9}|233\d{9})$/.test(cleanPhone)) {
             return NextResponse.json({ error: 'Invalid phone number. Use format: 0XXXXXXXXX' }, { status: 400 })
         }
+
+        // The applicant is registered on formData.phone; the MoMo prompt may go to a
+        // different wallet. Older clients send neither field — then the applicant pays.
+        let payerClean = cleanPhone
+        if (payerPhone !== undefined && payerPhone !== null && String(payerPhone).trim() !== '') {
+            if (typeof payerPhone !== 'string') {
+                return NextResponse.json({ error: 'Invalid Mobile Money number' }, { status: 400 })
+            }
+            payerClean = payerPhone.replace(/\s+/g, '')
+            if (!/^(0\d{9}|233\d{9})$/.test(payerClean)) {
+                return NextResponse.json({ error: 'Invalid Mobile Money number. Use format: 0XXXXXXXXX' }, { status: 400 })
+            }
+        }
+        // The customer's explicit pick wins over the prefix guess — ported numbers
+        // keep their old prefix.
+        const payNetwork = ['MTN', 'Telecel', 'AT'].includes(payerNetwork)
+            ? String(payerNetwork)
+            : networkForPhone(payerClean)
 
         let validEmail: string | null = null
         if (customerEmail) {
@@ -109,7 +129,7 @@ export async function POST(request: NextRequest) {
         // Checked before any row is written, so a throttled applicant leaves no
         // abandoned pending order behind.
         if (provider === 'hubtel' && !existingRef) {
-            const promptLimit = await checkHubtelPromptLimit(cleanPhone)
+            const promptLimit = await checkHubtelPromptLimit(payerClean)
             if (!promptLimit.allowed) {
                 return NextResponse.json({ error: promptLimit.error }, { status: 429 })
             }
@@ -239,8 +259,7 @@ export async function POST(request: NextRequest) {
 
             // ── PAYSTACK MOBILE MONEY BRANCH ──────────────────────────────────
             if (provider === 'paystack_momo') {
-                const payerNetwork = networkForPhone(cleanPhone)
-                if (!paystackMomoProviderFor(payerNetwork)) {
+                if (!paystackMomoProviderFor(payNetwork)) {
                     return NextResponse.json({ error: 'Unsupported payment network' }, { status: 400 })
                 }
 
@@ -251,8 +270,8 @@ export async function POST(request: NextRequest) {
                 const charge = await startPaystackMomoCharge({
                     reference: referenceCode,
                     amountGhs: totalAmount,
-                    payerPhone: cleanPhone,
-                    network: payerNetwork,
+                    payerPhone: payerClean,
+                    network: payNetwork,
                     email: validEmail || undefined,
                     // The applicant's name never has to reach a payment field — the
                     // settle path reads it back from the order row.
@@ -316,14 +335,14 @@ export async function POST(request: NextRequest) {
 
             // ── HUBTEL BRANCH ─────────────────────────────────────────────────
             if (provider === 'hubtel') {
-                const hubtelChannel = HUBTEL_CHANNEL_MAP[networkForPhone(cleanPhone)]
+                const hubtelChannel = HUBTEL_CHANNEL_MAP[payNetwork]
                 if (!hubtelChannel) {
                     return NextResponse.json({ error: 'Unsupported payment network' }, { status: 400 })
                 }
 
                 const hubtelResponse = await hubtelInitiatePayment({
                     amount: totalAmount,
-                    payerPhone: cleanPhone,
+                    payerPhone: payerClean,
                     channel: hubtelChannel,
                     clientReference: referenceCode,
                     customerName: safeApplicantName,
@@ -340,7 +359,7 @@ export async function POST(request: NextRequest) {
                 }
 
                 // Only now has a prompt actually reached the handset.
-                await recordHubtelPrompt(cleanPhone)
+                await recordHubtelPrompt(payerClean)
 
                 return NextResponse.json({
                     success: true,
@@ -353,7 +372,7 @@ export async function POST(request: NextRequest) {
 
             // ── PAYSWITCH BRANCH ──────────────────────────────────────────────
             if (provider === 'payswitch') {
-                const psNetwork = networkForPhone(cleanPhone)
+                const psNetwork = payNetwork
                 if (!PAYSWITCH_CHANNEL_MAP[psNetwork]) {
                     return NextResponse.json({ error: 'Unsupported payment network' }, { status: 400 })
                 }
@@ -364,7 +383,7 @@ export async function POST(request: NextRequest) {
 
                 const payswitchResponse = await payswitchInitiatePayment({
                     amount: totalAmount,
-                    payerPhone: cleanPhone,
+                    payerPhone: payerClean,
                     network: psNetwork,
                     transactionId,
                     description: paymentDescription,
@@ -388,14 +407,14 @@ export async function POST(request: NextRequest) {
             }
 
             // ── MOOLRE BRANCH ─────────────────────────────────────────────────
-            const channelId = MOOLRE_PAYMENT_CHANNEL_MAP[networkForPhone(cleanPhone)]
+            const channelId = MOOLRE_PAYMENT_CHANNEL_MAP[payNetwork]
             if (!channelId) {
                 return NextResponse.json({ error: 'Unsupported payment network' }, { status: 400 })
             }
 
             const moolreResponse = await initiatePayment({
                 amount: totalAmount,
-                payerPhone: cleanPhone,
+                payerPhone: payerClean,
                 channel: channelId,
                 externalRef: referenceCode,
                 otpCode: undefined,
@@ -447,15 +466,15 @@ export async function POST(request: NextRequest) {
                 )
             }
 
-            const otpResult = await submitPaystackMomoOtp({ reference: existingRef, otp: String(otpCode), payerPhone: cleanPhone })
+            const otpResult = await submitPaystackMomoOtp({ reference: existingRef, otp: String(otpCode), payerPhone: payerClean })
             return NextResponse.json(otpResult.body, otpResult.ok ? undefined : { status: otpResult.httpStatus })
         }
 
-        const channelId = MOOLRE_PAYMENT_CHANNEL_MAP[networkForPhone(cleanPhone)]
+        const channelId = MOOLRE_PAYMENT_CHANNEL_MAP[payNetwork]
 
         let moolreResponse = await initiatePayment({
             amount: totalAmount,
-            payerPhone: cleanPhone,
+            payerPhone: payerClean,
             channel: channelId,
             externalRef: existingRef,
             otpCode,
@@ -464,7 +483,7 @@ export async function POST(request: NextRequest) {
         if (moolreResponse.success && String(moolreResponse.status) === '1' && otpCode) {
             moolreResponse = await initiatePayment({
                 amount: totalAmount,
-                payerPhone: cleanPhone,
+                payerPhone: payerClean,
                 channel: channelId,
                 externalRef: existingRef,
             })
