@@ -3,8 +3,12 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
+import { installAuthFetch } from '@/lib/auth-fetch'
 import { User as DBUser } from '@/types/supabase'
 import { useRouter } from 'next/navigation'
+
+// Same-origin /api/ calls also carry the session token — see lib/auth-fetch.ts.
+installAuthFetch()
 
 interface AuthContextType {
     user: User | null
