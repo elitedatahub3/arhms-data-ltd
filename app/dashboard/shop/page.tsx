@@ -100,6 +100,9 @@ export default function ShopOverviewPage() {
     const [loading, setLoading] = useState(true)
     // Set when the shop lookup itself failed — never conflated with "no shop yet".
     const [loadError, setLoadError] = useState<string | null>(null)
+    // The server could not authenticate this browser even after a token refresh —
+    // "Try again" can never succeed then, so offer a fresh login instead.
+    const [sessionExpired, setSessionExpired] = useState(false)
     const [isRefreshing, setIsRefreshing] = useState(false)
     const [copied, setCopied] = useState(false)
 
@@ -121,8 +124,20 @@ export default function ShopOverviewPage() {
         // failure can't be mistaken for "this user has no shop".
         let shopData: any = null
         setLoadError(null)
+        setSessionExpired(false)
         try {
-            const res = await fetch('/api/shop/profile', { cache: 'no-store' })
+            let res = await fetch('/api/shop/profile', { cache: 'no-store' })
+            if (res.status === 401) {
+                // Usually a stale access token: refresh it and ask once more.
+                await supabase.auth.refreshSession().catch(() => null)
+                res = await fetch('/api/shop/profile', { cache: 'no-store' })
+            }
+            if (res.status === 401) {
+                setSessionExpired(true)
+                setLoadError('Your login has expired on this device. Please log in again — your shop is safe.')
+                setLoading(false)
+                return
+            }
             const payload = await res.json().catch(() => null)
             if (!res.ok) throw new Error(payload?.error || 'Failed to load shop')
             shopData = payload?.shop || null
@@ -336,13 +351,38 @@ export default function ShopOverviewPage() {
                     <h2 className="text-2xl font-bold mb-2">Couldn&apos;t load your shop</h2>
                     <p className="text-muted-foreground max-w-sm">{loadError}</p>
                 </div>
-                <Button
-                    size="lg"
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
-                    onClick={() => { setLoading(true); fetchShopData() }}
-                >
-                    <RefreshCcw className="w-5 h-5" /> Try again
-                </Button>
+                {sessionExpired ? (
+                    <Button
+                        size="lg"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+                        onClick={async () => {
+                            // This device only — signOut() from useAuth is global and
+                            // would log the owner out of every phone.
+                            await supabase.auth.signOut({ scope: 'local' }).catch(() => null)
+                            // Also drop any leftover auth cookie, host-only copies
+                            // included: a stale duplicate is one way the server ends
+                            // up unable to read a session the browser still has.
+                            for (const c of document.cookie.split('; ')) {
+                                const name = c.split('=')[0]
+                                if (!/^sb-.+-auth-token(\.\d+)?$/.test(name)) continue
+                                const expire = `${name}=; Max-Age=0; Path=/`
+                                document.cookie = expire
+                                document.cookie = `${expire}; Domain=.arhmsgh.com`
+                            }
+                            window.location.href = '/auth/login'
+                        }}
+                    >
+                        Log in again
+                    </Button>
+                ) : (
+                    <Button
+                        size="lg"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+                        onClick={() => { setLoading(true); fetchShopData() }}
+                    >
+                        <RefreshCcw className="w-5 h-5" /> Try again
+                    </Button>
+                )}
             </div>
         )
     }
