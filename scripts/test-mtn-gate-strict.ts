@@ -204,14 +204,14 @@ const cases: Case[] = [
         wantBlocked: false, wantBatchGated: false,
     },
     {
-        name: 'Agent Portal refuses, BundlePortal accepts → allowed',
+        name: 'Agent Portal refuses, BundlePortal accepts → REFUSED (gate is Agent Portal only)',
         enabled: true, upstream: 'deny', bundlePortal: 'allow', phone: MTN, network: 'MTN',
-        wantBlocked: false, wantBatchGated: false,
+        wantBlocked: true, wantReason: 'unregistered', wantBatchGated: true,
     },
     {
-        name: 'Agent Portal outage, BundlePortal accepts → allowed (USSD no longer refuses)',
+        name: 'Agent Portal outage, BundlePortal accepts → REFUSED on USSD, fail open on web',
         enabled: true, upstream: 'fail', bundlePortal: 'allow', phone: MTN, network: 'MTN',
-        wantBlocked: false, wantBatchGated: false,
+        wantBlocked: true, wantReason: 'unverifiable', wantBatchGated: false,
     },
     {
         name: 'Agent Portal refuses, BundlePortal outage → REFUSED (unchanged)',
@@ -267,6 +267,9 @@ async function main() {
         if (batchGated !== c.wantBatchGated) {
             problems.push(`batch gated=${batchGated}, want ${c.wantBatchGated}`)
         }
+        if (bundlePortalCalls !== 0) {
+            problems.push(`BundlePortal called ${bundlePortalCalls}x — gate must be Agent Portal only`)
+        }
         if (!c.enabled && strictCalls !== 0) {
             problems.push(`upstream called ${strictCalls}x while gate off`)
         }
@@ -319,16 +322,14 @@ async function main() {
         name: string; ap: UpstreamMode; apDelay: number; bp: UpstreamMode; bpDelay: number
         wantBlocked: boolean; wantReason?: string; maxMs: number; minMs?: number
     }> = [
-        { name: 'Server 2 says yes after 3s, Server 1 says no at once -> allowed (was refused at 1.5s)',
-          ap: 'deny', apDelay: 0, bp: 'allow', bpDelay: 3000, wantBlocked: false, maxMs: 3600, minMs: 2900 },
-        { name: 'Server 2 says yes at once, Server 1 hangs 3s -> allowed without waiting',
-          ap: 'allow', apDelay: 3000, bp: 'allow', bpDelay: 0, wantBlocked: false, maxMs: 500 },
+        { name: 'Server 2 says yes, Server 1 says no -> REFUSED unregistered, Server 2 not waited on',
+          ap: 'deny', apDelay: 0, bp: 'allow', bpDelay: 3000, wantBlocked: true, wantReason: 'unregistered', maxMs: 500 },
+        { name: 'Server 1 says yes after 1s -> allowed',
+          ap: 'allow', apDelay: 1000, bp: 'allow', bpDelay: 0, wantBlocked: false, maxMs: 1600, minMs: 900 },
         { name: 'Server 1 says yes at once, Server 2 hangs -> allowed without waiting',
           ap: 'allow', apDelay: 0, bp: 'deny', bpDelay: 3000, wantBlocked: false, maxMs: 500 },
-        { name: 'Server 1 no at once, Server 2 no after 1s -> waits for both, REFUSED unregistered',
-          ap: 'deny', apDelay: 0, bp: 'deny', bpDelay: 1000, wantBlocked: true, wantReason: 'unregistered', maxMs: 1600, minMs: 900 },
-        { name: 'both servers past their budgets -> REFUSED unverifiable inside ~4s',
-          ap: 'allow', apDelay: 9000, bp: 'allow', bpDelay: 9000, wantBlocked: true, wantReason: 'unverifiable', maxMs: 4600, minMs: 3900 },
+        { name: 'Server 1 past its 2.5s budget -> REFUSED unverifiable inside ~2.5s',
+          ap: 'allow', apDelay: 9000, bp: 'allow', bpDelay: 0, wantBlocked: true, wantReason: 'unverifiable', maxMs: 3100, minMs: 2400 },
     ]
     for (const tc of timingCases) {
         upstreamMode = tc.ap; upstreamDelayMs = tc.apDelay

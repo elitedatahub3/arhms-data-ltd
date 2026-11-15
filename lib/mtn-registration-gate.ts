@@ -33,10 +33,11 @@
  * So do not "restore consistency" by wiring this into an API v1 route. That exemption
  * is the requirement; scripts/test-mtn-gate-strict.ts asserts the whole import graph.
  *
- * A number counts as registered if Agent Portal has enabled it OR BundlePortal's
- * verify_number accepts it. Both are asked in parallel; BundlePortal can only ever turn
- * a refusal into a pass, never the reverse, and its answers are not cached (the cache's
- * positives are permanent and mean "Agent Portal enabled").
+ * A number counts as registered only if Agent Portal (Server 1) has enabled it.
+ * BundlePortal (Server 2) used to be asked too, as a second opinion that could turn a
+ * refusal into a pass; since 2026-11-15 the gate is Agent Portal only — see
+ * BUNDLEPORTAL_IN_GATE. The cache's positives are permanent and mean "Agent Portal
+ * enabled".
  *
  * Three things worth knowing before you change anything here:
  *
@@ -112,6 +113,14 @@ const USSD_BUNDLEPORTAL_TIMEOUT_MS = 4000
  * bulk paste stays bounded; only numbers not already known registered reach it.
  */
 const BUNDLEPORTAL_CONCURRENCY = 10
+
+/**
+ * Whether BundlePortal (Server 2) is asked as a second opinion. OFF since 2026-11-15:
+ * the admin wanted the gate to follow Agent Portal alone, so a number BundlePortal
+ * accepts but Agent Portal has not enabled is refused. Flip back to true to restore
+ * the either-server-passes rule — the BundlePortal code path below is kept intact.
+ */
+const BUNDLEPORTAL_IN_GATE = false
 
 /** The single wait time quoted to buyers. Change it here and everywhere follows. */
 export const REGISTRATION_WAIT_TEXT = 'up to 2 weeks'
@@ -392,7 +401,9 @@ async function resolveRegistrationStatuses(
     // BundlePortal is asked about every number not already known registered — including
     // cached negatives, since its answers are never cached — alongside Agent Portal
     // rather than after it, so the wait is the slower of the two, not their sum.
-    const needsBundlePortal = candidates.filter(n => statusByNumber.get(n) !== 'registered')
+    const needsBundlePortal = BUNDLEPORTAL_IN_GATE
+        ? candidates.filter(n => statusByNumber.get(n) !== 'registered')
+        : []
     if (needsUpstream.length === 0 && needsBundlePortal.length === 0) return statusByNumber
 
     const allRegistered = () => candidates.every(n => statusByNumber.get(n) === 'registered')
@@ -557,10 +568,9 @@ export type StrictGateResult =
  * again. Money taken over USSD for data we cannot deliver is money we have to find and
  * refund by hand. So an order we could not verify is one we do not take money for.
  *
- * Both servers are asked (Server 1 = Agent Portal, Server 2 = BundlePortal), each on
- * its own budget, and the first "registered" settles it. The cost is real and worth
- * stating: while BOTH are down or unconfigured, every MTN USSD data sale stops. That is
- * the accepted trade, not an oversight.
+ * Only Agent Portal (Server 1) is asked while BUNDLEPORTAL_IN_GATE is off. The cost is
+ * real and worth stating: while Agent Portal is down or unconfigured, every MTN USSD
+ * data sale stops. That is the accepted trade, not an oversight.
  *
  * `enabled` is passed in rather than read here on purpose — the route resolves it with
  * resolveGateEnabled(raw, 'site'), USSD being part of the main site. /api/hubtel/interact already
