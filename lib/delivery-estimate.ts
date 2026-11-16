@@ -113,7 +113,10 @@ function preciseMinutes(d: Duration): number {
 export function formatDuration(d: Duration | null): string {
     if (!d) return ''
     if (d.seconds < 60) return `${Math.max(1, d.seconds)} sec`
-    return `${d.minutes} min`
+    if (d.minutes < 60) return `${d.minutes} min`
+    const hours = Math.floor(d.minutes / 60)
+    const mins = d.minutes % 60
+    return mins === 0 ? `${hours} hr` : `${hours} hr ${mins} min`
 }
 
 /** Customer-facing tier wording — never "down" or "critical". */

@@ -64,6 +64,13 @@ test('seconds vs minutes branches on precise seconds', () => {
     assert.equal(formatDuration(null), '')
 })
 
+test('an hour or more reads in hours', () => {
+    assert.equal(formatDuration({ minutes: 59, seconds: 3540 }), '59 min')
+    assert.equal(formatDuration({ minutes: 60, seconds: 3600 }), '1 hr')
+    assert.equal(formatDuration({ minutes: 120, seconds: 7200 }), '2 hr')
+    assert.equal(formatDuration({ minutes: 460, seconds: 27600 }), '7 hr 40 min')
+})
+
 test('a 5.1-minute raw delivery shows seconds, not "0 min"', () => {
     const est = computeChannelEstimate(signal({ cCreatedAt: at(10), cDeliveredAt: at(10 - 5.1) }), NOW)
     assert.equal(formatDuration(est.lastTook), '6 sec')
