@@ -68,7 +68,10 @@ test('an hour or more reads in hours', () => {
     assert.equal(formatDuration({ minutes: 59, seconds: 3540 }), '59 min')
     assert.equal(formatDuration({ minutes: 60, seconds: 3600 }), '1 hr')
     assert.equal(formatDuration({ minutes: 120, seconds: 7200 }), '2 hr')
-    assert.equal(formatDuration({ minutes: 460, seconds: 27600 }), '7 hr 40 min')
+    assert.equal(formatDuration({ minutes: 190, seconds: 11400 }), '3 hr 10 min')
+    assert.equal(formatDuration({ minutes: 240, seconds: 14400 }), '4 hr')
+    assert.equal(formatDuration({ minutes: 241, seconds: 14460 }), '4 hr +')
+    assert.equal(formatDuration({ minutes: 460, seconds: 27600 }), '4 hr +')
 })
 
 test('a 5.1-minute raw delivery shows seconds, not "0 min"', () => {
