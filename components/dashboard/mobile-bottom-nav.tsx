@@ -556,6 +556,7 @@ const DRAG_THRESHOLD = 6
 function RefreshFab() {
     const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
     const [dragging, setDragging] = useState(false)
+    const [refreshing, setRefreshing] = useState(false)
     const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
 
     const clamp = (p: { x: number; y: number }) => ({
@@ -583,7 +584,15 @@ function RefreshFab() {
         // position, stranding the button off-screen.
         const onResize = () => setPos((p) => (p ? clamp(p) : p))
         window.addEventListener('resize', onResize)
-        return () => window.removeEventListener('resize', onResize)
+        // Back/forward cache can restore this page mid-spin; stop it.
+        const onPageShow = (e: PageTransitionEvent) => {
+            if (e.persisted) setRefreshing(false)
+        }
+        window.addEventListener('pageshow', onPageShow)
+        return () => {
+            window.removeEventListener('resize', onResize)
+            window.removeEventListener('pageshow', onPageShow)
+        }
     }, [])
 
     if (!pos) return null
@@ -609,7 +618,14 @@ function RefreshFab() {
         setDragging(false)
         if (!d) return
         if (!d.moved) {
-            window.location.reload()
+            if (refreshing) return
+            // Spin first, reload second: a reload issued in the same frame
+            // blocks the paint, so the tap looked dead until the new page
+            // arrived. Two frames guarantee the spinning icon is on screen
+            // (the spin runs on the compositor, so it keeps turning while
+            // the next page loads).
+            setRefreshing(true)
+            requestAnimationFrame(() => requestAnimationFrame(() => window.location.reload()))
             return
         }
         setPos((prev) => {
@@ -632,6 +648,7 @@ function RefreshFab() {
         <button
             type="button"
             aria-label="Refresh page"
+            aria-busy={refreshing}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -641,7 +658,7 @@ function RefreshFab() {
                 dragging ? 'scale-110 cursor-grabbing shadow-nav' : 'transition-[left,top,transform] duration-200 active:scale-95'
             }`}
         >
-            <RefreshCw className="h-7 w-7" />
+            <RefreshCw className={`h-7 w-7 ${refreshing ? 'animate-spin' : ''}`} />
         </button>
     )
 }
