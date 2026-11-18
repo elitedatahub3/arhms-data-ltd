@@ -33,7 +33,7 @@
 import { useEffect, useState } from 'react'
 // Same floor the level below is held to, so "their room" is the real number
 // rather than this screen's guess at it.
-import { subFloorFor } from '@/lib/sub-pricing-context'
+import { subFloorFor, maxSubPriceFor } from '@/lib/sub-pricing-context'
 
 interface Item {
     packageId: string
@@ -104,6 +104,14 @@ export default function SubWholesalePricing({ backHref }: { backHref?: string })
                 2
             )} plus the ₵${minMargin.toFixed(2)} minimum margin.`
         }
+        // Typo guard, mirrored server-side: "45" for a ₵6 bundle priced the
+        // whole downline out of that bundle without a word.
+        const max = maxSubPriceFor(it.myPrice, it.myCost)
+        if (v > max) {
+            return `₵${v.toFixed(2)} looks like a typo — you sell this at ₵${it.myPrice.toFixed(
+                2
+            )}. At most ₵${max.toFixed(2)}.`
+        }
         return null
     }
 
@@ -121,7 +129,7 @@ export default function SubWholesalePricing({ backHref }: { backHref?: string })
                 text:
                     rejected.length === 1
                         ? `${it.network} · ${it.size}: ${why}`
-                        : `${rejected.length} prices are too low, starting with ${it.network} · ${it.size}: ${why}`,
+                        : `${rejected.length} prices need fixing, starting with ${it.network} · ${it.size}: ${why}`,
             })
             return
         }

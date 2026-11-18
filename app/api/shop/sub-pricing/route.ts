@@ -9,7 +9,7 @@ import {
     DEPTH_LIMIT_ERROR,
     SUB_INACTIVE_ERROR,
 } from '@/lib/sub-agents'
-import { resolveMinSubMargin } from '@/lib/sub-pricing-context'
+import { resolveMinSubMargin, maxSubPriceFor } from '@/lib/sub-pricing-context'
 
 /**
  * Wholesale pricing — what a recruiter charges the level below them.
@@ -25,7 +25,9 @@ import { resolveMinSubMargin } from '@/lib/sub-pricing-context'
  * caller themselves pays — resolved through the chain, so a sub is floored at
  * their Lead's wholesale price rather than at the platform's role price.
  *
- * There is no ceiling. Wholesale used to be capped at the caller's own retail
+ * There is no business ceiling — only a typo guard (maxSubPriceFor), since
+ * "45" for a ₵6 bundle once saved silently and priced the downline out.
+ * Wholesale used to be capped at the caller's own retail
  * price, which made the screen unusable for anyone selling on a thin retail
  * margin: price retail at cost + ₵0.50 with a ₵0.50 minimum wholesale margin
  * and the floor and the cap land on the same pesewa, so every value but one
@@ -170,6 +172,7 @@ export async function GET() {
                      */
                     myPrice: retail,
                     minPrice: Math.round((myCost + minMargin) * 100) / 100,
+                    maxPrice: maxSubPriceFor(retail, myCost),
                     currentSubPrice: row.sub_price != null ? Number(row.sub_price) : null,
                 }
             })
@@ -252,6 +255,18 @@ export async function POST(request: NextRequest) {
                         error:
                             `Wholesale price must be at least ₵${(myCost + minMargin).toFixed(2)} ` +
                             `— your own cost plus the ₵${minMargin.toFixed(2)} minimum margin.`,
+                    },
+                    { status: 400 }
+                )
+            }
+
+            const maxPrice = maxSubPriceFor(retail, myCost)
+            if (subPrice > maxPrice) {
+                return NextResponse.json(
+                    {
+                        error:
+                            `₵${subPrice.toFixed(2)} looks like a typo — you sell this at ₵${retail.toFixed(2)}. ` +
+                            `Wholesale can be at most ₵${maxPrice.toFixed(2)}.`,
                     },
                     { status: 400 }
                 )

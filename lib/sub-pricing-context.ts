@@ -139,6 +139,21 @@ export function subFloorFor(parentRetail: number, subCost: number, minMargin: nu
 }
 
 /**
+ * Highest wholesale price (shop_pricing.sub_price) a recruiter may charge.
+ *
+ * Wholesale may sit above the recruiter's own shelf price on purpose, so this
+ * is not a business ceiling — it is a typo guard. With no upper bound at all,
+ * "45" typed for a ₵6 bundle (meant 4.5) saved silently and became the sub's
+ * cost, so their storefront could not sell that bundle under ₵45. Real
+ * wholesale prices sit within ~20% of retail; anything past 1.5× (or ₵5 over,
+ * for cheap bundles) is a slipped decimal or an extra digit.
+ */
+export function maxSubPriceFor(myRetail: number, myCost: number): number {
+    const base = Math.max(myRetail, myCost)
+    return round2(Math.max(base * 1.5, base + 5))
+}
+
+/**
  * The sub's markup room sits above whichever is higher — the parent's retail
  * price or the sub's own cost — so there is always `ceiling` to work with, no
  * matter where the parent set their wholesale price.
