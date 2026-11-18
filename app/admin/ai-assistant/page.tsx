@@ -27,6 +27,7 @@ interface Usage {
 interface Status {
     mode: Mode
     dailyLimit: number
+    globalDailyLimit: number
     keyConfigured: boolean
     canEdit: boolean
     model: string
@@ -70,6 +71,7 @@ export default function AdminAiAssistantPage() {
     const [status, setStatus] = useState<Status | null>(null)
     const [mode, setMode] = useState<Mode>('off')
     const [limit, setLimit] = useState('30')
+    const [globalLimit, setGlobalLimit] = useState('3000')
     const [model, setModel] = useState('deepseek-chat')
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
@@ -83,6 +85,7 @@ export default function AdminAiAssistantPage() {
             setStatus(data)
             setMode(data.mode)
             setLimit(String(data.dailyLimit))
+            setGlobalLimit(String(data.globalDailyLimit ?? 3000))
             setModel(data.model)
         } catch {
             toast.error('Could not load ARHMS AI settings')
@@ -99,6 +102,11 @@ export default function AdminAiAssistantPage() {
             toast.error('Daily limit must be between 1 and 500')
             return
         }
+        const g = parseInt(globalLimit, 10)
+        if (!Number.isFinite(g) || g < 1 || g > 100000) {
+            toast.error('Platform daily limit must be between 1 and 100000')
+            return
+        }
         setSaving(true)
         try {
             const res = await fetch('/api/admin-settings', {
@@ -108,6 +116,7 @@ export default function AdminAiAssistantPage() {
                     updates: [
                         { key: 'ai_assistant_mode', value: mode },
                         { key: 'ai_assistant_daily_limit', value: String(n) },
+                        { key: 'ai_assistant_global_daily_limit', value: String(g) },
                         { key: 'ai_model_dashboard', value: model },
                     ],
                 }),
@@ -170,9 +179,17 @@ export default function AdminAiAssistantPage() {
                     </div>
                 </div>
 
-                <div className="max-w-xs space-y-2">
-                    <Label htmlFor="ai-limit">Messages per user per day</Label>
-                    <Input id="ai-limit" type="number" min={1} max={500} value={limit} onChange={e => setLimit(e.target.value)} />
+                <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                        <Label htmlFor="ai-limit">Messages per user per day</Label>
+                        <Input id="ai-limit" type="number" min={1} max={500} value={limit} onChange={e => setLimit(e.target.value)} />
+                        <p className="text-xs text-muted-foreground">Each user can also send at most 6 messages a minute.</p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="ai-global-limit">Platform limit per day (all users)</Label>
+                        <Input id="ai-global-limit" type="number" min={1} max={100000} value={globalLimit} onChange={e => setGlobalLimit(e.target.value)} />
+                        <p className="text-xs text-muted-foreground">Caps your DeepSeek spend. When reached, ARHMS AI pauses until tomorrow.</p>
+                    </div>
                 </div>
 
                 <div className="space-y-2">
