@@ -118,3 +118,15 @@ export async function resolveDataPrice(
         },
     }
 }
+
+/**
+ * Price this user pays for a package (API price, else role price, else base),
+ * same rule as the inline pricing above. Used by ARHMS AI's price list.
+ */
+export function rolePriceForPackage(userRow: any, pkg: any): number {
+    const role = userRow?.role
+    if (isApiUserRow(userRow) && hasApiPrice(pkg?.api_price)) return Number(pkg.api_price)
+    if (role === 'dealer' && Number(pkg?.dealer_price) > 0) return Number(pkg.dealer_price)
+    if (role === 'agent' && Number(pkg?.agent_price) > 0) return Number(pkg.agent_price)
+    return Number(pkg?.price)
+}
