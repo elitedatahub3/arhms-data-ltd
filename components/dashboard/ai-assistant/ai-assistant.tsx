@@ -43,22 +43,52 @@ const NETWORK_LABEL: Record<string, string> = {
     'AT-BigTime': 'AT BigTime',
 }
 
-/** **bold** inside a line, rendered without HTML injection. */
-function Inline({ text }: { text: string }) {
-    const parts = text.split(/(\*\*[^*]+\*\*)/g)
+/**
+ * In-app page addresses the assistant may mention (/dashboard/..., /docs).
+ * Only these become links: anything else, including full URLs, stays plain text,
+ * so a manipulated reply can never send a user off-site.
+ */
+const APP_PATH_RE = /((?<![\w.:/-])\/(?:dashboard(?:\/[a-z0-9-]+){0,3}|docs)(?![\w/-]))/g
+
+function WithAppLinks({ text, onNavigate }: { text: string; onNavigate?: () => void }) {
+    const parts = text.split(APP_PATH_RE)
     return (
         <>
             {parts.map((p, i) =>
-                p.startsWith('**') && p.endsWith('**') && p.length > 4
-                    ? <strong key={i}>{p.slice(2, -2)}</strong>
+                i % 2 === 1
+                    ? (
+                        <Link
+                            key={i}
+                            href={p}
+                            onClick={onNavigate}
+                            {...(p === '/docs' ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                            className="font-semibold text-primary underline underline-offset-2"
+                        >
+                            {p}
+                        </Link>
+                    )
                     : <Fragment key={i}>{p}</Fragment>,
             )}
         </>
     )
 }
 
-/** Minimal formatting for replies: paragraphs, bullet and numbered lists, bold. */
-function Formatted({ text }: { text: string }) {
+/** **bold** and in-app page links inside a line, rendered without HTML injection. */
+function Inline({ text, onNavigate }: { text: string; onNavigate?: () => void }) {
+    const parts = text.split(/(\*\*[^*]+\*\*)/g)
+    return (
+        <>
+            {parts.map((p, i) =>
+                p.startsWith('**') && p.endsWith('**') && p.length > 4
+                    ? <strong key={i}><WithAppLinks text={p.slice(2, -2)} onNavigate={onNavigate} /></strong>
+                    : <WithAppLinks key={i} text={p} onNavigate={onNavigate} />,
+            )}
+        </>
+    )
+}
+
+/** Minimal formatting for replies: paragraphs, bullet and numbered lists, bold, in-app links. */
+function Formatted({ text, onNavigate }: { text: string; onNavigate?: () => void }) {
     const lines = text.split('\n')
     const blocks: JSX.Element[] = []
     let list: string[] = []
@@ -66,7 +96,7 @@ function Formatted({ text }: { text: string }) {
         if (!list.length) return
         blocks.push(
             <ul key={`l${blocks.length}`} className="my-1 list-disc space-y-0.5 pl-5">
-                {list.map((li, i) => <li key={i}><Inline text={li} /></li>)}
+                {list.map((li, i) => <li key={i}><Inline text={li} onNavigate={onNavigate} /></li>)}
             </ul>,
         )
         list = []
@@ -79,7 +109,7 @@ function Formatted({ text }: { text: string }) {
             continue
         }
         flush()
-        if (line.trim()) blocks.push(<p key={`p${blocks.length}`} className="my-1"><Inline text={line} /></p>)
+        if (line.trim()) blocks.push(<p key={`p${blocks.length}`} className="my-1"><Inline text={line} onNavigate={onNavigate} /></p>)
     }
     flush()
     return <>{blocks}</>
@@ -320,7 +350,7 @@ export function AiAssistant() {
                                             ) : m.role === 'user' ? (
                                                 <p className="whitespace-pre-wrap break-words">{m.content}</p>
                                             ) : (
-                                                <div className="break-words"><Formatted text={m.content} /></div>
+                                                <div className="break-words"><Formatted text={m.content} onNavigate={() => setOpen(false)} /></div>
                                             )}
                                             {m.cards?.length ? <BundleCards cards={m.cards} onPick={() => setOpen(false)} /> : null}
                                         </div>
