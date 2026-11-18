@@ -14,6 +14,7 @@ import { PushNotificationManager } from '@/components/PushNotificationManager'
 import { cn } from '@/lib/utils'
 import { useUI } from '@/contexts/ui-context'
 // import { SupportChatWidget } from '@/components/dashboard/support-chat-widget'
+import { AiAssistant } from '@/components/dashboard/ai-assistant/ai-assistant'
 import { SuspendedAccount } from '@/components/dashboard/SuspendedAccount'
 import { CopyrightFooter } from '@/components/CopyrightFooter'
 
@@ -198,6 +199,7 @@ export default function DashboardLayout({
                 <CopyrightFooter className="bg-background/60" />
             </div>
             {!rcRestricted && <MobileBottomNav variant={isSubAgent ? 'dashboard-sub' : 'dashboard'} />}
+            {!rcRestricted && !isSubAgent && <AiAssistant />}
             {/* <SupportChatWidget /> */}
         </div>
     )

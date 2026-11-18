@@ -1,0 +1,213 @@
+'use client'
+
+import { useCallback, useEffect, useState } from 'react'
+import { AlertTriangle, Loader2, RefreshCw, Save, Sparkles } from 'lucide-react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
+import { KnowledgeEditor } from './knowledge-editor'
+
+type Mode = 'off' | 'admins' | 'all'
+
+const MODELS = [
+    { value: 'deepseek-chat', label: 'DeepSeek Chat', hint: 'Fast, recommended' },
+    { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner', hint: 'Thinks first: slower, more tokens' },
+]
+
+interface Usage {
+    questions: number
+    users: number
+    inputTokens: number
+    outputTokens: number
+    estUsd: number
+}
+
+interface Status {
+    mode: Mode
+    dailyLimit: number
+    keyConfigured: boolean
+    canEdit: boolean
+    model: string
+    tableReady: boolean
+    today: Usage
+    week: Usage
+}
+
+const MODES: { value: Mode; label: string; hint: string }[] = [
+    { value: 'off', label: 'Off', hint: 'Hidden for everyone' },
+    { value: 'admins', label: 'Admins only', hint: 'Admins and sub-admins test it' },
+    { value: 'all', label: 'Everyone', hint: 'All dashboard users (not sub-agents)' },
+]
+
+function UsageCard({ title, u }: { title: string; u: Usage }) {
+    return (
+        <div className="rounded-xl border border-border p-4">
+            <p className="text-sm font-semibold text-muted-foreground">{title}</p>
+            <div className="mt-3 grid grid-cols-3 gap-3">
+                <div>
+                    <p className="text-2xl font-black">{u.questions}</p>
+                    <p className="text-xs text-muted-foreground">questions</p>
+                </div>
+                <div>
+                    <p className="text-2xl font-black">{u.users}</p>
+                    <p className="text-xs text-muted-foreground">users</p>
+                </div>
+                <div>
+                    <p className="text-2xl font-black">${u.estUsd.toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">est. cost</p>
+                </div>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+                {u.inputTokens.toLocaleString()} input / {u.outputTokens.toLocaleString()} output tokens
+            </p>
+        </div>
+    )
+}
+
+export default function AdminAiAssistantPage() {
+    const [status, setStatus] = useState<Status | null>(null)
+    const [mode, setMode] = useState<Mode>('off')
+    const [limit, setLimit] = useState('30')
+    const [model, setModel] = useState('deepseek-chat')
+    const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        try {
+            const res = await fetch('/api/admin/ai-assistant', { cache: 'no-store' })
+            if (!res.ok) throw new Error()
+            const data: Status = await res.json()
+            setStatus(data)
+            setMode(data.mode)
+            setLimit(String(data.dailyLimit))
+            setModel(data.model)
+        } catch {
+            toast.error('Could not load ARHMS AI settings')
+        } finally {
+            setLoading(false)
+        }
+    }, [])
+
+    useEffect(() => { load() }, [load])
+
+    const save = async () => {
+        const n = parseInt(limit, 10)
+        if (!Number.isFinite(n) || n < 1 || n > 500) {
+            toast.error('Daily limit must be between 1 and 500')
+            return
+        }
+        setSaving(true)
+        try {
+            const res = await fetch('/api/admin-settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    updates: [
+                        { key: 'ai_assistant_mode', value: mode },
+                        { key: 'ai_assistant_daily_limit', value: String(n) },
+                        { key: 'ai_model_dashboard', value: model },
+                    ],
+                }),
+            })
+            if (res.status === 403) throw new Error('Only admins can change this')
+            if (!res.ok) throw new Error('Save failed')
+            toast.success('ARHMS AI settings saved')
+            load()
+        } catch (e: any) {
+            toast.error(e?.message || 'Save failed')
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h1 className="flex items-center gap-2 text-2xl font-black tracking-tight">
+                        <Sparkles className="h-6 w-6 text-primary" /> ARHMS AI
+                    </h1>
+                    <p className="text-sm text-muted-foreground">
+                        In-app assistant: answers wallet, order and price questions and shows bundle cards. It never buys on its own.
+                    </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+                    <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} /> Refresh
+                </Button>
+            </div>
+
+            {status && (!status.keyConfigured || !status.tableReady) && (
+                <div className="flex gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                    <AlertTriangle className="h-5 w-5 shrink-0" />
+                    <div className="space-y-1">
+                        {!status.tableReady && <p>Run migration <code>20261118000000_ai_assistant.sql</code> in Supabase first.</p>}
+                        {!status.keyConfigured && <p>Set <code>DEEPSEEK_API_KEY</code> in Vercel and redeploy — until then every question answers &quot;busy&quot;.</p>}
+                    </div>
+                </div>
+            )}
+
+            <div className="space-y-4 rounded-xl border border-border p-4">
+                <div className="space-y-2">
+                    <Label>Who can use it</Label>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                        {MODES.map(m => (
+                            <button
+                                key={m.value}
+                                type="button"
+                                onClick={() => setMode(m.value)}
+                                className={cn(
+                                    'rounded-xl border p-3 text-left transition',
+                                    mode === m.value ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-primary/50',
+                                )}
+                            >
+                                <p className="font-semibold">{m.label}</p>
+                                <p className="text-xs text-muted-foreground">{m.hint}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="max-w-xs space-y-2">
+                    <Label htmlFor="ai-limit">Messages per user per day</Label>
+                    <Input id="ai-limit" type="number" min={1} max={500} value={limit} onChange={e => setLimit(e.target.value)} />
+                </div>
+
+                <div className="space-y-2">
+                    <Label>Model</Label>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                        {MODELS.map(m => (
+                            <button
+                                key={m.value}
+                                type="button"
+                                onClick={() => setModel(m.value)}
+                                className={cn(
+                                    'rounded-xl border p-3 text-left transition',
+                                    model === m.value ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-primary/50',
+                                )}
+                            >
+                                <p className="font-semibold">{m.label}</p>
+                                <p className="text-xs text-muted-foreground">{m.hint}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <Button onClick={save} disabled={saving || loading}>
+                    {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />} Save
+                </Button>
+            </div>
+
+            {status && (
+                <div className="grid gap-4 md:grid-cols-2">
+                    <UsageCard title="Today" u={status.today} />
+                    <UsageCard title="Last 7 days" u={status.week} />
+                </div>
+            )}
+
+            {status && <KnowledgeEditor canEdit={status.canEdit} />}
+        </div>
+    )
+}

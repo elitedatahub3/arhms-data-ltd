@@ -33,6 +33,7 @@ import {
     Receipt,
     Wifi,
     Trophy,
+    Sparkles,
 } from 'lucide-react'
 import { usePageAccess } from '@/hooks/use-page-access'
 import { useUI } from '@/contexts/ui-context'
@@ -289,6 +290,7 @@ const NAV_VARIANTS = {
                 { href: '/admin/email-broadcast', label: 'Email', icon: Send },
                 { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
                 { href: '/admin/top-performers', label: 'Top Performers', icon: Trophy },
+                { href: '/admin/ai-assistant', label: 'ARHMS AI', icon: Sparkles },
                 { href: '/admin/settings', label: 'Settings', icon: Settings },
             ],
             orders: [
