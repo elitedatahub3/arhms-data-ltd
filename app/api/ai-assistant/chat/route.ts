@@ -17,7 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { loadAssistantAccess } from '@/lib/ai-assistant/access'
 import { deepSeekTurn, DeepSeekError } from '@/lib/ai-assistant/deepseek'
 import { runAgentLoop, type EngineMessage } from '@/lib/ai-assistant/engine'
-import { cleanUserMessage, MAX_MESSAGE_CHARS, SURFACE_LIMITS } from '@/lib/ai-assistant/helpers'
+import { cleanUserMessage, isStaffRole, MAX_MESSAGE_CHARS, SURFACE_LIMITS } from '@/lib/ai-assistant/helpers'
 import { ASSISTANT_SYSTEM_PROMPT } from '@/lib/ai-assistant/system-prompt'
 import { executeAssistantTool, toolsForSurface, type BundleCard } from '@/lib/ai-assistant/tools'
 
@@ -116,10 +116,19 @@ export async function POST(request: Request) {
             { status: 429 },
         )
     }
-    const apiKey = process.env.DEEPSEEK_API_KEY
+    // Admins and sub-admins see the real reason for a failure; everyone else sees BUSY.
+    const staff = isStaffRole(access.userRow?.role)
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
     if (!apiKey) {
         console.error('[ARHMS AI] DEEPSEEK_API_KEY is not set')
-        return NextResponse.json({ error: BUSY }, { status: 503 })
+        return NextResponse.json(
+            {
+                error: staff
+                    ? `Admin note: DEEPSEEK_API_KEY is not set on this deployment (${process.env.VERCEL_ENV || 'unknown'} environment). Add it in Vercel → Settings → Environment Variables of THIS project, tick Preview and Production, then redeploy.`
+                    : BUSY,
+            },
+            { status: 503 },
+        )
     }
 
     const conversationId = typeof body?.conversationId === 'string' && UUID_RE.test(body.conversationId)
@@ -200,18 +209,21 @@ export async function POST(request: Request) {
 
                 if (!replyText.trim() && !cards.length) say(BUSY)
             } catch (err) {
+                let adminNote = 'the request failed (see Vercel logs for "[ARHMS AI]")'
                 if (err instanceof DeepSeekError) {
                     // 401 bad key · 402 out of DeepSeek balance · 429 rate limit · 5xx overloaded.
-                    // Users only ever see BUSY; the reason is for the Vercel logs.
-                    const hint = err.status === 401 ? 'check DEEPSEEK_API_KEY'
-                        : err.status === 402 ? 'top up the DeepSeek account balance'
-                        : err.status === 429 ? 'rate limited'
-                        : 'provider error'
+                    // Users only ever see BUSY; staff see the reason, and it goes to the Vercel logs.
+                    const hint = err.status === 401 ? 'the API key is wrong or deleted, create a new one at platform.deepseek.com'
+                        : err.status === 402 ? 'the DeepSeek account has no balance, top it up at platform.deepseek.com'
+                        : err.status === 429 ? 'DeepSeek rate limit, wait a minute'
+                        : err.status === 400 || err.status === 422 ? 'DeepSeek rejected the request format'
+                        : 'DeepSeek server error, try again shortly'
+                    adminNote = `DeepSeek ${err.status}: ${hint}`
                     console.error(`[ARHMS AI] DeepSeek ${err.status} (${hint})`, err.message)
                 } else {
                     console.error('[ARHMS AI] chat failed', err)
                 }
-                if (!replyText.trim()) say(BUSY)
+                if (!replyText.trim()) say(staff ? `Admin note: ${adminNote}.` : BUSY)
             }
 
             try {
