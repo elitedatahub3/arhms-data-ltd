@@ -47,6 +47,7 @@ import {
     UserPlus,
     Wifi,
     Trophy,
+    Sparkles,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -127,6 +128,7 @@ const adminNavItems = [
     { href: '/admin/profits-history', label: 'Profits', icon: Wallet },
     { href: '/admin/api-keys', label: 'API Keys', icon: Code2 },
     { href: '/admin/top-performers', label: 'Top Performers', icon: Trophy },
+    { href: '/admin/ai-assistant', label: 'ARHMS AI', icon: Sparkles },
     { href: '/admin/settings', label: 'Settings', icon: Settings },
     { href: '/admin/vouchers', label: 'Results Checker', icon: Tag },
 ]

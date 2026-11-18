@@ -136,6 +136,7 @@ export default function DataPackagesPage() {
     const [isApiUser, setIsApiUser] = useState(false)
     const pricingReady = subAgentCheckDone && (!isSubAgent || subPrices !== null)
     const [walletBalance, setWalletBalance] = useState(0)
+    const [walletLoaded, setWalletLoaded] = useState(false)
     const [hideMashup, setHideMashup] = useState(false)
     const [hideExpressMtn, setHideExpressMtn] = useState(false)
     const [hideStandardMtn, setHideStandardMtn] = useState(false)
@@ -403,6 +404,7 @@ export default function DataPackagesPage() {
             .single()
 
         setWalletBalance((data as any)?.balance || 0)
+        setWalletLoaded(true)
     }
 
     const fetchOrdersToday = async () => {
@@ -514,6 +516,32 @@ export default function DataPackagesPage() {
         // Generate a fresh idempotency key each time the modal opens
         setCurrentReferenceCode(generateReferenceCode())
     }
+
+    // ARHMS AI bundle cards link here with ?package=<id>&phone=<0XXXXXXXXX>: open that
+    // package's purchase sheet once prices and the wallet are known. Buying still
+    // needs the user's normal confirm — this only preselects.
+    const deepLinkedPackage = useRef<string | null>(null)
+    useEffect(() => {
+        const pkgId = searchParams.get('package')
+        if (!pkgId) {
+            deepLinkedPackage.current = null
+            return
+        }
+        if (deepLinkedPackage.current === pkgId) return
+        if (isLoading || !walletLoaded || !pricingReady) return
+        deepLinkedPackage.current = pkgId
+
+        const pkg = packages.find(p => p.id === pkgId)
+        const phone = searchParams.get('phone')
+        router.replace(`/dashboard/data-packages?network=${encodeURIComponent(pkg?.network || selectedNetwork)}`)
+        if (!pkg || (isSubAgent && !subPrices?.[pkg.id])) {
+            toast.error('That bundle is no longer available')
+            return
+        }
+        setSelectedNetwork(pkg.network)
+        handlePurchaseClick(pkg)
+        if (phone && /^0\d{9}$/.test(phone)) setPhoneNumber(phone)
+    }, [searchParams, isLoading, walletLoaded, pricingReady, packages])
 
     const handlePhoneChange = (value: string) => {
         setPhoneNumber(value)
