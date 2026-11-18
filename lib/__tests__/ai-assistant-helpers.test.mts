@@ -129,3 +129,41 @@ test('rankKnowledge puts question matches first and drops non-matches', () => {
     assert.deepEqual(rankKnowledge(rows, ['refund']).map(r => r.id), ['2', '1'])
     assert.deepEqual(rankKnowledge(rows, ['zzz']), [])
 })
+
+import {
+    parseGlobalDailyLimit,
+    redactSecrets,
+    createSecretRedactor,
+} from '../ai-assistant/helpers.ts'
+
+test('parseGlobalDailyLimit defaults to 3000 and clamps', () => {
+    assert.equal(parseGlobalDailyLimit(undefined), 3000)
+    assert.equal(parseGlobalDailyLimit('0'), 1)
+    assert.equal(parseGlobalDailyLimit('500'), 500)
+    assert.equal(parseGlobalDailyLimit('9999999'), 100000)
+})
+
+test('redactSecrets hides keys and tokens but keeps normal text, phones and order ids', () => {
+    assert.equal(redactSecrets('key sk-abcdef0123456789abcdef here'), 'key [hidden] here')
+    assert.equal(redactSecrets('eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJ'), '[hidden]')
+    assert.equal(redactSecrets('sb_secret_abcdefghijkl'), '[hidden]')
+    assert.equal(redactSecrets('dd8a7c72328149929484bd0aa8918b5a'), '[hidden]')
+    const normal = 'Order 3f2b9c1e-1111-2222-3333-444455556666 to 0241234567 costs GHS 12.50'
+    assert.equal(redactSecrets(normal), normal)
+})
+
+test('createSecretRedactor catches a key split across stream deltas', () => {
+    const r = createSecretRedactor()
+    let out = ''
+    for (const d of ['Your key is sk-abc', 'def0123456789', 'abcdef ok', ' done']) out += r.push(d)
+    out += r.flush()
+    assert.equal(out, 'Your key is [hidden] ok done')
+})
+
+test('createSecretRedactor releases normal text without losing any', () => {
+    const r = createSecretRedactor()
+    let out = ''
+    for (const d of ['Hel', 'lo there,\nhow ', 'are you?']) out += r.push(d)
+    out += r.flush()
+    assert.equal(out, 'Hello there,\nhow are you?')
+})

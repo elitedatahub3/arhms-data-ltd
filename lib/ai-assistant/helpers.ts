@@ -169,3 +169,61 @@ export function rankKnowledge<T extends KnowledgeRow>(rows: T[], terms: string[]
         .slice(0, limit)
         .map(x => x.r)
 }
+
+// ── Abuse and cost limits ────────────────────────────────────────────────────
+
+/** Messages one user may send in any 60 seconds (on top of the daily cap). */
+export const BURST_LIMIT_PER_MINUTE = 6
+export const DEFAULT_GLOBAL_DAILY_LIMIT = 3000
+
+/** admin_settings.ai_assistant_global_daily_limit → questions per day across ALL users (1..100000). */
+export function parseGlobalDailyLimit(raw: unknown): number {
+    const n = parseInt(String(raw ?? ''), 10)
+    if (!Number.isFinite(n)) return DEFAULT_GLOBAL_DAILY_LIMIT
+    return Math.min(Math.max(n, 1), 100000)
+}
+
+// ── Secret redaction on the way out ──────────────────────────────────────────
+
+const SECRET_PATTERNS: RegExp[] = [
+    /sk-[A-Za-z0-9_-]{16,}/g, // DeepSeek / OpenAI style API keys
+    /sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}/g, // Supabase keys
+    /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g, // JWTs (service-role keys, sessions)
+    /\b[0-9a-fA-F]{32,}\b/g, // long hex secrets (order ids are dashed UUIDs, unaffected)
+]
+
+export function redactSecrets(text: string): string {
+    let out = text
+    for (const re of SECRET_PATTERNS) out = out.replace(re, '[hidden]')
+    return out
+}
+
+/**
+ * Streaming redactor: text arrives in small deltas, so a key can be split across
+ * two of them. Everything up to the last whitespace is redacted and released;
+ * the unfinished last word is held back until more text (or flush) arrives.
+ */
+export function createSecretRedactor() {
+    let pending = ''
+    return {
+        push(delta: string): string {
+            pending += delta
+            const cut = Math.max(pending.lastIndexOf(' '), pending.lastIndexOf('\n'), pending.lastIndexOf('\t'))
+            // Release a very long unbroken run too, so the reply never stalls.
+            if (cut < 0) {
+                if (pending.length < 400) return ''
+                const out = redactSecrets(pending)
+                pending = ''
+                return out
+            }
+            const ready = pending.slice(0, cut + 1)
+            pending = pending.slice(cut + 1)
+            return redactSecrets(ready)
+        },
+        flush(): string {
+            const out = redactSecrets(pending)
+            pending = ''
+            return out
+        },
+    }
+}

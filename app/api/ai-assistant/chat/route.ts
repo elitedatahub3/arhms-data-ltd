@@ -17,7 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { loadAssistantAccess } from '@/lib/ai-assistant/access'
 import { deepSeekTurn, DeepSeekError } from '@/lib/ai-assistant/deepseek'
 import { runAgentLoop, type EngineMessage } from '@/lib/ai-assistant/engine'
-import { cleanUserMessage, isStaffRole, MAX_MESSAGE_CHARS, SURFACE_LIMITS } from '@/lib/ai-assistant/helpers'
+import { cleanUserMessage, createSecretRedactor, isStaffRole, MAX_MESSAGE_CHARS, SURFACE_LIMITS } from '@/lib/ai-assistant/helpers'
 import { ASSISTANT_SYSTEM_PROMPT } from '@/lib/ai-assistant/system-prompt'
 import { executeAssistantTool, toolsForSurface, type BundleCard } from '@/lib/ai-assistant/tools'
 
@@ -112,12 +112,30 @@ export async function POST(request: Request) {
     if (!access.allowed) return NextResponse.json({ error: 'ARHMS AI is not available.' }, { status: 403 })
     if (access.remaining <= 0) {
         return NextResponse.json(
-            { error: `You have used your ${access.limit} ARHMS AI messages for today. Try again tomorrow.` },
+            { error: `You have used your ${access.limit} ARHMS AI messages for today. Try again tomorrow.`, code: 'daily_limit' },
             { status: 429 },
+        )
+    }
+    if (access.tooFast) {
+        return NextResponse.json(
+            { error: 'You are sending messages too fast. Please wait a minute and try again.', code: 'too_fast' },
+            { status: 429, headers: { 'Retry-After': '60' } },
         )
     }
     // Admins and sub-admins see the real reason for a failure; everyone else sees BUSY.
     const staff = isStaffRole(access.userRow?.role)
+    if (access.globalExhausted) {
+        console.error(`[ARHMS AI] platform daily limit of ${access.globalLimit} questions reached`)
+        return NextResponse.json(
+            {
+                error: staff
+                    ? `Admin note: the platform-wide limit of ${access.globalLimit} questions for today is used up. Raise it on Admin → ARHMS AI if this is expected.`
+                    : 'ARHMS AI has reached its limit for today. Please try again tomorrow.',
+                code: 'global_limit',
+            },
+            { status: 503 },
+        )
+    }
     const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
     if (!apiKey) {
         console.error('[ARHMS AI] DEEPSEEK_API_KEY is not set')
@@ -183,6 +201,16 @@ export async function POST(request: Request) {
                 replyText += text
                 send({ type: 'text', text })
             }
+            // Model text passes through the secret redactor before the user (or the DB) sees it.
+            const redactor = createSecretRedactor()
+            const sayModel = (delta: string) => {
+                const safe = redactor.push(delta)
+                if (safe) say(safe)
+            }
+            const flushModel = () => {
+                const rest = redactor.flush()
+                if (rest) say(rest)
+            }
 
             send({ type: 'meta', conversationId })
 
@@ -191,7 +219,7 @@ export async function POST(request: Request) {
                     createTurn,
                     messages,
                     maxRounds: limits.maxRounds,
-                    onText: say,
+                    onText: sayModel,
                     runTool: async (name, input) => {
                         const out = await executeAssistantTool(name, input, toolCtx)
                         return { content: out.content, isError: out.isError, extra: out.cards }
@@ -203,12 +231,14 @@ export async function POST(request: Request) {
                         }
                     },
                 })
+                flushModel()
                 inputTokens = result.inputTokens
                 outputTokens = result.outputTokens
                 if (result.refused && !replyText.trim()) say(REFUSED)
 
                 if (!replyText.trim() && !cards.length) say(BUSY)
             } catch (err) {
+                flushModel()
                 let adminNote = 'the request failed (see Vercel logs for "[ARHMS AI]")'
                 if (err instanceof DeepSeekError) {
                     // 401 bad key · 402 out of DeepSeek balance · 429 rate limit · 5xx overloaded.

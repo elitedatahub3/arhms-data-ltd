@@ -6,7 +6,7 @@
 import { NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { createServerClient } from '@/lib/supabase'
-import { dayStartIso, parseAssistantMode, parseDailyLimit, resolveAssistantModel } from '@/lib/ai-assistant/helpers'
+import { dayStartIso, parseAssistantMode, parseDailyLimit, parseGlobalDailyLimit, resolveAssistantModel } from '@/lib/ai-assistant/helpers'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +44,7 @@ export async function GET() {
     weekStart.setUTCDate(weekStart.getUTCDate() - 6)
 
     const [{ data: settings }, { data: rows, error }] = await Promise.all([
-        db.from('admin_settings').select('key, value').in('key', ['ai_assistant_mode', 'ai_assistant_daily_limit', 'ai_model_dashboard']),
+        db.from('admin_settings').select('key, value').in('key', ['ai_assistant_mode', 'ai_assistant_daily_limit', 'ai_assistant_global_daily_limit', 'ai_model_dashboard']),
         db.from('ai_chat_messages').select('user_id, role, input_tokens, output_tokens, created_at')
             .gte('created_at', weekStart.toISOString()).limit(50000),
     ])
@@ -58,6 +58,7 @@ export async function GET() {
         {
             mode: parseAssistantMode(s.ai_assistant_mode),
             dailyLimit: parseDailyLimit(s.ai_assistant_daily_limit),
+            globalDailyLimit: parseGlobalDailyLimit(s.ai_assistant_global_daily_limit),
             keyConfigured: !!process.env.DEEPSEEK_API_KEY,
             canEdit: me?.role === 'admin',
             model: resolveAssistantModel(s.ai_model_dashboard, process.env.AI_ASSISTANT_MODEL),

@@ -188,7 +188,8 @@ export function AiAssistant() {
             if (!res.ok || !res.body) {
                 const data = await res.json().catch(() => ({}))
                 if (res.status === 403) setEnabled(false)
-                if (res.status === 429) setRemaining(0)
+                // Only the daily cap empties the counter; 'too_fast' is a one-minute pause.
+                if (res.status === 429 && data.code !== 'too_fast') setRemaining(0)
                 patchLast(m => ({ ...m, pending: false, content: data.error || 'Something went wrong. Please try again.' }))
                 return
             }
