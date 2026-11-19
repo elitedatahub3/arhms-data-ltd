@@ -12,6 +12,7 @@ import { HELP_TOPICS, helpText } from './knowledge'
 import { getMyStatus, MY_STATUS_AREAS } from './my-status'
 import { getSiteInfo, SITE_INFO_TOPICS } from './site-info'
 import { searchSite } from './site-index'
+import { searchKnowledge } from './knowledge-search'
 import {
     buildBuyLink,
     isNetworkVisible,
@@ -456,23 +457,9 @@ async function run(name: ToolName, input: any, ctx: ToolContext): Promise<ToolOu
 
         case 'search_knowledge': {
             const { query } = input as z.infer<typeof schemas.search_knowledge>
-            const terms = knowledgeSearchTerms(query)
-            if (!terms.length) {
-                return { content: JSON.stringify({ results: [], note: 'Use more specific key words, or call get_help.' }) }
-            }
-            // Terms are [a-z0-9] only (knowledgeSearchTerms), so they are safe inside or().
-            const or = terms.flatMap(t => [`question.ilike.%${t}%`, `answer.ilike.%${t}%`, `category.ilike.%${t}%`]).join(',')
-            const { data, error } = await db.from('ai_knowledge').select('id, category, question, answer')
-                .eq('is_active', true).contains('contexts', [ctx.surface]).or(or).limit(50)
-            if (error) {
-                // Loud on purpose: a missing table would otherwise fail silently forever.
-                console.error('[ARHMS AI] knowledge search failed, is migration 20261118010000 run?', error.message)
-                return { content: 'Knowledge base unavailable. Use get_help instead.', isError: true }
-            }
-            const results = rankKnowledge((data || []) as KnowledgeRow[], terms).map(r => ({
-                question: r.question,
-                answer: r.answer.slice(0, 2000),
-            }))
+            const found = await searchKnowledge(db, query, ctx.surface)
+            if (!found.ok) return { content: 'Knowledge base unavailable. Use get_help instead.', isError: true }
+            const results = found.results
             return {
                 content: JSON.stringify(
                     results.length ? { results } : { results: [], note: 'Nothing found. Try get_help, or offer WhatsApp support.' },

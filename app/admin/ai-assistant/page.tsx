@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { KnowledgeEditor } from './knowledge-editor'
 import { UnansweredList } from './unanswered-list'
@@ -29,6 +30,7 @@ interface Status {
     mode: Mode
     usage: { dashboardLimit: number; dashboardPrice: number; shopLimit: number; shopPrice: number }
     resetRevenue: { dashboard: { count: number; ghs: number }; shop: { count: number; ghs: number } }
+    storefront: { on: boolean; perVisitorDaily: number }
     globalDailyLimit: number
     keyConfigured: boolean
     canEdit: boolean
@@ -76,6 +78,8 @@ export default function AdminAiAssistantPage() {
     const [price, setPrice] = useState('5')
     const [shopLimit, setShopLimit] = useState('300')
     const [shopPrice, setShopPrice] = useState('7')
+    const [storefrontOn, setStorefrontOn] = useState(false)
+    const [perVisitor, setPerVisitor] = useState('15')
     const [globalLimit, setGlobalLimit] = useState('3000')
     const [model, setModel] = useState('deepseek-chat')
     const [loading, setLoading] = useState(true)
@@ -93,6 +97,8 @@ export default function AdminAiAssistantPage() {
             setPrice(String(data.usage.dashboardPrice))
             setShopLimit(String(data.usage.shopLimit))
             setShopPrice(String(data.usage.shopPrice))
+            setStorefrontOn(data.storefront?.on === true)
+            setPerVisitor(String(data.storefront?.perVisitorDaily ?? 15))
             setGlobalLimit(String(data.globalDailyLimit ?? 3000))
             setModel(data.model)
         } catch {
@@ -109,6 +115,11 @@ export default function AdminAiAssistantPage() {
         const sn = parseInt(shopLimit, 10)
         if (![n, sn].every(v => Number.isFinite(v) && v >= 1 && v <= 100000)) {
             toast.error('Monthly limits must be between 1 and 100000 questions')
+            return
+        }
+        const pv = parseInt(perVisitor, 10)
+        if (!Number.isFinite(pv) || pv < 1 || pv > 1000) {
+            toast.error('Questions per shop visitor per day must be between 1 and 1000')
             return
         }
         const p = parseFloat(price)
@@ -134,6 +145,8 @@ export default function AdminAiAssistantPage() {
                         { key: 'ai_dashboard_reset_price', value: p.toFixed(2) },
                         { key: 'ai_shop_monthly_limit', value: String(sn) },
                         { key: 'ai_shop_reset_price', value: sp.toFixed(2) },
+                        { key: 'ai_storefront_mode', value: storefrontOn ? 'on' : 'off' },
+                        { key: 'ai_storefront_daily_limit_per_ip', value: String(pv) },
                         { key: 'ai_assistant_global_daily_limit', value: String(g) },
                         { key: 'ai_model_dashboard', value: model },
                     ],
@@ -216,6 +229,19 @@ export default function AdminAiAssistantPage() {
                         <Label htmlFor="ai-shop-price">Shop reset price (GHS)</Label>
                         <Input id="ai-shop-price" type="number" min={0} step="0.5" value={shopPrice} onChange={e => setShopPrice(e.target.value)} />
                         <p className="text-xs text-muted-foreground">The shop owner pays this to add another {shopLimit || '…'} questions for the month.</p>
+                    </div>
+                    <div className="flex items-start justify-between gap-3 rounded-xl border border-border p-3 sm:col-span-2">
+                        <div>
+                            <p className="font-semibold">Shop assistants</p>
+                            <p className="text-xs text-muted-foreground">
+                                A chat bubble on every approved storefront, named after the shop. It answers customers about that shop only and never takes payment. Owners can switch theirs off.
+                            </p>
+                            <div className="mt-2 flex items-center gap-2">
+                                <Label htmlFor="ai-per-visitor" className="text-xs">Questions per visitor per day</Label>
+                                <Input id="ai-per-visitor" type="number" min={1} max={1000} value={perVisitor} onChange={e => setPerVisitor(e.target.value)} className="h-8 w-24" />
+                            </div>
+                        </div>
+                        <Switch checked={storefrontOn} onCheckedChange={setStorefrontOn} aria-label="Shop assistants on or off" />
                     </div>
                     <div className="space-y-2 sm:col-span-2">
                         <Label htmlFor="ai-global-limit">Platform limit per day (all users)</Label>
