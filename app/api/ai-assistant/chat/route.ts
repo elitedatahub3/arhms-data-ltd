@@ -7,7 +7,7 @@
  *        | {type:'done', remaining} | {type:'error', error}
  *
  * Gate: admin_settings.ai_assistant_mode (off | admins | all), daily cap from
- * ai_assistant_daily_limit counted in ai_chat_messages (no Redis). Tools are
+ * monthly allowance (lib/ai-assistant/access.ts) counted in ai_chat_messages. Tools are
  * read-only; see lib/ai-assistant/tools.ts.
  */
 import { NextResponse } from 'next/server'
@@ -61,8 +61,10 @@ export async function GET() {
     return NextResponse.json(
         {
             enabled: true,
-            remaining: access.remaining,
-            limit: access.limit,
+            // null = unlimited (staff). Monthly allowance otherwise.
+            remaining: access.unlimited ? null : access.remaining,
+            limit: access.unlimited ? null : access.limit,
+            reset: { price: access.resetPrice, questions: access.baseLimit },
             maxChars: MAX_MESSAGE_CHARS,
             conversationId: last?.conversation_id ?? null,
             messages,
@@ -112,7 +114,11 @@ export async function POST(request: Request) {
     if (!access.allowed) return NextResponse.json({ error: 'ARHMS AI is not available.' }, { status: 403 })
     if (access.remaining <= 0) {
         return NextResponse.json(
-            { error: `You have used your ${access.limit} ARHMS AI messages for today. Try again tomorrow.`, code: 'daily_limit' },
+            {
+                error: `You have used your ${access.limit} ARHMS AI questions this month. Get ${access.baseLimit} more for GHS ${access.resetPrice.toFixed(2)}.`,
+                code: 'monthly_limit',
+                reset: { price: access.resetPrice, questions: access.baseLimit },
+            },
             { status: 429 },
         )
     }
@@ -270,7 +276,7 @@ export async function POST(request: Request) {
                 console.error('[ARHMS AI] could not save reply', err)
             }
 
-            send({ type: 'done', remaining: Math.max(access.remaining - 1, 0) })
+            send({ type: 'done', remaining: access.unlimited ? null : Math.max(access.remaining - 1, 0) })
             try {
                 controller.close()
             } catch {

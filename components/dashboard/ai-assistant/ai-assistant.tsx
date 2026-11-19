@@ -11,6 +11,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowUp, Loader2, SquarePen, Sparkles, X, Wifi } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
+import { ResetPanel, usePendingReset } from './reset-panel'
 
 interface BundleCard {
     packageId: string
@@ -144,7 +145,9 @@ export function AiAssistant() {
     const [open, setOpen] = useState(false)
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [conversationId, setConversationId] = useState<string | null>(null)
+    /** Questions left this month; null = no monthly limit (staff). */
     const [remaining, setRemaining] = useState<number | null>(null)
+    const [monthLimit, setMonthLimit] = useState<number | null>(null)
     const [maxChars, setMaxChars] = useState(500)
     const [input, setInput] = useState('')
     const [busy, setBusy] = useState(false)
@@ -159,6 +162,7 @@ export function AiAssistant() {
             setEnabled(data.enabled === true)
             if (!data.enabled) return
             setRemaining(data.remaining ?? null)
+            setMonthLimit(data.limit ?? null)
             if (data.maxChars) setMaxChars(data.maxChars)
             setConversationId(data.conversationId ?? null)
             setMessages((data.messages || []).map((m: any) => ({ role: m.role, content: m.content, cards: m.cards })))
@@ -181,6 +185,13 @@ export function AiAssistant() {
     }, [messages, open])
 
     useEffect(() => () => abortRef.current?.abort(), [])
+
+    // A paid reset (wallet now, or MoMo top-up finishing later) refills the allowance.
+    const onReset = useCallback((added: number) => {
+        setRemaining(r => (r ?? 0) + added)
+        setMonthLimit(l => (l ?? 0) + added)
+    }, [])
+    usePendingReset('dashboard', enabled && remaining === 0, onReset)
 
     const newChat = () => {
         abortRef.current?.abort()
@@ -218,7 +229,7 @@ export function AiAssistant() {
             if (!res.ok || !res.body) {
                 const data = await res.json().catch(() => ({}))
                 if (res.status === 403) setEnabled(false)
-                // Only the daily cap empties the counter; 'too_fast' is a one-minute pause.
+                // The monthly cap empties the counter; 'too_fast' is a one-minute pause.
                 if (res.status === 429 && data.code !== 'too_fast') setRemaining(0)
                 patchLast(m => ({ ...m, pending: false, content: data.error || 'Something went wrong. Please try again.' }))
                 return
@@ -360,8 +371,20 @@ export function AiAssistant() {
                         )}
                     </div>
 
+                    {/* Monthly allowance used up: pay the reset instead of typing. */}
+                    {outOfMessages && (
+                        <div className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+                            <ResetPanel
+                                scope="dashboard"
+                                usedLabel={`You've used your ${monthLimit ?? ''} questions this month.`.replace('  ', ' ')}
+                                onReset={onReset}
+                                onNavigate={() => setOpen(false)}
+                            />
+                        </div>
+                    )}
+
                     {/* Input */}
-                    <form
+                    {!outOfMessages && <form
                         onSubmit={e => { e.preventDefault(); send(input) }}
                         className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3"
                     >
@@ -369,7 +392,7 @@ export function AiAssistant() {
                             <input
                                 value={input}
                                 onChange={e => setInput(e.target.value.slice(0, maxChars))}
-                                placeholder={outOfMessages ? 'Daily limit reached — back tomorrow' : 'Ask ARHMS AI anything…'}
+                                placeholder="Ask ARHMS AI anything…"
                                 disabled={outOfMessages}
                                 className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:text-sm"
                             />
@@ -384,9 +407,9 @@ export function AiAssistant() {
                         </div>
                         <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
                             ARHMS AI can make mistakes. Purchases always ask you to confirm.
-                            {remaining !== null && ` · ${remaining} left today`}
+                            {remaining !== null && ` · ${remaining} left this month`}
                         </p>
-                    </form>
+                    </form>}
                 </Dialog.Content>
             </Dialog.Portal>
         </Dialog.Root>
