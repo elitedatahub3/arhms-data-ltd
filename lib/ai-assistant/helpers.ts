@@ -88,7 +88,7 @@ export function cleanUserMessage(raw: unknown): string | null {
 export type AssistantSurface = 'dashboard' | 'home' | 'storefront' | 'admin' | 'whatsapp'
 
 export const SURFACE_LIMITS: Record<AssistantSurface, { maxRounds: number; maxTokens: number }> = {
-    dashboard: { maxRounds: 5, maxTokens: 2000 },
+    dashboard: { maxRounds: 6, maxTokens: 2000 },
     home: { maxRounds: 5, maxTokens: 1500 },
     storefront: { maxRounds: 5, maxTokens: 1500 },
     admin: { maxRounds: 12, maxTokens: 2500 },
@@ -135,10 +135,13 @@ const STOP_WORDS = new Set([
 export function knowledgeSearchTerms(raw: unknown): string[] {
     const words = String(raw ?? '').toLowerCase().match(/[a-z0-9]+/g) || []
     const out: string[] = []
-    for (const w of words) {
-        if (w.length < 3 || STOP_WORDS.has(w) || out.includes(w)) continue
+    for (const raw of words) {
+        if (raw.length < 3 || STOP_WORDS.has(raw)) continue
+        // Plural -> singular so "keys" finds "Key" (matching is by substring).
+        const w = raw.length > 3 && raw.endsWith('s') && !raw.endsWith('ss') ? raw.slice(0, -1) : raw
+        if (out.includes(w)) continue
         out.push(w)
-        if (out.length === 5) break
+        if (out.length === 6) break
     }
     return out
 }
@@ -226,4 +229,42 @@ export function createSecretRedactor() {
             return out
         },
     }
+}
+
+// ── Site index search (lib/ai-assistant/site-index.json) ─────────────────────
+
+export interface SiteChunk {
+    id: number
+    surface: 'dashboard' | 'storefront'
+    path: string
+    menu: string | null
+    heading: string
+    text: string
+}
+
+/**
+ * Best page-text chunks for the terms. Menu names and headings weigh most (they
+ * say WHERE something is), then the page path, then body text.
+ */
+export function rankSiteChunks(chunks: SiteChunk[], terms: string[], surface: SiteChunk['surface'], limit = 4): SiteChunk[] {
+    if (!terms.length) return []
+    const scored: { c: SiteChunk; s: number }[] = []
+    for (const c of chunks) {
+        if (c.surface !== surface) continue
+        const head = `${c.menu || ''} ${c.heading || ''}`.toLowerCase()
+        const path = c.path.toLowerCase()
+        const body = c.text.toLowerCase()
+        let s = 0
+        let hits = 0
+        for (const t of terms) {
+            let hit = false
+            if (head.includes(t)) { s += 3; hit = true }
+            if (path.includes(t)) { s += 2; hit = true }
+            if (body.includes(t)) { s += 1; hit = true }
+            if (hit) hits++
+        }
+        // Reward chunks that match more of the question's words.
+        if (s > 0) scored.push({ c, s: s + hits * 2 })
+    }
+    return scored.sort((a, b) => b.s - a.s).slice(0, limit).map(x => x.c)
 }
