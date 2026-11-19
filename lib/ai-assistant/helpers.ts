@@ -324,3 +324,33 @@ export function topUpAmountFor(price: number, balance: number, minTopUp = 5): nu
 export function isValidIdempotencyKey(raw: unknown): raw is string {
     return typeof raw === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(raw)
 }
+
+// ── Guest (storefront) history ───────────────────────────────────────────────
+
+export interface PlainTurn {
+    role: 'user' | 'assistant'
+    content: string
+}
+
+/**
+ * Browser-sent history -> alternating plain-text turns that start with the customer
+ * and end with the assistant (the new question is appended after). Anything that
+ * isn't plain user/assistant text (tool_use, tool_result, images, forged roles) is
+ * dropped, so a client can't inject a fake "payment confirmed" tool result.
+ */
+export function cleanGuestHistory(raw: unknown, maxTurns = 12, maxChars = 500): PlainTurn[] {
+    if (!Array.isArray(raw)) return []
+    const out: PlainTurn[] = []
+    for (const m of raw.slice(-maxTurns)) {
+        const role = m?.role === 'assistant' ? 'assistant' : m?.role === 'user' ? 'user' : null
+        if (!role || typeof m?.content !== 'string') continue
+        const text = m.content.trim().slice(0, maxChars)
+        if (!text) continue
+        if (!out.length && role === 'assistant') continue
+        const prev = out[out.length - 1]
+        if (prev && prev.role === role) prev.content = `${prev.content}\n\n${text}`
+        else out.push({ role, content: text })
+    }
+    if (out.length && out[out.length - 1].role === 'user') out.pop()
+    return out
+}
