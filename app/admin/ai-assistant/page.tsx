@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { KnowledgeEditor } from './knowledge-editor'
+import { UnansweredList } from './unanswered-list'
 
 type Mode = 'off' | 'admins' | 'all'
 
@@ -223,6 +224,8 @@ export default function AdminAiAssistantPage() {
                     <UsageCard title="Last 7 days" u={status.week} />
                 </div>
             )}
+
+            {status && <UnansweredList canEdit={status.canEdit} />}
 
             {status && <KnowledgeEditor canEdit={status.canEdit} />}
         </div>

@@ -66,3 +66,7 @@ scratch/
 /public/fallback-*.js.map
 /public/worker-*.js
 /public/swe-worker-*.js
+
+# ARHMS AI site index builder (runs in prebuild; must be committed)
+!scripts/build-site-index.mjs
+!scripts/site-extract.mjs

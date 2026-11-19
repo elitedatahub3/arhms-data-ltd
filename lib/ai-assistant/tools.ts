@@ -9,6 +9,9 @@ import { z } from 'zod'
 import { rolePriceForPackage } from '@/lib/data-order-pricing'
 import { getOrderDisplayStatus, getOrderStatusLabel } from '@/lib/order-status-display'
 import { HELP_TOPICS, helpText } from './knowledge'
+import { getMyStatus, MY_STATUS_AREAS } from './my-status'
+import { getSiteInfo, SITE_INFO_TOPICS } from './site-info'
+import { searchSite } from './site-index'
 import {
     buildBuyLink,
     isNetworkVisible,
@@ -52,6 +55,8 @@ export interface ToolContext {
     userRow: any
     hidden: HiddenNetworks
     support: { whatsappNumber: string | null; whatsappLink: string | null }
+    /** Per-request scratch state (e.g. note_unanswered runs at most once per message). */
+    state?: { noted?: boolean }
 }
 
 export interface ToolOutput {
@@ -75,11 +80,11 @@ export const ASSISTANT_TOOLS: ToolDef[] = [
     {
         name: 'get_recent_orders',
         description:
-            "List the user's most recent orders with status. kind: 'data' bundles, 'airtime', 'afa' registrations, or 'all'.",
+            "List the user's most recent orders with status. kind: 'data' bundles, 'airtime', 'afa' registrations, 'bills' (ECG/water/TV), 'standard_bundles', 'checker' (results checker vouchers), or 'all' (data, airtime and AFA).",
         input_schema: {
             type: 'object',
             properties: {
-                kind: { type: 'string', enum: ['all', 'data', 'airtime', 'afa'] },
+                kind: { type: 'string', enum: ['all', 'data', 'airtime', 'afa', 'bills', 'standard_bundles', 'checker'] },
                 limit: { type: 'integer', minimum: 1, maximum: 10 },
             },
             required: ['kind', 'limit'],
@@ -127,6 +132,50 @@ export const ASSISTANT_TOOLS: ToolDef[] = [
         },
     },
     {
+        name: 'search_site',
+        description:
+            "Search the text of the ARHMS website's own pages (menus, page headings, buttons, hints, rules shown to users, and the API documentation). Use it for any 'how do I', 'where is', 'what does this page do' question. Returns page addresses you can give the user. Pass key words.",
+        input_schema: {
+            type: 'object',
+            properties: { query: { type: 'string', description: 'Key words, e.g. "withdraw shop profit"' } },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'get_site_info',
+        description:
+            'Get LIVE fees, prices and limits for this user\'s role. Topics: airtime (fees, min/max), wallet_topup (minimum, payment fee), upgrade_plans (agent and dealer prices), afa (registration price), bills (ECG/water/TV fees), results_checker (voucher prices), withdrawals (shop, commission, sub-agent minimums and fees), sms (activation price, credit bundles), delivery_status (current delivery times), support_contacts, features_on. Always use this instead of guessing a number.',
+        input_schema: {
+            type: 'object',
+            properties: { topic: { type: 'string', enum: [...SITE_INFO_TOPICS] } },
+            required: ['topic'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'get_my_status',
+        description:
+            "Get the user's OWN status for: complaints (latest), shop (link, approval, balance), commission (balance, withdrawals), api_keys (kind, approval status, first characters only), sms (account, credits), wallet_history (recent wallet transactions), top_performers (this month's rank), notifications (unread count).",
+        input_schema: {
+            type: 'object',
+            properties: { area: { type: 'string', enum: [...MY_STATUS_AREAS] } },
+            required: ['area'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'note_unanswered',
+        description:
+            "Record a valid ARHMS question you could not answer from your tools, so the team can add the answer. Call it at most once, then still reply helpfully and offer WhatsApp support. Do not call it for off-topic, harmful or general-knowledge questions.",
+        input_schema: {
+            type: 'object',
+            properties: { question: { type: 'string', description: "The user's question, in their words" } },
+            required: ['question'],
+            additionalProperties: false,
+        },
+    },
+    {
         name: 'search_knowledge',
         description:
             'Search the ARHMS knowledge base (FAQ and policies: refunds, delivery times, failed orders, how-to steps). Call it before answering any policy or how-to question. Pass a few key words from the question.',
@@ -158,7 +207,7 @@ const schemas = {
     get_wallet_balance: z.object({}).passthrough(),
     get_account_info: z.object({}).passthrough(),
     get_recent_orders: z.object({
-        kind: z.enum(['all', 'data', 'airtime', 'afa']),
+        kind: z.enum(['all', 'data', 'airtime', 'afa', 'bills', 'standard_bundles', 'checker']),
         limit: z.coerce.number().int().min(1).max(10),
     }),
     find_order: z.object({ query: z.string().trim().min(3).max(60) }),
@@ -168,6 +217,10 @@ const schemas = {
         phone: z.string().max(20).optional().default(''),
     }),
     search_knowledge: z.object({ query: z.string().trim().min(2).max(200) }),
+    search_site: z.object({ query: z.string().trim().min(2).max(200) }),
+    get_site_info: z.object({ topic: z.enum(SITE_INFO_TOPICS) }),
+    get_my_status: z.object({ area: z.enum(MY_STATUS_AREAS) }),
+    note_unanswered: z.object({ question: z.string().trim().min(3).max(500) }),
     get_help: z.object({ topic: z.enum(HELP_TOPICS) }),
 }
 
@@ -267,6 +320,35 @@ async function run(name: ToolName, input: any, ctx: ToolContext): Promise<ToolOu
                     .order('created_at', { ascending: false }).limit(limit)
                 rows.push(...(data || []).map(afaOrderView))
             }
+            // Named columns only: these tables hold cost/markup columns the user must not see.
+            if (kind === 'bills') {
+                const { data } = await db.from('utility_orders')
+                    .select('reference_code, service, account_number, bill_amount, fee_amount, total_paid, status, created_at')
+                    .eq('user_id', userId).order('created_at', { ascending: false }).limit(limit)
+                rows.push(...(data || []).map((o: any) => ({
+                    type: 'bill', reference: o.reference_code, service: o.service, account: o.account_number,
+                    bill_ghs: money(o.bill_amount), paid_ghs: money(o.total_paid), status: getOrderStatusLabel(o.status || 'pending'), created_at: o.created_at,
+                })))
+            }
+            if (kind === 'standard_bundles') {
+                const { data } = await db.from('bundle_orders')
+                    .select('reference_code, network, beneficiary_phone, bundle_label, total_paid, status, created_at')
+                    .eq('user_id', userId).order('created_at', { ascending: false }).limit(limit)
+                rows.push(...(data || []).map((o: any) => ({
+                    type: 'standard_bundle', reference: o.reference_code, network: o.network, recipient: o.beneficiary_phone,
+                    bundle: o.bundle_label, paid_ghs: money(o.total_paid), status: getOrderStatusLabel(o.status || 'pending'), created_at: o.created_at,
+                })))
+            }
+            if (kind === 'checker') {
+                const { data } = await db.from('results_checker_orders')
+                    .select('reference_code, type_name, quantity, total_paid, status, created_at')
+                    .eq('user_id', userId).is('shop_id', null).order('created_at', { ascending: false }).limit(limit)
+                rows.push(...(data || []).map((o: any) => ({
+                    type: 'results_checker', reference: o.reference_code, voucher: o.type_name, quantity: o.quantity,
+                    paid_ghs: money(o.total_paid), status: getOrderStatusLabel(o.status || 'pending'), created_at: o.created_at,
+                    note: 'Voucher PINs are shown on the Results Checker page, not in chat.',
+                })))
+            }
             const orders = rows.sort(byNewest).slice(0, limit)
             return { content: JSON.stringify({ orders, count: orders.length }) }
         }
@@ -343,6 +425,35 @@ async function run(name: ToolName, input: any, ctx: ToolContext): Promise<ToolOu
             }
         }
 
+        case 'search_site': {
+            const { query } = input as z.infer<typeof schemas.search_site>
+            const results = searchSite(query, 'dashboard')
+            return {
+                content: JSON.stringify(
+                    results.length ? { results } : { results: [], note: 'No page text matched. Try other key words, search_knowledge, or get_help.' },
+                ),
+            }
+        }
+
+        case 'get_site_info': {
+            const { topic } = input as z.infer<typeof schemas.get_site_info>
+            return { content: JSON.stringify({ topic, ...(await getSiteInfo(db, topic, ctx.userRow)) }) }
+        }
+
+        case 'get_my_status': {
+            const { area } = input as z.infer<typeof schemas.get_my_status>
+            return { content: JSON.stringify({ area, ...(await getMyStatus(db, userId, area)) }) }
+        }
+
+        case 'note_unanswered': {
+            const { question } = input as z.infer<typeof schemas.note_unanswered>
+            if (ctx.state?.noted) return { content: JSON.stringify({ recorded: false, note: 'Already recorded for this message.' }) }
+            if (ctx.state) ctx.state.noted = true
+            const { error } = await db.from('ai_unanswered').insert({ question, user_id: userId, surface: ctx.surface })
+            if (error) console.error('[ARHMS AI] note_unanswered failed, is migration 20261118020000 run?', error.message)
+            return { content: JSON.stringify({ recorded: !error, note: 'Now reply helpfully and offer WhatsApp support.' }) }
+        }
+
         case 'search_knowledge': {
             const { query } = input as z.infer<typeof schemas.search_knowledge>
             const terms = knowledgeSearchTerms(query)
@@ -391,6 +502,10 @@ const DASHBOARD_TOOLS = new Set<string>([
     'show_bundle_cards',
     'search_knowledge',
     'get_help',
+    'search_site',
+    'get_site_info',
+    'get_my_status',
+    'note_unanswered',
 ])
 
 /** Tool definitions offered on a surface. Not a security boundary on its own (see executeAssistantTool). */

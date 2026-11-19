@@ -169,7 +169,7 @@ export async function POST(request: Request) {
     const firstName = String(u.first_name || '').replace(/[^\p{L}\p{M} .'-]/gu, '').trim().slice(0, 40)
     // Stable prompt first, per-request facts last (keeps DeepSeek's prefix cache warm).
     const system = `${ASSISTANT_SYSTEM_PROMPT}\n\nCurrent user: first name "${firstName}", role "${u.role || 'customer'}". Today is ${new Date().toISOString().slice(0, 10)} (Ghana time).`
-    const toolCtx = { surface: SURFACE, db, userId, userRow: access.userRow, hidden: access.hidden, support: access.support }
+    const toolCtx = { surface: SURFACE, db, userId, userRow: access.userRow, hidden: access.hidden, support: access.support, state: {} }
     const limits = SURFACE_LIMITS[SURFACE]
     const encoder = new TextEncoder()
 

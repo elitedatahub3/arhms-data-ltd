@@ -113,11 +113,12 @@ test('escapeLike escapes %, _ and backslash', () => {
     assert.equal(escapeLike('100%_off\\'), '100\\%\\_off\\\\')
 })
 
-test('knowledgeSearchTerms keeps only safe content words, max 5', () => {
+test('knowledgeSearchTerms keeps only safe content words, max 6, singular', () => {
     assert.deepEqual(knowledgeSearchTerms('How do I get a REFUND for my failed order?'), ['get', 'refund', 'failed', 'order'])
     assert.deepEqual(knowledgeSearchTerms('%,),(or=id.neq.0'), ['neq'])
     assert.deepEqual(knowledgeSearchTerms(''), [])
-    assert.equal(knowledgeSearchTerms('alpha bravo charlie delta echo foxtrot golf').length, 5)
+    assert.equal(knowledgeSearchTerms('alpha bravo charlie delta echo foxtrot golf').length, 6)
+    assert.deepEqual(knowledgeSearchTerms('api keys orders business'), ['api', 'key', 'order', 'business'])
 })
 
 test('rankKnowledge puts question matches first and drops non-matches', () => {

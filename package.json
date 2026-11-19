@@ -5,6 +5,7 @@
   "description": "ARHMS DATA LTD - Ghana Data Bundle Reselling Platform",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/build-site-index.mjs",
     "build": "next build",
     "start": "next start",
     "analyze": "cross-env ANALYZE=true next build",
