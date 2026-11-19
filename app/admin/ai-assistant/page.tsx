@@ -27,7 +27,8 @@ interface Usage {
 
 interface Status {
     mode: Mode
-    dailyLimit: number
+    usage: { dashboardLimit: number; dashboardPrice: number; shopLimit: number; shopPrice: number }
+    resetRevenue: { dashboard: { count: number; ghs: number }; shop: { count: number; ghs: number } }
     globalDailyLimit: number
     keyConfigured: boolean
     canEdit: boolean
@@ -71,7 +72,10 @@ function UsageCard({ title, u }: { title: string; u: Usage }) {
 export default function AdminAiAssistantPage() {
     const [status, setStatus] = useState<Status | null>(null)
     const [mode, setMode] = useState<Mode>('off')
-    const [limit, setLimit] = useState('30')
+    const [limit, setLimit] = useState('100')
+    const [price, setPrice] = useState('5')
+    const [shopLimit, setShopLimit] = useState('300')
+    const [shopPrice, setShopPrice] = useState('7')
     const [globalLimit, setGlobalLimit] = useState('3000')
     const [model, setModel] = useState('deepseek-chat')
     const [loading, setLoading] = useState(true)
@@ -85,7 +89,10 @@ export default function AdminAiAssistantPage() {
             const data: Status = await res.json()
             setStatus(data)
             setMode(data.mode)
-            setLimit(String(data.dailyLimit))
+            setLimit(String(data.usage.dashboardLimit))
+            setPrice(String(data.usage.dashboardPrice))
+            setShopLimit(String(data.usage.shopLimit))
+            setShopPrice(String(data.usage.shopPrice))
             setGlobalLimit(String(data.globalDailyLimit ?? 3000))
             setModel(data.model)
         } catch {
@@ -99,8 +106,15 @@ export default function AdminAiAssistantPage() {
 
     const save = async () => {
         const n = parseInt(limit, 10)
-        if (!Number.isFinite(n) || n < 1 || n > 500) {
-            toast.error('Daily limit must be between 1 and 500')
+        const sn = parseInt(shopLimit, 10)
+        if (![n, sn].every(v => Number.isFinite(v) && v >= 1 && v <= 100000)) {
+            toast.error('Monthly limits must be between 1 and 100000 questions')
+            return
+        }
+        const p = parseFloat(price)
+        const sp = parseFloat(shopPrice)
+        if (![p, sp].every(v => Number.isFinite(v) && v >= 0 && v <= 1000)) {
+            toast.error('Reset prices must be between GHS 0 and GHS 1000')
             return
         }
         const g = parseInt(globalLimit, 10)
@@ -116,7 +130,10 @@ export default function AdminAiAssistantPage() {
                 body: JSON.stringify({
                     updates: [
                         { key: 'ai_assistant_mode', value: mode },
-                        { key: 'ai_assistant_daily_limit', value: String(n) },
+                        { key: 'ai_dashboard_monthly_limit', value: String(n) },
+                        { key: 'ai_dashboard_reset_price', value: p.toFixed(2) },
+                        { key: 'ai_shop_monthly_limit', value: String(sn) },
+                        { key: 'ai_shop_reset_price', value: sp.toFixed(2) },
                         { key: 'ai_assistant_global_daily_limit', value: String(g) },
                         { key: 'ai_model_dashboard', value: model },
                     ],
@@ -182,14 +199,28 @@ export default function AdminAiAssistantPage() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                        <Label htmlFor="ai-limit">Messages per user per day</Label>
-                        <Input id="ai-limit" type="number" min={1} max={500} value={limit} onChange={e => setLimit(e.target.value)} />
-                        <p className="text-xs text-muted-foreground">Each user can also send at most 6 messages a minute.</p>
+                        <Label htmlFor="ai-limit">Questions per user per month</Label>
+                        <Input id="ai-limit" type="number" min={1} max={100000} value={limit} onChange={e => setLimit(e.target.value)} />
                     </div>
                     <div className="space-y-2">
+                        <Label htmlFor="ai-price">User reset price (GHS)</Label>
+                        <Input id="ai-price" type="number" min={0} step="0.5" value={price} onChange={e => setPrice(e.target.value)} />
+                        <p className="text-xs text-muted-foreground">When a user runs out, paying this adds another {limit || '…'} questions for the month.</p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="ai-shop-limit">Questions per shop per month</Label>
+                        <Input id="ai-shop-limit" type="number" min={1} max={100000} value={shopLimit} onChange={e => setShopLimit(e.target.value)} />
+                        <p className="text-xs text-muted-foreground">Shared by all customers of one storefront.</p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="ai-shop-price">Shop reset price (GHS)</Label>
+                        <Input id="ai-shop-price" type="number" min={0} step="0.5" value={shopPrice} onChange={e => setShopPrice(e.target.value)} />
+                        <p className="text-xs text-muted-foreground">The shop owner pays this to add another {shopLimit || '…'} questions for the month.</p>
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
                         <Label htmlFor="ai-global-limit">Platform limit per day (all users)</Label>
                         <Input id="ai-global-limit" type="number" min={1} max={100000} value={globalLimit} onChange={e => setGlobalLimit(e.target.value)} />
-                        <p className="text-xs text-muted-foreground">Caps your DeepSeek spend. When reached, ARHMS AI pauses until tomorrow.</p>
+                        <p className="text-xs text-muted-foreground">Safety cap on your DeepSeek spend. When reached, ARHMS AI pauses until tomorrow. Admins have no monthly limit; everyone can send at most 6 messages a minute.</p>
                     </div>
                 </div>
 
@@ -222,6 +253,23 @@ export default function AdminAiAssistantPage() {
                 <div className="grid gap-4 md:grid-cols-2">
                     <UsageCard title="Today" u={status.today} />
                     <UsageCard title="Last 7 days" u={status.week} />
+                    <div className="rounded-xl border border-border p-4 md:col-span-2">
+                        <p className="text-sm font-semibold text-muted-foreground">Paid resets this month</p>
+                        <div className="mt-3 grid grid-cols-3 gap-3">
+                            <div>
+                                <p className="text-2xl font-black">{status.resetRevenue.dashboard.count}</p>
+                                <p className="text-xs text-muted-foreground">user resets</p>
+                            </div>
+                            <div>
+                                <p className="text-2xl font-black">{status.resetRevenue.shop.count}</p>
+                                <p className="text-xs text-muted-foreground">shop resets</p>
+                            </div>
+                            <div>
+                                <p className="text-2xl font-black">GHS {(status.resetRevenue.dashboard.ghs + status.resetRevenue.shop.ghs).toFixed(2)}</p>
+                                <p className="text-xs text-muted-foreground">earned</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 

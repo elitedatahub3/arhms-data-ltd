@@ -268,3 +268,59 @@ export function rankSiteChunks(chunks: SiteChunk[], terms: string[], surface: Si
     }
     return scored.sort((a, b) => b.s - a.s).slice(0, limit).map(x => x.c)
 }
+
+// ── Monthly limits with paid resets (owner, 2026-11-18) ──────────────────────
+// Dashboard users and shops get a monthly question allowance set by the admin.
+// When it is used up, paying the reset price (GHS 5 user / GHS 7 shop) adds
+// another full allowance for the rest of that month.
+
+export type UsageScope = 'dashboard' | 'shop'
+
+export const USAGE_DEFAULTS: Record<UsageScope, { limit: number; price: number }> = {
+    dashboard: { limit: 100, price: 5 },
+    shop: { limit: 300, price: 7 },
+}
+
+export const USAGE_SETTING_KEYS: Record<UsageScope, { limit: string; price: string }> = {
+    dashboard: { limit: 'ai_dashboard_monthly_limit', price: 'ai_dashboard_reset_price' },
+    shop: { limit: 'ai_shop_monthly_limit', price: 'ai_shop_reset_price' },
+}
+
+/** Ghana time is UTC+0: "2026-11" for any moment in November 2026. */
+export function currentMonthKey(now: Date = new Date()): string {
+    return now.toISOString().slice(0, 7)
+}
+
+export function monthStartIso(now: Date = new Date()): string {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+}
+
+/** Monthly question allowance from admin_settings (1..100000). */
+export function parseMonthlyLimit(raw: unknown, fallback: number): number {
+    const n = parseInt(String(raw ?? ''), 10)
+    if (!Number.isFinite(n)) return fallback
+    return Math.min(Math.max(n, 1), 100000)
+}
+
+/** Reset price in GHS from admin_settings (0..1000, 2 decimals). */
+export function parseResetPrice(raw: unknown, fallback: number): number {
+    const n = parseFloat(String(raw ?? ''))
+    if (!Number.isFinite(n) || n < 0) return fallback
+    return Math.round(Math.min(n, 1000) * 100) / 100
+}
+
+/** This month's allowance: the base plus everything added by paid resets. */
+export function monthlyAllowance(base: number, paidQuestionsAdded: number[]): number {
+    return base + paidQuestionsAdded.reduce((sum, n) => sum + (n > 0 ? n : 0), 0)
+}
+
+/** How much to top up so the wallet covers the reset (never below the top-up minimum). */
+export function topUpAmountFor(price: number, balance: number, minTopUp = 5): number {
+    const short = Math.ceil((price - Math.max(balance, 0)) * 100) / 100
+    return Math.max(minTopUp, short)
+}
+
+/** Client idempotency key for a reset: letters, digits and dashes only. */
+export function isValidIdempotencyKey(raw: unknown): raw is string {
+    return typeof raw === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(raw)
+}

@@ -168,3 +168,50 @@ test('createSecretRedactor releases normal text without losing any', () => {
     out += r.flush()
     assert.equal(out, 'Hello there,\nhow are you?')
 })
+
+import {
+    currentMonthKey,
+    monthStartIso,
+    parseMonthlyLimit,
+    parseResetPrice,
+    monthlyAllowance,
+    topUpAmountFor,
+    isValidIdempotencyKey,
+} from '../ai-assistant/helpers.ts'
+
+test('month key and start are UTC (Ghana time)', () => {
+    const d = new Date('2026-11-30T23:59:59Z')
+    assert.equal(currentMonthKey(d), '2026-11')
+    assert.equal(monthStartIso(d), '2026-11-01T00:00:00.000Z')
+    assert.equal(currentMonthKey(new Date('2026-12-01T00:00:00Z')), '2026-12')
+})
+
+test('parseMonthlyLimit / parseResetPrice fall back and clamp', () => {
+    assert.equal(parseMonthlyLimit(undefined, 100), 100)
+    assert.equal(parseMonthlyLimit('0', 100), 1)
+    assert.equal(parseMonthlyLimit('250', 100), 250)
+    assert.equal(parseResetPrice(undefined, 5), 5)
+    assert.equal(parseResetPrice('-1', 5), 5)
+    assert.equal(parseResetPrice('7.499', 5), 7.5)
+    assert.equal(parseResetPrice('0', 5), 0)
+})
+
+test('monthlyAllowance adds every paid reset', () => {
+    assert.equal(monthlyAllowance(100, []), 100)
+    assert.equal(monthlyAllowance(100, [100, 100]), 300)
+    assert.equal(monthlyAllowance(100, [-5, 0]), 100)
+})
+
+test('topUpAmountFor covers the shortfall but never below the minimum top-up', () => {
+    assert.equal(topUpAmountFor(5, 0), 5)
+    assert.equal(topUpAmountFor(7, 0), 7)
+    assert.equal(topUpAmountFor(7, 4.5), 5)
+    assert.equal(topUpAmountFor(12, 1.25), 10.75)
+})
+
+test('isValidIdempotencyKey accepts uuids, rejects junk', () => {
+    assert.equal(isValidIdempotencyKey('3f2b9c1e-1111-2222-3333-444455556666'), true)
+    assert.equal(isValidIdempotencyKey('short'), false)
+    assert.equal(isValidIdempotencyKey("x'; drop table--"), false)
+    assert.equal(isValidIdempotencyKey(undefined), false)
+})

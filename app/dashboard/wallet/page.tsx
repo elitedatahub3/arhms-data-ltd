@@ -76,6 +76,16 @@ function WalletContent() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dbUser?.phone_number])
 
+    // ?amount=7.00 (e.g. from ARHMS AI's "Pay with MoMo") pre-fills the top-up amount.
+    // Only a sane number is accepted; the field stays editable and every normal
+    // minimum/fee rule still applies.
+    useEffect(() => {
+        const raw = searchParams.get('amount')
+        if (!raw) return
+        const n = parseFloat(raw)
+        if (Number.isFinite(n) && n >= MIN_AMOUNT && n <= 1000) setTopUpAmount(n.toFixed(2))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
 
 
     useEffect(() => {
