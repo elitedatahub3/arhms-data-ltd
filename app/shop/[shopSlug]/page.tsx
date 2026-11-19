@@ -9,6 +9,7 @@ import dynamic from 'next/dynamic'
 // so the ISR-cached HTML shell renders first, then JS hydrates — prevents
 // blank-screen crashes on low-end phones with limited RAM
 const ShopStorefront = dynamic(() => import('./ShopStorefront'), { loading: () => null })
+import { ShopAssistant } from '@/components/shop/shop-assistant'
 
 interface Props {
     params: Promise<{ shopSlug: string }>
@@ -280,5 +281,11 @@ export default async function ShopPage({ params }: Props) {
         }
     }
 
-    return <ShopStorefront shop={{ ...shop, ownerRole }} packages={packages} adminSettings={adminSettingsMap} initialAnnouncement={initialAnnouncement} />
+    return (
+        <>
+            <ShopStorefront shop={{ ...shop, ownerRole }} packages={packages} adminSettings={adminSettingsMap} initialAnnouncement={initialAnnouncement} />
+            {/* Renders nothing unless the storefront assistant is switched on for this shop. */}
+            <ShopAssistant shopSlug={shop.shop_slug} brandColor={shop.brand_color} />
+        </>
+    )
 }

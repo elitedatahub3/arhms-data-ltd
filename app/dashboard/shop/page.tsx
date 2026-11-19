@@ -21,6 +21,7 @@ import { toast } from 'sonner'
 import SubAgentInviteCard from '@/components/shop/sub-agent-invite-card'
 import { OrderSmsBanner } from '@/components/sms/order-sms-banner'
 import { ShopQuickShare } from '@/components/dashboard/ShopQuickShare'
+import { ShopAiCard } from '@/components/shop/shop-ai-card'
 import { shopUrl as buildShopUrl } from '@/lib/shop-url'
 
 interface ShopProfile {
@@ -599,6 +600,7 @@ export default function ShopOverviewPage() {
             {/* --- CORE CONTENT --- */}
             <div className={cn("grid grid-cols-1 lg:grid-cols-12 gap-6", isPending && "opacity-50 pointer-events-none")}>
                 <div className="lg:col-span-4 space-y-6">
+                    <ShopAiCard />
                     <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-zinc-900 to-black p-8 text-white shadow-xl border border-zinc-800">
                          <div className="absolute top-0 left-[-100%] w-[150%] h-full bg-gradient-to-r from-transparent via-white/5 to-transparent transform -skew-x-12 animate-sheen pointer-events-none" />
                          <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-1">Available Profit</p>

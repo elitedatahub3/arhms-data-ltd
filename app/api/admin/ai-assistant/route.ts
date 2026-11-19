@@ -54,7 +54,7 @@ export async function GET() {
     weekStart.setUTCDate(weekStart.getUTCDate() - 6)
 
     const [{ data: settings }, { data: rows, error }, { data: resets }] = await Promise.all([
-        db.from('admin_settings').select('key, value').in('key', ['ai_assistant_mode', 'ai_assistant_global_daily_limit', 'ai_model_dashboard', USAGE_SETTING_KEYS.dashboard.limit, USAGE_SETTING_KEYS.dashboard.price, USAGE_SETTING_KEYS.shop.limit, USAGE_SETTING_KEYS.shop.price]),
+        db.from('admin_settings').select('key, value').in('key', ['ai_assistant_mode', 'ai_assistant_global_daily_limit', 'ai_model_dashboard', 'ai_storefront_mode', 'ai_storefront_daily_limit_per_ip', USAGE_SETTING_KEYS.dashboard.limit, USAGE_SETTING_KEYS.dashboard.price, USAGE_SETTING_KEYS.shop.limit, USAGE_SETTING_KEYS.shop.price]),
         db.from('ai_chat_messages').select('user_id, role, input_tokens, output_tokens, created_at')
             .gte('created_at', weekStart.toISOString()).limit(50000),
         // Paid resets this month (missing table = migration 20261118020000 not run: zero).
@@ -83,6 +83,10 @@ export async function GET() {
                 shopPrice: parseResetPrice(s[USAGE_SETTING_KEYS.shop.price], USAGE_DEFAULTS.shop.price),
             },
             resetRevenue,
+            storefront: {
+                on: s.ai_storefront_mode === 'on',
+                perVisitorDaily: parseMonthlyLimit(s.ai_storefront_daily_limit_per_ip, 15),
+            },
             globalDailyLimit: parseGlobalDailyLimit(s.ai_assistant_global_daily_limit),
             keyConfigured: !!process.env.DEEPSEEK_API_KEY,
             canEdit: me?.role === 'admin',
