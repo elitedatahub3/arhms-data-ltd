@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+/**
+ * Builds lib/ai-assistant/site-index.json: the text users see on every customer-facing
+ * page, so ARHMS AI learns the site from the site itself. Runs on every build
+ * ("prebuild" in package.json), so a changed page changes what the assistant knows.
+ *
+ * Indexed:   app/dashboard/**, app/docs, app/page.tsx (surface "dashboard"),
+ *            app/shop/** (surface "storefront"), lib/api-docs.ts (as /docs),
+ *            plus local components those pages import (2 levels deep).
+ * Never:     app/admin/**, app/api/**, portal, components/admin/**, components/ui/**.
+ *
+ * Usage: node scripts/build-site-index.mjs
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { extractUiText, chunkEntries, routeFromPageFile, surfaceForRoute } from './site-extract.mjs'
+
+const require = createRequire(import.meta.url)
+const ts = require('typescript')
+
+const ROOT = process.cwd()
+const OUT = path.join(ROOT, 'lib/ai-assistant/site-index.json')
+const NEVER = [/^app\/admin\//, /^app\/api\//, /^app\/\(portal\)\//, /^app\/portal\//, /^components\/admin\//, /^components\/ui\//]
+const MAX_DEPTH = 2
+
+const rel = p => path.relative(ROOT, p).replace(/\\/g, '/')
+const allowed = r => !NEVER.some(re => re.test(r))
+
+function walk(dir, out = []) {
+    if (!fs.existsSync(dir)) return out
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p, out)
+        else if (e.name === 'page.tsx') out.push(p)
+    }
+    return out
+}
+
+function resolveImport(fromFile, spec) {
+    let base
+    if (spec.startsWith('@/')) base = path.join(ROOT, spec.slice(2))
+    else if (spec.startsWith('./') || spec.startsWith('../')) base = path.resolve(path.dirname(fromFile), spec)
+    else return null
+    for (const cand of [base + '.tsx', base + '.ts', path.join(base, 'index.tsx'), path.join(base, 'index.ts'), base]) {
+        if (fs.existsSync(cand) && fs.statSync(cand).isFile() && /\.(tsx|ts)$/.test(cand)) return cand
+    }
+    return null
+}
+
+function localImports(file, src) {
+    const out = []
+    const re = /^\s*import\s+(?!type\b)[^'"]*?from\s+['"]([^'"]+)['"]/gm
+    let m
+    while ((m = re.exec(src))) {
+        const r = resolveImport(file, m[1])
+        if (!r) continue
+        const rr = rel(r)
+        // Only UI files: components/ and colocated app/ files. lib/ is logic, not copy.
+        if (!(rr.startsWith('components/') || rr.startsWith('app/'))) continue
+        if (!allowed(rr) || !rr.endsWith('.tsx')) continue
+        out.push(r)
+    }
+    return out
+}
+
+/** href -> menu label, from the customer sidebar. */
+function menuLabels() {
+    const map = {}
+    const f = path.join(ROOT, 'components/dashboard/sidebar.tsx')
+    if (!fs.existsSync(f)) return map
+    const src = fs.readFileSync(f, 'utf8')
+    const re = /href:\s*'(\/(?!admin)[^']*)'\s*,\s*label:\s*'([^']+)'/g
+    let m
+    while ((m = re.exec(src))) if (!map[m[1]]) map[m[1]] = m[2]
+    return map
+}
+
+const pages = [
+    ...walk(path.join(ROOT, 'app/dashboard')),
+    ...walk(path.join(ROOT, 'app/shop')),
+    ...walk(path.join(ROOT, 'app/docs')),
+    path.join(ROOT, 'app/page.tsx'),
+].filter(p => fs.existsSync(p) && allowed(rel(p)))
+
+const menus = menuLabels()
+const credited = new Set() // a shared component is credited to the first page that imports it
+const chunks = []
+let fileCount = 0
+
+for (const page of pages) {
+    const route = routeFromPageFile(rel(page))
+    const surface = surfaceForRoute(route)
+    if (!surface) continue
+    const base = { surface, path: route, menu: menus[route] || null }
+
+    const files = []
+    const queue = [[page, 0]]
+    while (queue.length) {
+        const [f, depth] = queue.shift()
+        if (credited.has(f)) continue
+        credited.add(f)
+        files.push(f)
+        if (depth >= MAX_DEPTH) continue
+        const src = fs.readFileSync(f, 'utf8')
+        for (const imp of localImports(f, src)) queue.push([imp, depth + 1])
+    }
+
+    const entries = []
+    for (const f of files) {
+        entries.push(...extractUiText(ts, fs.readFileSync(f, 'utf8'), f))
+        fileCount++
+    }
+    chunks.push(...chunkEntries(entries, base))
+}
+
+// API reference (the same source /docs renders).
+const apiDocs = path.join(ROOT, 'lib/api-docs.ts')
+if (fs.existsSync(apiDocs)) {
+    const entries = extractUiText(ts, fs.readFileSync(apiDocs, 'utf8'), apiDocs)
+    chunks.push(...chunkEntries(entries, { surface: 'dashboard', path: '/docs', menu: 'API documentation' }))
+    fileCount++
+}
+
+// The menu itself, so "where is X" questions find the page name.
+const menuLines = Object.entries(menus).map(([href, label]) => `${label}: ${href}`)
+if (menuLines.length) {
+    chunks.unshift({ surface: 'dashboard', path: '/dashboard', menu: 'Menu', heading: 'Dashboard menu', text: menuLines.join(' · ') })
+}
+
+const out = {
+    note: 'Generated by scripts/build-site-index.mjs on every build. Do not edit by hand.',
+    chunks: chunks.map((c, i) => ({ id: i, ...c })),
+}
+fs.writeFileSync(OUT, JSON.stringify(out) + '\n')
+const kb = (Buffer.byteLength(JSON.stringify(out)) / 1024).toFixed(0)
+console.log(`[site-index] ${pages.length} pages, ${fileCount} files, ${chunks.length} chunks, ${kb} KB -> ${rel(OUT)}`)

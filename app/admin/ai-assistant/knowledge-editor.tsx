@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { KB_PREFILL_EVENT } from './unanswered-list'
 
 type Surface = 'dashboard' | 'home' | 'storefront' | 'admin' | 'whatsapp'
 
@@ -63,6 +64,17 @@ export function KnowledgeEditor({ canEdit }: { canEdit: boolean }) {
     }, [])
 
     useEffect(() => { load() }, [load])
+
+    // "Add answer" on the Couldn't-answer list opens a new entry with the question filled in.
+    useEffect(() => {
+        const onPrefill = (e: Event) => {
+            const question = String((e as CustomEvent).detail?.question || '').slice(0, 300)
+            setDraft({ ...EMPTY, category: 'faq', question })
+            document.getElementById('kb-a')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+        window.addEventListener(KB_PREFILL_EVENT, onPrefill)
+        return () => window.removeEventListener(KB_PREFILL_EVENT, onPrefill)
+    }, [])
 
     const save = async () => {
         if (!draft) return
