@@ -67,8 +67,8 @@ export interface AssistantAccess {
     usedThisMonth: number
     /** Hourly/daily limit hit (null = fine, or staff). The user waits; no payment. */
     windowBlock: { window: 'hour' | 'day'; resetsAt: string } | null
-    /** Used / limit per window (null for staff). */
-    usage: { hour: UsageWindow; day: UsageWindow; month: UsageWindow } | null
+    /** Used / limit per window. Staff get it too (informational; they are not limited). */
+    usage: { hour: UsageWindow; day: UsageWindow; month: UsageWindow }
     hourLeft: number | null
     dayLeft: number | null
     remaining: number
@@ -124,7 +124,8 @@ export async function loadAssistantAccess(db: any, userId: string): Promise<Assi
 
     return {
         // Used / limit per window for the header's usage meter (null for staff: no limits).
-        usage: unlimited ? null : {
+        // Shown to everyone (staff too, for information: they are never blocked).
+        usage: {
             hour: { used: usedHour || 0, limit: hourLimit },
             day: { used: usedDay || 0, limit: dayLimit },
             month: { used: usedThisMonth, limit },

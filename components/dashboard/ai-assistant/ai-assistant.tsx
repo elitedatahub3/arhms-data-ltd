@@ -156,6 +156,7 @@ export function AiAssistant() {
     const [dayLeft, setDayLeft] = useState<number | null>(null)
     /** Header usage meter (null = staff, no limits) and support contact. */
     const [usage, setUsage] = useState<UsageSnapshot | null>(null)
+    const [unlimited, setUnlimited] = useState(false)
     const [resetTerms, setResetTerms] = useState<{ price: number; questions: number } | null>(null)
     const [support, setSupport] = useState<{ whatsappNumber: string | null; whatsappLink: string | null } | null>(null)
     const [maxChars, setMaxChars] = useState(500)
@@ -176,6 +177,7 @@ export function AiAssistant() {
             setHourLeft(data.hourLeft ?? null)
             setDayLeft(data.dayLeft ?? null)
             setUsage(data.usage ?? null)
+            setUnlimited(data.unlimited === true)
             setResetTerms(data.reset ?? null)
             setSupport(data.support ?? null)
             setWindowBlock(data.windowBlock ? { message: data.windowBlock.message, resetsAt: data.windowBlock.resetsAt } : null)
@@ -374,8 +376,8 @@ export function AiAssistant() {
                             <Dialog.Title className="truncate text-base font-bold leading-tight">ARHMS AI</Dialog.Title>
                             <p className="truncate text-xs text-muted-foreground">AI assistant</p>
                         </div>
-                        {/* Usage meter: tap for hour/day/month limits and how to buy more. Hidden for staff (no limits). */}
-                        {usage && <UsageMeter usage={usage} reset={resetTerms} />}
+                        {/* Usage meter: tap for hour/day/month limits and how to buy more. Staff see it too (not limited). */}
+                        {usage && <UsageMeter usage={usage} reset={resetTerms} unlimited={unlimited} />}
                         {/* Talk to support directly, without asking the AI. */}
                         <SupportButton support={support} onNavigate={() => setOpen(false)} />
                         {/* New chat: clears this conversation and starts fresh. */}

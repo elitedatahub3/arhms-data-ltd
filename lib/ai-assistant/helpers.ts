@@ -438,10 +438,10 @@ export interface UsageSnapshot {
     month: { used: number; limit: number }
 }
 
-const WINDOW_WORD = { hour: 'hourly', day: 'daily', month: 'monthly' } as const
+const WINDOW_WORD = { hour: "this hour's", day: "today's", month: "this month's" } as const
 
 /**
- * The window closest to running out (highest % used), e.g. "40% of hourly limit".
+ * The window closest to running out (highest % used), e.g. "40% of this hour's usage".
  * Ties prefer the shorter window (hour, then day), since it clears soonest.
  */
 export function usageMeter(u: UsageSnapshot): { window: 'hour' | 'day' | 'month'; pct: number; label: string } {
@@ -449,5 +449,5 @@ export function usageMeter(u: UsageSnapshot): { window: 'hour' | 'day' | 'month'
     let best: 'hour' | 'day' | 'month' = 'hour'
     for (const w of ['day', 'month'] as const) if (pct(u[w]) > pct(u[best])) best = w
     const p = pct(u[best])
-    return { window: best, pct: p, label: `${p}% of ${WINDOW_WORD[best]} limit` }
+    return { window: best, pct: p, label: `${p}% of ${WINDOW_WORD[best]} usage` }
 }
