@@ -7,7 +7,8 @@
  *
  * Gate order: admin switch ai_storefront_mode='on' -> shop approved/active/priced and
  * not switched off by its owner -> per-visitor burst (6/min) and daily cap
- * (ai_storefront_daily_limit_per_ip, default 15) -> the SHOP's monthly allowance
+ * (ai_storefront_daily_limit_per_ip, default 15) + hourly cap (ai_storefront_hourly_limit_per_visitor,
+ * default 5) -> the SHOP's monthly allowance
  * (ai_shop_monthly_limit + paid GHS 7 resets) -> platform daily safety cap.
  *
  * Guests have no stored conversation: history comes from the browser, reduced to
@@ -21,6 +22,13 @@ import { deepSeekTurn, DeepSeekError } from '@/lib/ai-assistant/deepseek'
 import { runAgentLoop, type EngineMessage } from '@/lib/ai-assistant/engine'
 import {
     BURST_LIMIT_PER_MINUTE,
+    checkWindowLimits,
+    formatResetTime,
+    hourStartIso,
+    parseWindowLimit,
+    WINDOW_DEFAULTS,
+    WINDOW_SETTING_KEYS,
+    type WindowCheck,
     cleanGuestHistory,
     cleanUserMessage,
     createSecretRedactor,
@@ -43,6 +51,7 @@ export const maxDuration = 60
 const GATE_KEYS = [
     'ai_storefront_mode',
     'ai_storefront_daily_limit_per_ip',
+    'ai_storefront_hourly_limit_per_visitor',
     'ai_assistant_global_daily_limit',
     'ai_model_storefront',
     USAGE_SETTING_KEYS.shop.limit,
@@ -117,7 +126,7 @@ export async function POST(request: Request) {
     const minuteAgo = new Date(Date.now() - 60_000).toISOString()
     const today = dayStartIso()
     const q = () => db.from('ai_shop_questions').select('id', { count: 'exact', head: true })
-    const [burst, ipToday, shopMonth, resets, globalChat, globalShop] = await Promise.all([
+    const [burst, ipToday, shopMonth, resets, globalChat, globalShop, ipHour] = await Promise.all([
         q().eq('ip_hash', ipHash).gte('created_at', minuteAgo),
         q().eq('ip_hash', ipHash).gte('created_at', today),
         q().eq('shop_id', shop.id).gte('created_at', monthStartIso()),
@@ -125,6 +134,7 @@ export async function POST(request: Request) {
             .eq('shop_id', shop.id).eq('scope', 'shop').eq('month', currentMonthKey()).eq('status', 'paid'),
         db.from('ai_chat_messages').select('id', { count: 'exact', head: true }).eq('role', 'user').gte('created_at', today),
         q().gte('created_at', today),
+        q().eq('ip_hash', ipHash).gte('created_at', hourStartIso()),
     ])
     if (shopMonth.error) {
         console.error('[Shop AI] ai_shop_questions unavailable, is migration 20261118020000 run?', shopMonth.error.message)
@@ -133,9 +143,18 @@ export async function POST(request: Request) {
     if ((burst.count || 0) >= BURST_LIMIT_PER_MINUTE) {
         return NextResponse.json({ error: 'You are sending messages too fast. Please wait a minute.' }, { status: 429 })
     }
-    const perIpDay = parseMonthlyLimit(s.ai_storefront_daily_limit_per_ip, 15)
-    if ((ipToday.count || 0) >= perIpDay) {
-        return NextResponse.json({ notice: `You have reached today's limit for the assistant.${contactLine(shop)}` })
+    // Per-visitor hourly / daily limits (clock windows; the visitor just waits).
+    const visitor = checkWindowLimits({
+        usedHour: ipHour.count || 0,
+        usedDay: ipToday.count || 0,
+        hourLimit: parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorHour], WINDOW_DEFAULTS.visitorHour),
+        dayLimit: parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorDay], WINDOW_DEFAULTS.visitorDay),
+    })
+    if (!visitor.ok) {
+        const block = visitor as Extract<WindowCheck, { ok: false }>
+        const when = formatResetTime(block.resetsAt)
+        const which = block.window === 'day' ? "today's" : "this hour's"
+        return NextResponse.json({ notice: `You've reached ${which} limit for questions. Try again ${when}.${contactLine(shop)}` })
     }
     const shopAllowance = monthlyAllowance(
         parseMonthlyLimit(s[USAGE_SETTING_KEYS.shop.limit], USAGE_DEFAULTS.shop.limit),

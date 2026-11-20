@@ -239,3 +239,46 @@ test('cleanGuestHistory caps turns and length and merges repeated roles', () => 
     assert.deepEqual(cleanGuestHistory('nope'), [])
     assert.equal(cleanGuestHistory(Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }))).length <= 12, true)
 })
+
+import {
+    hourStartIso,
+    nextHourStart,
+    nextDayStart,
+    parseWindowLimit,
+    checkWindowLimits,
+    formatResetTime,
+    windowLimitMessage,
+} from '../ai-assistant/helpers.ts'
+
+test('hour/day window boundaries are clock time in UTC (Ghana)', () => {
+    const t = new Date('2026-11-20T14:59:59Z')
+    assert.equal(hourStartIso(t), '2026-11-20T14:00:00.000Z')
+    assert.equal(nextHourStart(t).toISOString(), '2026-11-20T15:00:00.000Z')
+    assert.equal(nextHourStart(new Date('2026-11-20T15:00:00Z')).toISOString(), '2026-11-20T16:00:00.000Z')
+    assert.equal(nextHourStart(new Date('2026-11-30T23:30:00Z')).toISOString(), '2026-12-01T00:00:00.000Z')
+    assert.equal(nextDayStart(t).toISOString(), '2026-11-21T00:00:00.000Z')
+})
+
+test('parseWindowLimit falls back and clamps 1..1000', () => {
+    assert.equal(parseWindowLimit(undefined, 10), 10)
+    assert.equal(parseWindowLimit('0', 10), 1)
+    assert.equal(parseWindowLimit('5000', 10), 1000)
+})
+
+test('checkWindowLimits: ok, hour block, day wins over hour', () => {
+    const now = new Date('2026-11-20T14:20:00Z')
+    assert.deepEqual(checkWindowLimits({ usedHour: 3, usedDay: 10, hourLimit: 10, dayLimit: 30, now }), { ok: true, hourLeft: 7, dayLeft: 20 })
+    assert.deepEqual(checkWindowLimits({ usedHour: 10, usedDay: 10, hourLimit: 10, dayLimit: 30, now }), { ok: false, window: 'hour', resetsAt: '2026-11-20T15:00:00.000Z' })
+    assert.deepEqual(checkWindowLimits({ usedHour: 10, usedDay: 30, hourLimit: 10, dayLimit: 30, now }), { ok: false, window: 'day', resetsAt: '2026-11-21T00:00:00.000Z' })
+})
+
+test('formatResetTime: 12-hour clock today, midnight when soon, else tomorrow', () => {
+    const now = new Date('2026-11-20T14:20:00Z')
+    assert.equal(formatResetTime('2026-11-20T15:00:00Z', now), 'at 3:00 PM')
+    assert.equal(formatResetTime('2026-11-20T12:00:00Z', new Date('2026-11-20T11:10:00Z')), 'at 12:00 PM')
+    assert.equal(formatResetTime('2026-11-20T01:00:00Z', new Date('2026-11-20T00:10:00Z')), 'at 1:00 AM')
+    assert.equal(formatResetTime('2026-11-21T00:00:00Z', new Date('2026-11-20T23:30:00Z')), 'at midnight')
+    assert.equal(formatResetTime('2026-11-21T00:00:00Z', new Date('2026-11-20T09:00:00Z')), 'tomorrow')
+    assert.equal(windowLimitMessage('hour', '2026-11-20T15:00:00Z', now), "You've reached this hour's limit for ARHMS AI. Try again at 3:00 PM.")
+    assert.equal(windowLimitMessage('day', '2026-11-21T00:00:00Z', now), "You've reached today's limit for ARHMS AI. Try again tomorrow.")
+})

@@ -354,3 +354,78 @@ export function cleanGuestHistory(raw: unknown, maxTurns = 12, maxChars = 500): 
     if (out.length && out[out.length - 1].role === 'user') out.pop()
     return out
 }
+
+// ── Hourly / daily limits (clock windows, Ghana time = UTC) ──────────────────
+// On top of the monthly allowance. When hit, the user waits; nobody pays.
+
+export const WINDOW_DEFAULTS = {
+    dashboardHour: 10,
+    dashboardDay: 30,
+    visitorHour: 5,
+    visitorDay: 15,
+}
+
+export const WINDOW_SETTING_KEYS = {
+    dashboardHour: 'ai_dashboard_hourly_limit',
+    dashboardDay: 'ai_dashboard_daily_limit',
+    visitorHour: 'ai_storefront_hourly_limit_per_visitor',
+    visitorDay: 'ai_storefront_daily_limit_per_ip',
+}
+
+export function hourStartIso(now: Date = new Date()): string {
+    const d = new Date(now)
+    d.setUTCMinutes(0, 0, 0)
+    return d.toISOString()
+}
+
+export function nextHourStart(now: Date = new Date()): Date {
+    const d = new Date(now)
+    d.setUTCMinutes(0, 0, 0)
+    d.setUTCHours(d.getUTCHours() + 1)
+    return d
+}
+
+export function nextDayStart(now: Date = new Date()): Date {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+}
+
+/** Admin-set hour/day limit (1..1000). */
+export function parseWindowLimit(raw: unknown, fallback: number): number {
+    const n = parseInt(String(raw ?? ''), 10)
+    if (!Number.isFinite(n)) return fallback
+    return Math.min(Math.max(n, 1), 1000)
+}
+
+export type WindowCheck =
+    | { ok: true; hourLeft: number; dayLeft: number }
+    | { ok: false; window: 'hour' | 'day'; resetsAt: string }
+
+/** Day wins when both are used up (waiting for the hour would not help). */
+export function checkWindowLimits(p: { usedHour: number; usedDay: number; hourLimit: number; dayLimit: number; now?: Date }): WindowCheck {
+    const now = p.now ?? new Date()
+    if (p.usedDay >= p.dayLimit) return { ok: false, window: 'day', resetsAt: nextDayStart(now).toISOString() }
+    if (p.usedHour >= p.hourLimit) return { ok: false, window: 'hour', resetsAt: nextHourStart(now).toISOString() }
+    return { ok: true, hourLeft: p.hourLimit - p.usedHour, dayLeft: p.dayLimit - p.usedDay }
+}
+
+/**
+ * "at 3:00 PM" when later today (Ghana time); "at midnight" when it is just after
+ * midnight but soon (e.g. an hourly block at 11:30 PM); otherwise "tomorrow".
+ */
+export function formatResetTime(resetsAt: string | Date, now: Date = new Date()): string {
+    const t = new Date(resetsAt)
+    if (t.toISOString().slice(0, 10) !== now.toISOString().slice(0, 10)) {
+        return t.getTime() - now.getTime() <= 6 * 60 * 60 * 1000 ? 'at midnight' : 'tomorrow'
+    }
+    const h = t.getUTCHours()
+    const m = String(t.getUTCMinutes()).padStart(2, '0')
+    return `at ${h % 12 === 0 ? 12 : h % 12}:${m} ${h < 12 ? 'AM' : 'PM'}`
+}
+
+/** User-facing message for a window block. */
+export function windowLimitMessage(window: 'hour' | 'day', resetsAt: string, now: Date = new Date()): string {
+    const when = formatResetTime(resetsAt, now)
+    return window === 'day'
+        ? `You've reached today's limit for ARHMS AI. Try again ${when}.`
+        : `You've reached this hour's limit for ARHMS AI. Try again ${when}.`
+}
