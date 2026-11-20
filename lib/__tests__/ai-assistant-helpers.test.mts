@@ -287,9 +287,9 @@ import { usageMeter } from '../ai-assistant/helpers.ts'
 
 test('usageMeter shows the window closest to running out', () => {
     const base = { hour: { used: 0, limit: 10 }, day: { used: 0, limit: 30 }, month: { used: 0, limit: 100 } }
-    assert.deepEqual(usageMeter(base), { window: 'hour', pct: 0, label: '0% of hourly limit' })
-    assert.equal(usageMeter({ ...base, hour: { used: 4, limit: 10 } }).label, '40% of hourly limit')
-    assert.equal(usageMeter({ hour: { used: 1, limit: 10 }, day: { used: 27, limit: 30 }, month: { used: 50, limit: 100 } }).label, '90% of daily limit')
-    assert.equal(usageMeter({ hour: { used: 0, limit: 10 }, day: { used: 0, limit: 30 }, month: { used: 100, limit: 100 } }).label, '100% of monthly limit')
+    assert.deepEqual(usageMeter(base), { window: 'hour', pct: 0, label: "0% of this hour's usage" })
+    assert.equal(usageMeter({ ...base, hour: { used: 4, limit: 10 } }).label, "40% of this hour's usage")
+    assert.equal(usageMeter({ hour: { used: 1, limit: 10 }, day: { used: 27, limit: 30 }, month: { used: 50, limit: 100 } }).label, "90% of today's usage")
+    assert.equal(usageMeter({ hour: { used: 0, limit: 10 }, day: { used: 0, limit: 30 }, month: { used: 100, limit: 100 } }).label, "100% of this month's usage")
     assert.equal(usageMeter({ ...base, hour: { used: 15, limit: 10 } }).pct, 100)
 })
