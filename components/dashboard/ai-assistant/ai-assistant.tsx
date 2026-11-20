@@ -8,7 +8,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import * as Dialog from '@radix-ui/react-dialog'
-import { ArrowUp, Clock, Loader2, SquarePen, Sparkles, X, Wifi } from 'lucide-react'
+import { ArrowUp, Clock, Loader2, Maximize2, Minimize2, SquarePen, Sparkles, X, Wifi } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
 import { ResetPanel, usePendingReset } from './reset-panel'
@@ -157,6 +157,24 @@ export function AiAssistant() {
     /** Header usage meter (null = staff, no limits) and support contact. */
     const [usage, setUsage] = useState<UsageSnapshot | null>(null)
     const [unlimited, setUnlimited] = useState(false)
+    /** Full-screen chat; the choice is remembered on this device. */
+    const [expanded, setExpanded] = useState(false)
+    useEffect(() => {
+        try {
+            setExpanded(localStorage.getItem('arhms_ai_expanded') === '1')
+        } catch {
+            /* private mode: default size */
+        }
+    }, [])
+    const toggleExpanded = () =>
+        setExpanded(v => {
+            try {
+                localStorage.setItem('arhms_ai_expanded', v ? '0' : '1')
+            } catch {
+                /* ignore */
+            }
+            return !v
+        })
     const [resetTerms, setResetTerms] = useState<{ price: number; questions: number } | null>(null)
     const [support, setSupport] = useState<{ whatsappNumber: string | null; whatsappLink: string | null } | null>(null)
     const [maxChars, setMaxChars] = useState(500)
@@ -319,6 +337,8 @@ export function AiAssistant() {
 
     const firstName = dbUser?.first_name?.trim()
     const outOfMessages = remaining === 0
+    // Full screen on a big display: keep the conversation in a readable centred column (max 48rem).
+    const centered = 'md:px-[max(1rem,calc((100%-48rem)/2))]'
     // Show whichever limit is closest: this hour, today, or this month (null = staff, no counter).
     const leftLabel = (() => {
         const options: [number | null, string][] = [[hourLeft, 'left this hour'], [dayLeft, 'left today'], [remaining, 'left this month']]
@@ -360,12 +380,18 @@ export function AiAssistant() {
                 <Dialog.Content
                     aria-describedby={undefined}
                     className={cn(
-                        'fixed z-50 flex flex-col bg-background shadow-2xl outline-none',
-                        'inset-x-0 bottom-0 h-[92dvh] rounded-t-3xl data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom',
-                        'md:inset-y-0 md:left-auto md:right-0 md:h-full md:w-[420px] md:rounded-none md:border-l md:data-[state=open]:slide-in-from-right md:data-[state=closed]:slide-out-to-right',
+                        'fixed z-50 flex flex-col bg-background shadow-2xl outline-none transition-[height,width,border-radius] duration-200',
+                        'data-[state=open]:animate-in data-[state=closed]:animate-out',
+                        expanded
+                            // Full screen on every device.
+                            ? 'inset-0 h-[100dvh] w-full rounded-none data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0'
+                            : cn(
+                                'inset-x-0 bottom-0 h-[92dvh] rounded-t-3xl data-[state=open]:slide-in-from-bottom data-[state=closed]:slide-out-to-bottom',
+                                'md:inset-y-0 md:left-auto md:right-0 md:h-full md:w-[420px] md:rounded-none md:border-l md:data-[state=open]:slide-in-from-right md:data-[state=closed]:slide-out-to-right',
+                            ),
                     )}
                 >
-                    <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-muted md:hidden" />
+                    {!expanded && <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-muted md:hidden" />}
 
                     {/* Header */}
                     <div className="flex items-center gap-2 border-b border-border px-3 py-3 sm:gap-3 sm:px-4">
@@ -379,6 +405,16 @@ export function AiAssistant() {
                         {/* Usage meter: tap for hour/day/month limits and how to buy more. Staff see it too (not limited). */}
                         {usage && <UsageMeter usage={usage} reset={resetTerms} unlimited={unlimited} />}
                         {/* Talk to support directly, without asking the AI. */}
+                        {/* Expand to full screen / shrink back (remembered on this device). */}
+                        <button
+                            type="button"
+                            onClick={toggleExpanded}
+                            aria-label={expanded ? 'Shrink chat' : 'Expand chat to full screen'}
+                            title={expanded ? 'Shrink' : 'Full screen'}
+                            className="rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                            {expanded ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+                        </button>
                         <SupportButton support={support} onNavigate={() => setOpen(false)} />
                         {/* New chat: clears this conversation and starts fresh. */}
                         <button type="button" onClick={newChat} aria-label="New chat" title="New chat (clears this conversation)" className="rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -390,7 +426,7 @@ export function AiAssistant() {
                     </div>
 
                     {/* Messages */}
-                    <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+                    <div ref={scrollRef} className={cn("flex-1 overflow-y-auto px-4 py-4", expanded && centered)}>
                         {messages.length === 0 ? (
                             <div className="flex flex-col items-center pt-4 text-center">
                                 <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-primary/40 text-primary">
@@ -445,7 +481,7 @@ export function AiAssistant() {
 
                     {/* Hourly/daily limit: just wait (it lifts by itself at resetsAt). */}
                     {windowBlock && (
-                        <div className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+                        <div className={cn("border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3", expanded && centered)}>
                             <div className="flex gap-2.5 rounded-2xl border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                                 <Clock className="mt-0.5 h-5 w-5 shrink-0" />
                                 <p>{windowBlock.message}</p>
@@ -455,7 +491,7 @@ export function AiAssistant() {
 
                     {/* Monthly allowance used up: pay the reset instead of typing. */}
                     {!windowBlock && outOfMessages && (
-                        <div className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+                        <div className={cn("border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3", expanded && centered)}>
                             <ResetPanel
                                 scope="dashboard"
                                 usedLabel={`You've used your ${monthLimit ?? ''} questions this month.`.replace('  ', ' ')}
@@ -468,7 +504,7 @@ export function AiAssistant() {
                     {/* Input */}
                     {!windowBlock && !outOfMessages && <form
                         onSubmit={e => { e.preventDefault(); send(input) }}
-                        className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3"
+                        className={cn("border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3", expanded && centered)}
                     >
                         <div className="flex items-center gap-2 rounded-full border border-border bg-muted/40 py-1.5 pl-4 pr-1.5 focus-within:border-primary">
                             <input
