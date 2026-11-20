@@ -282,3 +282,14 @@ test('formatResetTime: 12-hour clock today, midnight when soon, else tomorrow', 
     assert.equal(windowLimitMessage('hour', '2026-11-20T15:00:00Z', now), "You've reached this hour's limit for ARHMS AI. Try again at 3:00 PM.")
     assert.equal(windowLimitMessage('day', '2026-11-21T00:00:00Z', now), "You've reached today's limit for ARHMS AI. Try again tomorrow.")
 })
+
+import { usageMeter } from '../ai-assistant/helpers.ts'
+
+test('usageMeter shows the window closest to running out', () => {
+    const base = { hour: { used: 0, limit: 10 }, day: { used: 0, limit: 30 }, month: { used: 0, limit: 100 } }
+    assert.deepEqual(usageMeter(base), { window: 'hour', pct: 0, label: '0% of hourly limit' })
+    assert.equal(usageMeter({ ...base, hour: { used: 4, limit: 10 } }).label, '40% of hourly limit')
+    assert.equal(usageMeter({ hour: { used: 1, limit: 10 }, day: { used: 27, limit: 30 }, month: { used: 50, limit: 100 } }).label, '90% of daily limit')
+    assert.equal(usageMeter({ hour: { used: 0, limit: 10 }, day: { used: 0, limit: 30 }, month: { used: 100, limit: 100 } }).label, '100% of monthly limit')
+    assert.equal(usageMeter({ ...base, hour: { used: 15, limit: 10 } }).pct, 100)
+})

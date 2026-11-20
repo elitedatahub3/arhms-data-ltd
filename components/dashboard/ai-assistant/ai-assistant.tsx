@@ -12,6 +12,8 @@ import { ArrowUp, Clock, Loader2, SquarePen, Sparkles, X, Wifi } from 'lucide-re
 import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
 import { ResetPanel, usePendingReset } from './reset-panel'
+import { SupportButton, UsageMeter } from './header-tools'
+import type { UsageSnapshot } from '@/lib/ai-assistant/helpers'
 
 interface BundleCard {
     packageId: string
@@ -152,6 +154,10 @@ export function AiAssistant() {
     const [windowBlock, setWindowBlock] = useState<{ message: string; resetsAt: string } | null>(null)
     const [hourLeft, setHourLeft] = useState<number | null>(null)
     const [dayLeft, setDayLeft] = useState<number | null>(null)
+    /** Header usage meter (null = staff, no limits) and support contact. */
+    const [usage, setUsage] = useState<UsageSnapshot | null>(null)
+    const [resetTerms, setResetTerms] = useState<{ price: number; questions: number } | null>(null)
+    const [support, setSupport] = useState<{ whatsappNumber: string | null; whatsappLink: string | null } | null>(null)
     const [maxChars, setMaxChars] = useState(500)
     const [input, setInput] = useState('')
     const [busy, setBusy] = useState(false)
@@ -169,6 +175,9 @@ export function AiAssistant() {
             setMonthLimit(data.limit ?? null)
             setHourLeft(data.hourLeft ?? null)
             setDayLeft(data.dayLeft ?? null)
+            setUsage(data.usage ?? null)
+            setResetTerms(data.reset ?? null)
+            setSupport(data.support ?? null)
             setWindowBlock(data.windowBlock ? { message: data.windowBlock.message, resetsAt: data.windowBlock.resetsAt } : null)
             if (data.maxChars) setMaxChars(data.maxChars)
             setConversationId(data.conversationId ?? null)
@@ -197,6 +206,7 @@ export function AiAssistant() {
     const onReset = useCallback((added: number) => {
         setRemaining(r => (r ?? 0) + added)
         setMonthLimit(l => (l ?? 0) + added)
+        setUsage(u => u && { ...u, month: { ...u.month, limit: u.month.limit + added } })
     }, [])
     usePendingReset('dashboard', enabled && remaining === 0, onReset)
 
@@ -208,10 +218,12 @@ export function AiAssistant() {
         return () => clearTimeout(id)
     }, [windowBlock, loadStatus])
 
+    /** New chat: clears the conversation on screen and starts a fresh one (the AI forgets the old one). */
     const newChat = () => {
         abortRef.current?.abort()
         setBusy(false)
         setMessages([])
+        setInput('')
         setConversationId(null)
     }
 
@@ -248,6 +260,12 @@ export function AiAssistant() {
                 // 'too_fast' is a one-minute pause and changes nothing.
                 if (res.status === 429 && (data.code === 'hour_limit' || data.code === 'day_limit')) {
                     setWindowBlock({ message: data.error, resetsAt: data.resetsAt })
+                    // Show the blocked window as full on the meter.
+                    setUsage(u => {
+                        if (!u) return u
+                        const w = data.code === 'day_limit' ? 'day' : 'hour'
+                        return { ...u, [w]: { ...u[w], used: Math.max(u[w].used, u[w].limit) } }
+                    })
                 } else if (res.status === 429 && data.code === 'monthly_limit') {
                     setRemaining(0)
                 }
@@ -276,6 +294,12 @@ export function AiAssistant() {
                         setRemaining(ev.remaining)
                         setHourLeft(ev.hourLeft ?? null)
                         setDayLeft(ev.dayLeft ?? null)
+                        // One more question used in every window.
+                        setUsage(u => u && {
+                            hour: { ...u.hour, used: u.hour.used + 1 },
+                            day: { ...u.day, used: u.day.used + 1 },
+                            month: { ...u.month, used: u.month.used + 1 },
+                        })
                     }
                 }
             }
@@ -333,15 +357,20 @@ export function AiAssistant() {
                     <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-muted md:hidden" />
 
                     {/* Header */}
-                    <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-primary to-violet-600 text-white">
+                    <div className="flex items-center gap-2 border-b border-border px-3 py-3 sm:gap-3 sm:px-4">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-violet-600 text-white">
                             <Sparkles className="h-5 w-5" />
                         </div>
                         <div className="min-w-0 flex-1">
-                            <Dialog.Title className="text-base font-bold leading-tight">ARHMS AI</Dialog.Title>
-                            <p className="text-xs text-muted-foreground">AI assistant</p>
+                            <Dialog.Title className="truncate text-base font-bold leading-tight">ARHMS AI</Dialog.Title>
+                            <p className="truncate text-xs text-muted-foreground">AI assistant</p>
                         </div>
-                        <button type="button" onClick={newChat} aria-label="New chat" className="rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground">
+                        {/* Usage meter: tap for hour/day/month limits and how to buy more. Hidden for staff (no limits). */}
+                        {usage && <UsageMeter usage={usage} reset={resetTerms} />}
+                        {/* Talk to support directly, without asking the AI. */}
+                        <SupportButton support={support} onNavigate={() => setOpen(false)} />
+                        {/* New chat: clears this conversation and starts fresh. */}
+                        <button type="button" onClick={newChat} aria-label="New chat" title="New chat (clears this conversation)" className="rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground">
                             <SquarePen className="h-5 w-5" />
                         </button>
                         <Dialog.Close aria-label="Close" className="rounded-full p-2 text-muted-foreground hover:bg-muted hover:text-foreground">

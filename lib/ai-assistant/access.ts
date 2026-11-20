@@ -50,6 +50,11 @@ const SETTING_KEYS = [
     'whatsapp_group_link',
 ]
 
+export interface UsageWindow {
+    used: number
+    limit: number
+}
+
 export interface AssistantAccess {
     allowed: boolean
     mode: AssistantMode
@@ -62,6 +67,8 @@ export interface AssistantAccess {
     usedThisMonth: number
     /** Hourly/daily limit hit (null = fine, or staff). The user waits; no payment. */
     windowBlock: { window: 'hour' | 'day'; resetsAt: string } | null
+    /** Used / limit per window (null for staff). */
+    usage: { hour: UsageWindow; day: UsageWindow; month: UsageWindow } | null
     hourLeft: number | null
     dayLeft: number | null
     remaining: number
@@ -111,14 +118,17 @@ export async function loadAssistantAccess(db: any, userId: string): Promise<Assi
     const usedThisMonth = count || 0
     // Staff are not limited monthly (only by the platform-wide daily safety limit).
     const unlimited = isStaffRole(userRow?.role)
-    const windows = checkWindowLimits({
-        usedHour: usedHour || 0,
-        usedDay: usedDay || 0,
-        hourLimit: parseWindowLimit(s[WINDOW_SETTING_KEYS.dashboardHour], WINDOW_DEFAULTS.dashboardHour),
-        dayLimit: parseWindowLimit(s[WINDOW_SETTING_KEYS.dashboardDay], WINDOW_DEFAULTS.dashboardDay),
-    })
+    const hourLimit = parseWindowLimit(s[WINDOW_SETTING_KEYS.dashboardHour], WINDOW_DEFAULTS.dashboardHour)
+    const dayLimit = parseWindowLimit(s[WINDOW_SETTING_KEYS.dashboardDay], WINDOW_DEFAULTS.dashboardDay)
+    const windows = checkWindowLimits({ usedHour: usedHour || 0, usedDay: usedDay || 0, hourLimit, dayLimit })
 
     return {
+        // Used / limit per window for the header's usage meter (null for staff: no limits).
+        usage: unlimited ? null : {
+            hour: { used: usedHour || 0, limit: hourLimit },
+            day: { used: usedDay || 0, limit: dayLimit },
+            month: { used: usedThisMonth, limit },
+        },
         windowBlock: unlimited || windows.ok ? null : (() => { const b = windows as Extract<WindowCheck, { ok: false }>; return { window: b.window, resetsAt: b.resetsAt } })(),
         hourLeft: unlimited || !windows.ok ? null : (windows as Extract<WindowCheck, { ok: true }>).hourLeft,
         dayLeft: unlimited || !windows.ok ? null : (windows as Extract<WindowCheck, { ok: true }>).dayLeft,
