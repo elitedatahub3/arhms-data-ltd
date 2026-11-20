@@ -17,7 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { loadAssistantAccess } from '@/lib/ai-assistant/access'
 import { deepSeekTurn, DeepSeekError } from '@/lib/ai-assistant/deepseek'
 import { runAgentLoop, type EngineMessage } from '@/lib/ai-assistant/engine'
-import { cleanUserMessage, createSecretRedactor, isStaffRole, MAX_MESSAGE_CHARS, SURFACE_LIMITS } from '@/lib/ai-assistant/helpers'
+import { cleanUserMessage, createSecretRedactor, isStaffRole, MAX_MESSAGE_CHARS, SURFACE_LIMITS, windowLimitMessage } from '@/lib/ai-assistant/helpers'
 import { ASSISTANT_SYSTEM_PROMPT } from '@/lib/ai-assistant/system-prompt'
 import { executeAssistantTool, toolsForSurface, type BundleCard } from '@/lib/ai-assistant/tools'
 
@@ -65,6 +65,12 @@ export async function GET() {
             remaining: access.unlimited ? null : access.remaining,
             limit: access.unlimited ? null : access.limit,
             reset: { price: access.resetPrice, questions: access.baseLimit },
+            hourLeft: access.hourLeft,
+            dayLeft: access.dayLeft,
+            // Set when an hourly/daily limit is hit right now: { window, resetsAt, message }.
+            windowBlock: access.windowBlock
+                ? { ...access.windowBlock, message: windowLimitMessage(access.windowBlock.window, access.windowBlock.resetsAt) }
+                : null,
             maxChars: MAX_MESSAGE_CHARS,
             conversationId: last?.conversation_id ?? null,
             messages,
@@ -112,6 +118,14 @@ export async function POST(request: Request) {
     const db = createServerClient() as any
     const access = await loadAssistantAccess(db, userId)
     if (!access.allowed) return NextResponse.json({ error: 'ARHMS AI is not available.' }, { status: 403 })
+    // Hourly / daily limits come first: the user just waits (paying only refills the month).
+    if (access.windowBlock) {
+        const { window, resetsAt } = access.windowBlock
+        return NextResponse.json(
+            { error: windowLimitMessage(window, resetsAt), code: window === 'day' ? 'day_limit' : 'hour_limit', resetsAt },
+            { status: 429 },
+        )
+    }
     if (access.remaining <= 0) {
         return NextResponse.json(
             {
@@ -276,7 +290,12 @@ export async function POST(request: Request) {
                 console.error('[ARHMS AI] could not save reply', err)
             }
 
-            send({ type: 'done', remaining: access.unlimited ? null : Math.max(access.remaining - 1, 0) })
+            send({
+                type: 'done',
+                remaining: access.unlimited ? null : Math.max(access.remaining - 1, 0),
+                hourLeft: access.hourLeft == null ? null : Math.max(access.hourLeft - 1, 0),
+                dayLeft: access.dayLeft == null ? null : Math.max(access.dayLeft - 1, 0),
+            })
             try {
                 controller.close()
             } catch {

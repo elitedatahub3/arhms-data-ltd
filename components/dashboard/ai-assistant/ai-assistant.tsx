@@ -8,7 +8,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import * as Dialog from '@radix-ui/react-dialog'
-import { ArrowUp, Loader2, SquarePen, Sparkles, X, Wifi } from 'lucide-react'
+import { ArrowUp, Clock, Loader2, SquarePen, Sparkles, X, Wifi } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
 import { ResetPanel, usePendingReset } from './reset-panel'
@@ -148,6 +148,10 @@ export function AiAssistant() {
     /** Questions left this month; null = no monthly limit (staff). */
     const [remaining, setRemaining] = useState<number | null>(null)
     const [monthLimit, setMonthLimit] = useState<number | null>(null)
+    /** Hourly/daily limit hit: wait until resetsAt (no payment). */
+    const [windowBlock, setWindowBlock] = useState<{ message: string; resetsAt: string } | null>(null)
+    const [hourLeft, setHourLeft] = useState<number | null>(null)
+    const [dayLeft, setDayLeft] = useState<number | null>(null)
     const [maxChars, setMaxChars] = useState(500)
     const [input, setInput] = useState('')
     const [busy, setBusy] = useState(false)
@@ -163,6 +167,9 @@ export function AiAssistant() {
             if (!data.enabled) return
             setRemaining(data.remaining ?? null)
             setMonthLimit(data.limit ?? null)
+            setHourLeft(data.hourLeft ?? null)
+            setDayLeft(data.dayLeft ?? null)
+            setWindowBlock(data.windowBlock ? { message: data.windowBlock.message, resetsAt: data.windowBlock.resetsAt } : null)
             if (data.maxChars) setMaxChars(data.maxChars)
             setConversationId(data.conversationId ?? null)
             setMessages((data.messages || []).map((m: any) => ({ role: m.role, content: m.content, cards: m.cards })))
@@ -192,6 +199,14 @@ export function AiAssistant() {
         setMonthLimit(l => (l ?? 0) + added)
     }, [])
     usePendingReset('dashboard', enabled && remaining === 0, onReset)
+
+    // Hourly/daily block lifts by itself at resetsAt: re-check then (no cron, no payment).
+    useEffect(() => {
+        if (!windowBlock) return
+        const wait = new Date(windowBlock.resetsAt).getTime() - Date.now() + 2000
+        const id = setTimeout(() => { setWindowBlock(null); loadStatus() }, Math.max(wait, 2000))
+        return () => clearTimeout(id)
+    }, [windowBlock, loadStatus])
 
     const newChat = () => {
         abortRef.current?.abort()
@@ -229,8 +244,13 @@ export function AiAssistant() {
             if (!res.ok || !res.body) {
                 const data = await res.json().catch(() => ({}))
                 if (res.status === 403) setEnabled(false)
-                // The monthly cap empties the counter; 'too_fast' is a one-minute pause.
-                if (res.status === 429 && data.code !== 'too_fast') setRemaining(0)
+                // Hour/day limit: wait until resetsAt. Monthly cap: empties the counter (reset panel).
+                // 'too_fast' is a one-minute pause and changes nothing.
+                if (res.status === 429 && (data.code === 'hour_limit' || data.code === 'day_limit')) {
+                    setWindowBlock({ message: data.error, resetsAt: data.resetsAt })
+                } else if (res.status === 429 && data.code === 'monthly_limit') {
+                    setRemaining(0)
+                }
                 patchLast(m => ({ ...m, pending: false, content: data.error || 'Something went wrong. Please try again.' }))
                 return
             }
@@ -252,7 +272,11 @@ export function AiAssistant() {
                     if (ev.type === 'meta') setConversationId(ev.conversationId)
                     else if (ev.type === 'text') patchLast(m => ({ ...m, pending: false, content: m.content + ev.text }))
                     else if (ev.type === 'cards') patchLast(m => ({ ...m, pending: false, cards: [...(m.cards || []), ...ev.cards] }))
-                    else if (ev.type === 'done') setRemaining(ev.remaining)
+                    else if (ev.type === 'done') {
+                        setRemaining(ev.remaining)
+                        setHourLeft(ev.hourLeft ?? null)
+                        setDayLeft(ev.dayLeft ?? null)
+                    }
                 }
             }
         } catch (err: any) {
@@ -269,6 +293,14 @@ export function AiAssistant() {
 
     const firstName = dbUser?.first_name?.trim()
     const outOfMessages = remaining === 0
+    // Show whichever limit is closest: this hour, today, or this month (null = staff, no counter).
+    const leftLabel = (() => {
+        const options: [number | null, string][] = [[hourLeft, 'left this hour'], [dayLeft, 'left today'], [remaining, 'left this month']]
+        const known = options.filter(([n]) => n !== null) as [number, string][]
+        if (!known.length) return null
+        const [n, label] = known.reduce((a, b) => (b[0] < a[0] ? b : a))
+        return `${n} ${label}`
+    })()
 
     return (
         <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -333,7 +365,7 @@ export function AiAssistant() {
                                         <button
                                             key={s}
                                             type="button"
-                                            disabled={busy || outOfMessages}
+                                            disabled={busy || outOfMessages || !!windowBlock}
                                             onClick={() => send(s)}
                                             className="w-full rounded-2xl border border-border bg-muted/40 px-4 py-3 text-left text-sm font-medium transition hover:border-primary/50 hover:bg-muted disabled:opacity-50"
                                         >
@@ -371,8 +403,18 @@ export function AiAssistant() {
                         )}
                     </div>
 
+                    {/* Hourly/daily limit: just wait (it lifts by itself at resetsAt). */}
+                    {windowBlock && (
+                        <div className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+                            <div className="flex gap-2.5 rounded-2xl border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                                <Clock className="mt-0.5 h-5 w-5 shrink-0" />
+                                <p>{windowBlock.message}</p>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Monthly allowance used up: pay the reset instead of typing. */}
-                    {outOfMessages && (
+                    {!windowBlock && outOfMessages && (
                         <div className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
                             <ResetPanel
                                 scope="dashboard"
@@ -384,7 +426,7 @@ export function AiAssistant() {
                     )}
 
                     {/* Input */}
-                    {!outOfMessages && <form
+                    {!windowBlock && !outOfMessages && <form
                         onSubmit={e => { e.preventDefault(); send(input) }}
                         className="border-t border-border px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3"
                     >
@@ -407,7 +449,7 @@ export function AiAssistant() {
                         </div>
                         <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
                             ARHMS AI can make mistakes. Purchases always ask you to confirm.
-                            {remaining !== null && ` · ${remaining} left this month`}
+                            {leftLabel && ` · ${leftLabel}`}
                         </p>
                     </form>}
                 </Dialog.Content>
