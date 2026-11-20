@@ -429,3 +429,25 @@ export function windowLimitMessage(window: 'hour' | 'day', resetsAt: string, now
         ? `You've reached today's limit for ARHMS AI. Try again ${when}.`
         : `You've reached this hour's limit for ARHMS AI. Try again ${when}.`
 }
+
+// ── Header usage meter ───────────────────────────────────────────────────────
+
+export interface UsageSnapshot {
+    hour: { used: number; limit: number }
+    day: { used: number; limit: number }
+    month: { used: number; limit: number }
+}
+
+const WINDOW_WORD = { hour: 'hourly', day: 'daily', month: 'monthly' } as const
+
+/**
+ * The window closest to running out (highest % used), e.g. "40% of hourly limit".
+ * Ties prefer the shorter window (hour, then day), since it clears soonest.
+ */
+export function usageMeter(u: UsageSnapshot): { window: 'hour' | 'day' | 'month'; pct: number; label: string } {
+    const pct = (w: { used: number; limit: number }) => Math.min(100, Math.max(0, Math.round((w.used / Math.max(w.limit, 1)) * 100)))
+    let best: 'hour' | 'day' | 'month' = 'hour'
+    for (const w of ['day', 'month'] as const) if (pct(u[w]) > pct(u[best])) best = w
+    const p = pct(u[best])
+    return { window: best, pct: p, label: `${p}% of ${WINDOW_WORD[best]} limit` }
+}
