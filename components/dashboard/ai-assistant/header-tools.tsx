@@ -11,7 +11,16 @@ import { Gauge, Headset } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usageMeter, type UsageSnapshot } from '@/lib/ai-assistant/helpers'
 
-export function UsageMeter({ usage, reset }: { usage: UsageSnapshot; reset: { price: number; questions: number } | null }) {
+export function UsageMeter({
+    usage,
+    reset,
+    unlimited = false,
+}: {
+    usage: UsageSnapshot
+    reset: { price: number; questions: number } | null
+    /** Admins/sub-admins: usage is shown for information; they are never blocked. */
+    unlimited?: boolean
+}) {
     const [open, setOpen] = useState(false)
     const ref = useRef<HTMLDivElement>(null)
     const meter = usageMeter(usage)
@@ -44,11 +53,14 @@ export function UsageMeter({ usage, reset }: { usage: UsageSnapshot; reset: { pr
                 aria-label={`Usage: ${meter.label}`}
                 className={cn(
                     'flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition hover:bg-muted',
-                    meter.pct >= 100 ? 'border-destructive/50 text-destructive' : meter.pct >= 80 ? 'border-amber-400/60 text-amber-700 dark:text-amber-300' : 'border-border',
+                    unlimited ? 'border-border'
+                        : meter.pct >= 100 ? 'border-destructive/50 text-destructive'
+                        : meter.pct >= 80 ? 'border-amber-400/60 text-amber-700 dark:text-amber-300'
+                        : 'border-border',
                 )}
             >
                 <Gauge className="h-3.5 w-3.5 shrink-0" />
-                <span className="whitespace-nowrap">{meter.label}</span>
+                <span className="max-w-[7.5rem] text-left leading-tight sm:max-w-none sm:whitespace-nowrap">{meter.label}</span>
             </button>
 
             {open && (
@@ -71,8 +83,12 @@ export function UsageMeter({ usage, reset }: { usage: UsageSnapshot; reset: { pr
                         })}
                     </div>
                     <p className="mt-3 text-xs text-muted-foreground">
-                        The hourly limit resets every hour and the daily limit at midnight.
-                        {reset && ` When your monthly questions run out, you can buy ${reset.questions} more for GHS ${reset.price.toFixed(2)}.`}
+                        {unlimited
+                            ? 'As an admin you are not limited. These bars show the limits customers get.'
+                            : <>
+                                The hourly limit resets every hour and the daily limit at midnight.
+                                {reset && ` When your monthly questions run out, you can buy ${reset.questions} more for GHS ${reset.price.toFixed(2)}.`}
+                            </>}
                     </p>
                 </div>
             )}
