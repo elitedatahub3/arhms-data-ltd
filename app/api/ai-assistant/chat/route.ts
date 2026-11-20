@@ -67,6 +67,10 @@ export async function GET() {
             reset: { price: access.resetPrice, questions: access.baseLimit },
             hourLeft: access.hourLeft,
             dayLeft: access.dayLeft,
+            // Header usage meter: used / limit for hour, day, month (null = staff, no limits).
+            usage: access.usage,
+            // Header support button: talk to a person directly, without asking the AI.
+            support: access.support,
             // Set when an hourly/daily limit is hit right now: { window, resetsAt, message }.
             windowBlock: access.windowBlock
                 ? { ...access.windowBlock, message: windowLimitMessage(access.windowBlock.window, access.windowBlock.resetsAt) }
