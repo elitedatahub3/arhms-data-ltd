@@ -329,18 +329,27 @@ export function AiAssistant() {
     return (
         <Dialog.Root open={open} onOpenChange={setOpen}>
             <Dialog.Trigger asChild>
+                {/*
+                  "Ask ARHMS AI" pill: a glowing orange -> pink -> violet gradient ring (the outer
+                  span's background, showing through 2px of padding) around a solid inner pill.
+                  Light mode: white pill, dark text, violet sparkle. Dark mode: near-black pill,
+                  white text and sparkle.
+                */}
                 <button
                     type="button"
-                    aria-label="Open ARHMS AI assistant"
+                    aria-label="Ask ARHMS AI"
                     className={cn(
                         // z-30: under the bottom nav's pop-up menu (z-40), which can open over this spot.
-                        'fixed z-30 flex items-center gap-2 rounded-full bg-gradient-to-br from-primary to-violet-600 text-white shadow-lg shadow-primary/30 transition hover:scale-105 active:scale-95',
-                        'left-4 bottom-[calc(7rem+env(safe-area-inset-bottom))] h-12 w-12 justify-center',
-                        'md:left-auto md:right-6 md:bottom-6 md:h-auto md:w-auto md:px-4 md:py-3',
+                        'group fixed z-30 rounded-full bg-gradient-to-r from-orange-400 via-pink-500 to-violet-600 p-[2px] transition hover:scale-105 active:scale-95',
+                        'shadow-[0_0_14px_rgba(236,72,153,0.35)] dark:shadow-[0_0_18px_rgba(168,85,247,0.45)]',
+                        'left-4 bottom-[calc(7rem+env(safe-area-inset-bottom))]',
+                        'md:left-auto md:right-6 md:bottom-6',
                     )}
                 >
-                    <Sparkles className="h-5 w-5" />
-                    <span className="hidden text-sm font-semibold md:inline">ARHMS AI</span>
+                    <span className="flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 dark:bg-zinc-950 dark:text-white">
+                        <Sparkles className="h-4 w-4 text-violet-600 transition group-hover:rotate-12 dark:text-white" />
+                        Ask ARHMS AI
+                    </span>
                 </button>
             </Dialog.Trigger>
 
