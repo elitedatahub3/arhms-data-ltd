@@ -28,10 +28,14 @@ export async function GET(request: NextRequest) {
 
     const result = await reconcileBundlePortalOrders()
 
-    if (result.errors.length > 0) {
+    // "History scan incomplete" is routine — BundlePortal's history endpoint
+    // drops a page now and then, and the unchecked orders are picked up on the
+    // next 10-minute run. It stays in the JSON result; it no longer pushes.
+    const pushable = result.errors.filter((e) => !e.includes('history scan incomplete'))
+    if (pushable.length > 0) {
         await sendPushToAdmins({
             title: 'BundlePortal sync failing',
-            body: result.errors[0],
+            body: pushable[0],
             url: '/admin/orders',
             tag: 'bundleportal-sync-error',
         }).catch(() => {})
