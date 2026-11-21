@@ -131,7 +131,7 @@ export function ShopAiSettings({ initial, canEdit, onSaved }: { initial: ShopAiS
 
             <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                    <Label>Credit packs (paid from the owner&apos;s wallet; bought credits never expire)</Label>
+                    <Label>Credit packs (paid from the owner&apos;s wallet; bought credits last until used up)</Label>
                     {canEdit && packs.length < MAX_PACKS && (
                         <Button type="button" size="sm" variant="outline" onClick={() => setPacks(ps => [...ps, { id: '', name: '', credits: '', price: '', enabled: true }])}>
                             <Plus className="mr-1 h-4 w-4" /> Add pack

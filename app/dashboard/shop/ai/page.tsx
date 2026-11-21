@@ -134,7 +134,7 @@ export default function ShopAiPage() {
                             </div>
                             <div className="rounded-xl bg-muted/50 p-3">
                                 <p className="font-bold">{info.credits.bought.toLocaleString()}</p>
-                                <p className="text-xs text-muted-foreground">bought (never expire)</p>
+                                <p className="text-xs text-muted-foreground">bought (last until used up)</p>
                             </div>
                         </div>
                         <p className="text-xs text-muted-foreground">{info.answersThisMonth.toLocaleString()} answers given on your shop this month.</p>
@@ -149,7 +149,7 @@ export default function ShopAiPage() {
                         <div className="flex items-start justify-between gap-3">
                             <div>
                                 <h2 className="text-xl font-bold">Buy more</h2>
-                                <p className="text-sm text-muted-foreground">Paid from your wallet. Buy any time; bought credits never expire.</p>
+                                <p className="text-sm text-muted-foreground">Paid from your wallet. Buy any time. Bought credits last until they are used up, then buy another pack.</p>
                             </div>
                             <Link href="/dashboard/wallet" className="flex shrink-0 items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted">
                                 <Wallet className="h-3.5 w-3.5" /> GHS {info.walletBalance.toFixed(2)}
