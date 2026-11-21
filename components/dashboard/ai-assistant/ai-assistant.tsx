@@ -364,8 +364,8 @@ export function AiAssistant() {
                         // z-30: under the bottom nav's pop-up menu (z-40), which can open over this spot.
                         'group fixed z-30 rounded-full bg-gradient-to-r from-orange-400 via-pink-500 to-violet-600 p-[2px] transition hover:scale-105 active:scale-95',
                         'shadow-[0_0_14px_rgba(236,72,153,0.35)] dark:shadow-[0_0_18px_rgba(168,85,247,0.45)]',
-                        'left-4 bottom-[calc(7rem+env(safe-area-inset-bottom))]',
-                        'md:left-auto md:right-6 md:bottom-6',
+                        'right-4 bottom-[calc(7rem+env(safe-area-inset-bottom))]',
+                        'md:right-6 md:bottom-6',
                     )}
                 >
                     <span className="flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 dark:bg-zinc-950 dark:text-white">
