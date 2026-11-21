@@ -5,7 +5,7 @@
  * (white-label: never shows ARHMS). Hidden unless the server says it is on for this
  * shop (admin switch + owner hasn't turned it off). History lives only in this tab.
  *
- * Opened from the ASK AI tile in the storefront's service grid (ShopAiTile below):
+ * Opened from the floating "Ask AI" pill or the ASK AI tile in the service grid (ShopAiTile below):
  * the assistant announces itself with the 'shop-ai:ready' window event once the
  * server says it is on, and the tile sends 'shop-ai:open'.
  */
@@ -155,6 +155,18 @@ export function ShopAssistant({ shopSlug, brandColor }: { shopSlug: string; bran
 
     return (
         <Dialog.Root open={open} onOpenChange={setOpen}>
+            {/* Floating "Ask AI" pill, above the WhatsApp button so the two never overlap. */}
+            <Dialog.Trigger asChild>
+                <button
+                    type="button"
+                    aria-label={`Ask ${title}`}
+                    className="fixed bottom-24 right-4 z-50 rounded-full bg-gradient-to-r from-orange-400 via-pink-500 to-violet-600 p-[2px] shadow-lg shadow-pink-500/20 transition hover:scale-105 active:scale-95"
+                >
+                    <span className="flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-bold text-gray-900 dark:bg-zinc-950 dark:text-white">
+                        <Sparkles className="h-4 w-4 text-pink-500" /> Ask AI
+                    </span>
+                </button>
+            </Dialog.Trigger>
             <Dialog.Portal>
                 <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/40" />
                 <Dialog.Content
