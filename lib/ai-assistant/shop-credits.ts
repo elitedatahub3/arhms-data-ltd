@@ -178,3 +178,110 @@ export async function buyCreditPack(
 
     return { ok: true, credits: pack.credits, amount: pack.price, balance: typeof balance === 'number' ? balance : undefined }
 }
+
+// ── Direct Pay (MoMo / card) ─────────────────────────────────────────────────
+// /api/ai-assistant/shop-credits/pay records a pending wallet_payments intent
+// (reference AICPAY-...) whose metadata carries the shop and the pack, priced on
+// the server. Every collection webhook, the verify poller and the reconciliation
+// crons route AICPAY- here once the gateway confirms the money. The wallet is
+// not touched on the happy path; it is only credited to give money back.
+
+/** Money coming IN for a shop credit pack. Distinct from AICRED-, the wallet purchase. */
+export const CREDIT_PAYMENT_PREFIX = 'AICPAY-'
+
+export function isCreditPaymentReference(reference: unknown): boolean {
+    return typeof reference === 'string' && reference.startsWith(CREDIT_PAYMENT_PREFIX)
+}
+
+/** The caller's own shop and an enabled pack, priced from admin settings. */
+export async function resolveCreditPackForOwner(
+    db: any,
+    userId: string,
+    packId: unknown,
+): Promise<{ ok: true; shopId: string; pack: CreditPack } | { ok: false; status: number; error: string }> {
+    const { data: shop } = await db.from('shop_profiles').select('id, owner_id').eq('owner_id', userId).maybeSingle()
+    if (!shop || shop.owner_id !== userId) return { ok: false, status: 403, error: 'Only shop owners can buy credits.' }
+    const { packs } = await loadShopCreditTerms(db)
+    const pack = packs.find(p => p.id === packId && p.enabled)
+    if (!pack) return { ok: false, status: 400, error: 'That pack is not available.' }
+    if (!(pack.price > 0)) return { ok: false, status: 400, error: 'This pack is free. Use Wallet to claim it.' }
+    return { ok: true, shopId: shop.id, pack }
+}
+
+export interface CreditSettleResult {
+    success: boolean
+    alreadyProcessed?: boolean
+    /** Set when adding the credits failed after payment: true = money returned to the wallet. */
+    refunded?: boolean
+    error?: string
+    order?: { reference: string; credits: number; pack_name: string }
+}
+
+export async function settleCreditPackPayment(
+    db: any,
+    reference: string,
+    expectedUserId?: string,
+    now?: Date,
+): Promise<CreditSettleResult> {
+    const { data: payment } = await db.from('wallet_payments').select('*').eq('reference', reference).maybeSingle()
+    if (!payment) return { success: false, error: 'Payment not found' }
+    if (expectedUserId && payment.user_id !== expectedUserId) return { success: false, error: 'Forbidden' }
+
+    const meta = payment.metadata || {}
+    const pack = meta.pack || {}
+    const credits = Number(pack.credits)
+    if (meta.kind !== 'ai_shop_credits' || !meta.shop_id || !Number.isInteger(credits) || credits <= 0) {
+        console.error('[Shop credits] malformed AICPAY metadata', reference)
+        return { success: false, error: 'Malformed payment metadata' }
+    }
+    const order = { reference, credits, pack_name: String(pack.name || 'Credits') }
+
+    // Only one caller may flip pending -> completed: the webhook and the poller can't both add credits.
+    const { data: claimed, error: claimError } = await db.from('wallet_payments')
+        .update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq('id', payment.id).eq('status', 'pending').select().maybeSingle()
+    if (claimError) return { success: false, error: 'Failed to update payment status' }
+    if (!claimed) return { success: true, alreadyProcessed: true, order }
+
+    const { error: addError } = await db.rpc('add_shop_credits', { p_shop_id: meta.shop_id, p_credits: credits })
+    if (addError) {
+        // The customer has paid: the money must land somewhere.
+        console.error('[Shop credits] CRITICAL: add_shop_credits failed after Direct Pay, refunding', reference, addError.message)
+        const { error: refundError } = await db.rpc('credit_wallet_balance', { p_user_id: payment.user_id, p_amount: Number(payment.total_amount) })
+        if (refundError) console.error('[Shop credits] CRITICAL: refund ALSO failed for', reference, refundError.message)
+        await db.from('notifications').insert({
+            user_id: payment.user_id,
+            title: 'Shop AI credits not added',
+            message: refundError
+                ? `We received GHS ${Number(payment.total_amount).toFixed(2)} but could not add your credits. Support has been alerted. Ref: ${reference}`
+                : `We could not add your credits, so GHS ${Number(payment.total_amount).toFixed(2)} was returned to your wallet. Ref: ${reference}`,
+            type: 'system',
+            action_url: '/dashboard/shop/ai',
+        })
+        return { success: false, refunded: !refundError, error: 'Could not add the credits' }
+    }
+
+    // Revenue record for the admin page (same table as wallet purchases).
+    const { error: recordError } = await db.from('ai_usage_purchases').insert({
+        user_id: payment.user_id,
+        shop_id: meta.shop_id,
+        scope: 'shop',
+        month: currentMonthKey(now),
+        questions_added: credits,
+        amount: Number(pack.price ?? payment.amount),
+        method: 'momo',
+        reference,
+        status: 'paid',
+        paid_at: new Date().toISOString(),
+    })
+    if (recordError && recordError.code !== '23505') console.error('[Shop credits] purchase record failed (credits were added)', reference, recordError.message)
+
+    await db.from('notifications').insert({
+        user_id: payment.user_id,
+        title: 'Shop AI credits added',
+        message: `${credits} credits (${order.pack_name}) were added to your shop assistant. Ref: ${reference}`,
+        type: 'system',
+        action_url: '/dashboard/shop/ai',
+    })
+    return { success: true, order }
+}

@@ -211,6 +211,13 @@ export async function POST(request: NextRequest) {
             return ack()
         }
 
+        if (reference.startsWith('AICPAY-')) {
+            const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+            console.log('[PayswitchWebhook] Routing Shop AI credit pack:', reference)
+            await processCreditPackPayment(reference)
+            return ack()
+        }
+
         if (reference.startsWith('BUNPAY-')) {
             const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
             console.log('[PayswitchWebhook] Routing direct-pay bundle order:', reference)

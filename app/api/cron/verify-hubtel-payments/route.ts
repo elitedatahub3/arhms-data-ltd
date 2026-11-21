@@ -162,6 +162,10 @@ export async function GET(request: NextRequest) {
                                 throw new Error(airResult.error || 'Airtime order processing failed')
                             }
                             console.log(`[CronHubtel] ✅ Airtime order ${payment.reference} settled`)
+                        } else if (payment.reference.startsWith('AICPAY-')) {
+                            const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                            const aicResult = await processCreditPackPayment(payment.reference)
+                            if (!aicResult.success && !aicResult.alreadyProcessed && aicResult.refunded === undefined) throw new Error(aicResult.error || 'Shop AI credit settle failed')
                         } else if (payment.reference.startsWith('BUNPAY-')) {
                             const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
                             const bunResult = await processBundleDirectOrder(payment.reference)

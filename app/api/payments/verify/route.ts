@@ -89,6 +89,15 @@ export async function GET(request: NextRequest) {
             }
             // Direct-pay bundles: the page waits for the order itself. It is written a
             // moment after the claim, so a null here just means "poll again".
+            // Shop AI credit packs: done once the revenue row exists (written right after the credits).
+            if (reference.startsWith('AICPAY-')) {
+                const { data: purchase } = await (supabase.from('ai_usage_purchases') as any)
+                    .select('questions_added, status').eq('reference', reference).maybeSingle()
+                const order = purchase?.status === 'paid' ? { reference, credits: purchase.questions_added } : null
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?success=true`)
+            }
+
             if (reference.startsWith('BUNPAY-')) {
                 const { data: bundleOrder } = await (supabase.from('bundle_orders') as any)
                     .select('id, reference_code, network, bundle_label, beneficiary_phone, total_paid, status, created_at')
@@ -195,6 +204,17 @@ export async function GET(request: NextRequest) {
                 }
                 if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
+            if (reference.startsWith('AICPAY-')) {
+                const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                const result = await processCreditPackPayment(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.refunded ? 'Credits could not be added. Your payment was returned to your wallet.' : (result.error || 'Credit purchase failed') }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?error=credits_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?success=true`)
             }
 
             if (reference.startsWith('BUNPAY-')) {
@@ -325,6 +345,17 @@ export async function GET(request: NextRequest) {
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
             }
 
+            if (reference.startsWith('AICPAY-')) {
+                const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                const result = await processCreditPackPayment(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.refunded ? 'Credits could not be added. Your payment was returned to your wallet.' : (result.error || 'Credit purchase failed') }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?error=credits_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?success=true`)
+            }
+
             if (reference.startsWith('BUNPAY-')) {
                 const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
                 const result = await processBundleDirectOrder(reference, user.id)
@@ -412,6 +443,17 @@ export async function GET(request: NextRequest) {
                 }
                 if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
                 return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+            }
+
+            if (reference.startsWith('AICPAY-')) {
+                const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                const result = await processCreditPackPayment(reference, user.id)
+                if (!result.success) {
+                    if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.refunded ? 'Credits could not be added. Your payment was returned to your wallet.' : (result.error || 'Credit purchase failed') }, { status: 500 })
+                    return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?error=credits_failed`)
+                }
+                if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?success=true`)
             }
 
             if (reference.startsWith('BUNPAY-')) {
@@ -513,6 +555,17 @@ export async function GET(request: NextRequest) {
             }
             if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/airtime?success=true`)
+        }
+
+        if (reference.startsWith('AICPAY-')) {
+            const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+            const result = await processCreditPackPayment(reference, user.id)
+            if (!result.success) {
+                if (isInline) return NextResponse.json({ success: false, status: 'failed', error: result.refunded ? 'Credits could not be added. Your payment was returned to your wallet.' : (result.error || 'Credit purchase failed') }, { status: 500 })
+                return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?error=credits_failed`)
+            }
+            if (isInline) return NextResponse.json({ success: true, status: 'completed', message: 'Payment successful', order: result.order })
+            return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/shop/ai?success=true`)
         }
 
         if (reference.startsWith('BUNPAY-')) {

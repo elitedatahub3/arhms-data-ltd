@@ -111,6 +111,13 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ received: true })
             }
 
+            if (externalref.startsWith('AICPAY-')) {
+                const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                console.log('[MoolreWebhook] Routing Shop AI credit pack:', externalref)
+                await processCreditPackPayment(externalref)
+                return NextResponse.json({ received: true })
+            }
+
             if (externalref.startsWith('BUNPAY-')) {
                 const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
                 console.log('[MoolreWebhook] Routing direct-pay bundle order:', externalref)

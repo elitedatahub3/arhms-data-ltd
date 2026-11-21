@@ -128,6 +128,15 @@ export async function GET(request: NextRequest) {
                         } else {
                             console.error(`[CronPayswitch] Airtime order ${payment.reference} failed:`, airResult.error)
                         }
+                    } else if (payment.reference.startsWith('AICPAY-')) {
+                        const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                        const aicResult = await processCreditPackPayment(payment.reference)
+                        if (aicResult.success || aicResult.alreadyProcessed) {
+                            results.walletCredited++
+                            console.log(`[CronPayswitch] Shop AI credits ${payment.reference} settled`)
+                        } else {
+                            console.error(`[CronPayswitch] Shop AI credits ${payment.reference} failed:`, aicResult.error)
+                        }
                     } else if (payment.reference.startsWith('BUNPAY-')) {
                         const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
                         const bunResult = await processBundleDirectOrder(payment.reference)
