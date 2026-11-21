@@ -451,3 +451,77 @@ export function usageMeter(u: UsageSnapshot): { window: 'hour' | 'day' | 'month'
     const p = pct(u[best])
     return { window: best, pct: p, label: `${p}% of ${WINDOW_WORD[best]} usage` }
 }
+
+// ── Shop assistant credits (owner's model, 2026-11-21) ───────────────────────
+// Customers get free answers per day; after that each answer uses 1 shop credit:
+// this month's free credits first, then bought credits (never expire).
+
+export interface CreditPack {
+    id: string
+    name: string
+    credits: number
+    price: number
+    enabled: boolean
+}
+
+export const SHOP_CREDIT_SETTING_KEYS = {
+    packs: 'ai_shop_credit_packs',
+    freeMonthly: 'ai_shop_free_monthly_credits',
+}
+
+export const DEFAULT_CREDIT_PACKS: CreditPack[] = [
+    { id: 'starter', name: 'Starter', credits: 50, price: 5, enabled: true },
+    { id: 'standard', name: 'Standard', credits: 150, price: 13, enabled: true },
+    { id: 'power', name: 'Power', credits: 500, price: 40, enabled: true },
+]
+export const DEFAULT_FREE_MONTHLY_CREDITS = 50
+export const MAX_CREDIT_PACKS = 6
+
+/** admin_settings JSON -> validated packs (bad rows dropped; empty/invalid -> defaults). */
+export function parseCreditPacks(raw: unknown): CreditPack[] {
+    let list: unknown
+    try {
+        list = typeof raw === 'string' ? JSON.parse(raw) : raw
+    } catch {
+        return DEFAULT_CREDIT_PACKS
+    }
+    if (!Array.isArray(list)) return DEFAULT_CREDIT_PACKS
+    const out: CreditPack[] = []
+    for (const p of list.slice(0, MAX_CREDIT_PACKS)) {
+        const id = String(p?.id ?? '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24)
+        const name = String(p?.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 30)
+        const credits = parseInt(String(p?.credits ?? ''), 10)
+        const price = parseFloat(String(p?.price ?? ''))
+        if (!id || !name || !Number.isFinite(credits) || credits < 1 || credits > 100000) continue
+        if (!Number.isFinite(price) || price < 0 || price > 10000) continue
+        if (out.some(x => x.id === id)) continue
+        out.push({ id, name, credits, price: Math.round(price * 100) / 100, enabled: p?.enabled !== false })
+    }
+    return out.length ? out : DEFAULT_CREDIT_PACKS
+}
+
+export function parseFreeMonthlyCredits(raw: unknown): number {
+    const n = parseInt(String(raw ?? ''), 10)
+    if (!Number.isFinite(n)) return DEFAULT_FREE_MONTHLY_CREDITS
+    return Math.min(Math.max(n, 0), 100000)
+}
+
+/**
+ * Who pays for the next storefront answer.
+ *   'visitor_free' - this customer still has free answers today
+ *   'shop_free'    - the shop's free monthly credits
+ *   'shop_credit'  - one bought credit (the caller must consume it atomically)
+ *   null           - nothing left: the customer waits until tomorrow
+ */
+export function chooseAnswerPayer(p: {
+    visitorUsedToday: number
+    visitorFreePerDay: number
+    shopFreeUsedThisMonth: number
+    shopFreeMonthly: number
+    boughtBalance: number
+}): 'visitor_free' | 'shop_free' | 'shop_credit' | null {
+    if (p.visitorUsedToday < p.visitorFreePerDay) return 'visitor_free'
+    if (p.shopFreeUsedThisMonth < p.shopFreeMonthly) return 'shop_free'
+    if (p.boughtBalance > 0) return 'shop_credit'
+    return null
+}

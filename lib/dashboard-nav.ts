@@ -5,6 +5,7 @@ import {
     ShoppingCart,
     ClipboardList,
     Smartphone,
+    Sparkles,
     Banknote,
     Receipt,
     Crown,
@@ -30,6 +31,7 @@ export const shopNavItems: NavItem[] = [
     { href: '/dashboard/shop/utilities', label: 'Bill Payments', icon: Receipt },
     { href: '/dashboard/shop/ussd', label: 'USSD Code', icon: Smartphone },
     { href: '/dashboard/shop/sms', label: 'Customer SMS', icon: MessageSquare },
+    { href: '/dashboard/shop/ai', label: 'Shop AI', icon: Sparkles },
     { href: '/dashboard/shop/withdraw', label: 'Withdraw', icon: Banknote },
 ]
 
