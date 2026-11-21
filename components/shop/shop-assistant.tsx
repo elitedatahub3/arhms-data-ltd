@@ -4,10 +4,41 @@
  * Storefront assistant bubble for a shop's guest customers. Named after the shop
  * (white-label: never shows ARHMS). Hidden unless the server says it is on for this
  * shop (admin switch + owner hasn't turned it off). History lives only in this tab.
+ *
+ * Opened from the ASK AI tile in the storefront's service grid (ShopAiTile below):
+ * the assistant announces itself with the 'shop-ai:ready' window event once the
+ * server says it is on, and the tile sends 'shop-ai:open'.
  */
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { ArrowUp, Loader2, MessageCircle, X } from 'lucide-react'
+import { ArrowUp, Loader2, MessageCircle, Sparkles, X } from 'lucide-react'
+
+const READY_EVENT = 'shop-ai:ready'
+const OPEN_EVENT = 'shop-ai:open'
+
+/** True once this shop's assistant is on (so the service grid can show the tile). */
+export function useShopAiReady(): boolean {
+    const [ready, setReady] = useState(false)
+    useEffect(() => {
+        if ((window as any).__shopAiReady) setReady(true)
+        const on = () => setReady(true)
+        window.addEventListener(READY_EVENT, on)
+        return () => window.removeEventListener(READY_EVENT, on)
+    }, [])
+    return ready
+}
+
+/** The ASK AI tile in the storefront's "Choose a service" grid. */
+export function ShopAiTile({ className }: { className?: string }) {
+    return (
+        <button type="button" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))} className={className}>
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 via-pink-500 to-violet-600 shadow-sm">
+                <Sparkles className="h-6 w-6 text-white" />
+            </div>
+            <span className="text-center text-[10px] font-black uppercase tracking-widest sm:text-[11px]">ASK AI</span>
+        </button>
+    )
+}
 
 interface Msg {
     role: 'user' | 'assistant'
@@ -35,6 +66,8 @@ export function ShopAssistant({ shopSlug, brandColor }: { shopSlug: string; bran
                 if (!d?.enabled) return
                 setEnabled(true)
                 setName(String(d.name || ''))
+                ;(window as any).__shopAiReady = true
+                window.dispatchEvent(new Event(READY_EVENT))
             })
             .catch(() => {})
         try {
@@ -44,6 +77,12 @@ export function ShopAssistant({ shopSlug, brandColor }: { shopSlug: string; bran
             /* ignore */
         }
     }, [shopSlug, storeKey])
+
+    useEffect(() => {
+        const openChat = () => setOpen(true)
+        window.addEventListener(OPEN_EVENT, openChat)
+        return () => window.removeEventListener(OPEN_EVENT, openChat)
+    }, [])
 
     useEffect(() => {
         try {
@@ -116,16 +155,6 @@ export function ShopAssistant({ shopSlug, brandColor }: { shopSlug: string; bran
 
     return (
         <Dialog.Root open={open} onOpenChange={setOpen}>
-            <Dialog.Trigger asChild>
-                <button
-                    type="button"
-                    aria-label={`Ask ${title}`}
-                    style={{ backgroundColor: color }}
-                    className="fixed bottom-24 right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full text-white shadow-lg transition hover:scale-105 active:scale-95"
-                >
-                    <MessageCircle className="h-5 w-5" />
-                </button>
-            </Dialog.Trigger>
             <Dialog.Portal>
                 <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/40" />
                 <Dialog.Content

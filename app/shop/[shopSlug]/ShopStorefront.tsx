@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import StorefrontUtilities from '@/components/shop/storefront-utilities'
 import StorefrontMtnCheck from '@/components/shop/storefront-mtn-check'
+import { ShopAiTile, useShopAiReady } from '@/components/shop/shop-assistant'
 import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
 import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
@@ -236,6 +237,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     // Global State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
     const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
+    const shopAiReady = useShopAiReady()
     const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
     const [loading, setLoading] = useState(false)
     const [pageLoading, setPageLoading] = useState(true)
@@ -1541,7 +1543,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     // Four services wrap to a 2x2 rather than squeezing into one row —
                     // the tiles get unreadably narrow on a phone otherwise.
                     (() => {
-                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled].filter(Boolean).length
+                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled, shopAiReady].filter(Boolean).length
                         if (count >= 4) return "grid-cols-2"
                         if (count === 3) return "grid-cols-3"
                         if (count === 2) return "grid-cols-2"
@@ -1634,6 +1636,11 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                             </div>
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">PAY BILLS</span>
                         </button>
+                    )}
+
+                    {/* ASK AI: the shop's assistant (only when it is on for this shop) */}
+                    {shopAiReady && (
+                        <ShopAiTile className="relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-violet-300 text-gray-500" />
                     )}
                 </div>
 
