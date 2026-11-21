@@ -352,14 +352,14 @@ export function AiAssistant() {
         <Dialog.Root open={open} onOpenChange={setOpen}>
             <Dialog.Trigger asChild>
                 {/*
-                  "Ask ARHMS AI" pill: a glowing orange -> pink -> violet gradient ring (the outer
+                  "Ask ARHMS" pill: a glowing orange -> pink -> violet gradient ring (the outer
                   span's background, showing through 2px of padding) around a solid inner pill.
                   Light mode: white pill, dark text, violet sparkle. Dark mode: near-black pill,
                   white text and sparkle.
                 */}
                 <button
                     type="button"
-                    aria-label="Ask ARHMS AI"
+                    aria-label="Ask ARHMS"
                     className={cn(
                         // z-30: under the bottom nav's pop-up menu (z-40), which can open over this spot.
                         'group fixed z-30 rounded-full bg-gradient-to-r from-orange-400 via-pink-500 to-violet-600 p-[2px] transition hover:scale-105 active:scale-95',
@@ -370,7 +370,7 @@ export function AiAssistant() {
                 >
                     <span className="flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 dark:bg-zinc-950 dark:text-white">
                         <Sparkles className="h-4 w-4 text-violet-600 transition group-hover:rotate-12 dark:text-white" />
-                        Ask ARHMS AI
+                        Ask ARHMS
                     </span>
                 </button>
             </Dialog.Trigger>
