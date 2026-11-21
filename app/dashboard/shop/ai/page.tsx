@@ -2,7 +2,7 @@
 
 /**
  * Shop AI: the owner's storefront-assistant page (My Shop -> Shop AI).
- * Credits left, how they work, on/off switch, and credit packs paid from the wallet.
+ * Credits left, how they work, on/off switch, and credit packs paid by Wallet or Direct Pay.
  */
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -10,6 +10,7 @@ import { ArrowLeft, Loader2, Sparkles, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { CreditPackCheckout, CREDIT_PAY_PREFIX, type CheckoutPack } from '@/components/shop/credit-pack-checkout'
 
 interface Info {
     hasShop: boolean
@@ -22,13 +23,11 @@ interface Info {
     answersThisMonth: number
 }
 
-const newKey = () =>
-    typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
-
 export default function ShopAiPage() {
     const [info, setInfo] = useState<Info | null>(null)
     const [loading, setLoading] = useState(true)
-    const [buying, setBuying] = useState<string | null>(null)
+    const [checkout, setCheckout] = useState<CheckoutPack | null>(null)
+    const [resumeRef, setResumeRef] = useState<string | null>(null)
     const [saving, setSaving] = useState(false)
 
     const load = useCallback(async () => {
@@ -44,24 +43,19 @@ export default function ShopAiPage() {
 
     useEffect(() => { load() }, [load])
 
-    const buy = async (packId: string) => {
-        setBuying(packId)
-        try {
-            const res = await fetch('/api/ai-assistant/shop-settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ packId, idempotencyKey: newKey() }),
-            })
-            const data = await res.json().catch(() => ({}))
-            if (res.ok && data.ok) {
-                toast.success(`${data.credits} credits added`)
-                load()
-            } else {
-                toast.error(data.error || 'Payment failed. You were not charged.')
-            }
-        } finally {
-            setBuying(null)
+    // Paystack hosted-page return: keep waiting on the reference in the URL.
+    useEffect(() => {
+        const ref = new URLSearchParams(window.location.search).get('reference')
+        if (ref && ref.startsWith(CREDIT_PAY_PREFIX)) {
+            setResumeRef(ref)
+            window.history.replaceState(null, '', window.location.pathname)
         }
+    }, [])
+
+    const checkoutDone = () => {
+        setCheckout(null)
+        setResumeRef(null)
+        load()
     }
 
     const toggle = async (enabled: boolean) => {
@@ -149,7 +143,7 @@ export default function ShopAiPage() {
                         <div className="flex items-start justify-between gap-3">
                             <div>
                                 <h2 className="text-xl font-bold">Buy more</h2>
-                                <p className="text-sm text-muted-foreground">Paid from your wallet. Buy any time. Bought credits last until they are used up, then buy another pack.</p>
+                                <p className="text-sm text-muted-foreground">Pay from your wallet or with Mobile Money. Buy any time. Bought credits last until they are used up, then buy another pack.</p>
                             </div>
                             <Link href="/dashboard/wallet" className="flex shrink-0 items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted">
                                 <Wallet className="h-3.5 w-3.5" /> GHS {info.walletBalance.toFixed(2)}
@@ -157,22 +151,15 @@ export default function ShopAiPage() {
                         </div>
                         <div className="space-y-3">
                             {info.packs.map(p => {
-                                const short = info.walletBalance < p.price
                                 return (
                                     <div key={p.id} className="flex items-center justify-between gap-3 rounded-2xl border border-border p-4">
                                         <div>
                                             <p className="font-bold">{p.name}</p>
                                             <p className="text-sm text-muted-foreground">{p.credits.toLocaleString()} credits</p>
                                         </div>
-                                        {short ? (
-                                            <Button asChild variant="outline" className="rounded-xl">
-                                                <Link href={`/dashboard/wallet?amount=${Math.max(5, Math.ceil((p.price - info.walletBalance) * 100) / 100).toFixed(2)}`}>Top up to buy</Link>
-                                            </Button>
-                                        ) : (
-                                            <Button onClick={() => buy(p.id)} disabled={!!buying} className="rounded-xl px-5 font-semibold">
-                                                {buying === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : `Buy GH₵${p.price.toFixed(2)}`}
-                                            </Button>
-                                        )}
+                                        <Button onClick={() => setCheckout(p)} className="rounded-xl px-5 font-semibold">
+                                            Buy GH₵{p.price.toFixed(2)}
+                                        </Button>
                                     </div>
                                 )
                             })}
@@ -180,6 +167,14 @@ export default function ShopAiPage() {
                     </div>
                 </>
             )}
+
+            <CreditPackCheckout
+                pack={checkout}
+                walletBalance={info?.walletBalance ?? 0}
+                resumeRef={resumeRef}
+                onClose={() => { setCheckout(null); setResumeRef(null) }}
+                onDone={checkoutDone}
+            />
         </div>
     )
 }

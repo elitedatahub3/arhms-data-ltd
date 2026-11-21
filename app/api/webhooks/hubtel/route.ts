@@ -177,6 +177,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ received: true })
         }
 
+        if (ClientReference.startsWith('AICPAY-')) {
+            const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+            console.log('[HubtelWebhook] Routing Shop AI credit pack:', ClientReference)
+            await processCreditPackPayment(ClientReference)
+            return NextResponse.json({ received: true })
+        }
+
         if (ClientReference.startsWith('BUNPAY-')) {
             const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
             console.log('[HubtelWebhook] Routing direct-pay bundle order:', ClientReference)

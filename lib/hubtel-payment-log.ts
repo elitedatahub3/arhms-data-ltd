@@ -50,6 +50,7 @@ export function flowFromReference(reference: string): string {
     // Money coming IN for a Standard Bundle. (BNDL- is the wallet order itself and
     // never reaches a gateway.)
     if (ref.startsWith('BUNPAY-')) return 'bundle_pay'
+    if (ref.startsWith('AICPAY-')) return 'ai_credits_pay'
     if (ref.startsWith('UTIL-')) return 'utility_pay'
     if (ref.startsWith('UTLB-')) return 'utility'
     if (ref.startsWith('agent_upgrade_')) return 'agent_upgrade'

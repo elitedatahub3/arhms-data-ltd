@@ -276,6 +276,13 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ received: true })
             }
 
+            if (reference && reference.startsWith('AICPAY-')) {
+                const { processCreditPackPayment } = await import('@/lib/ai-assistant/credit-pack-payments')
+                console.log('[PaystackWebhook] Routing Shop AI credit pack:', reference)
+                await processCreditPackPayment(reference)
+                return NextResponse.json({ received: true })
+            }
+
             if (reference && reference.startsWith('BUNPAY-')) {
                 const { processBundleDirectOrder } = await import('@/lib/bundle-order-payments')
                 console.log('[PaystackWebhook] Routing direct-pay bundle order:', reference)
