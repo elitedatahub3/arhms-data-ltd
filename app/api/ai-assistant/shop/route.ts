@@ -6,10 +6,11 @@
  *                                             or JSON { notice } when it can't answer now
  *
  * Gate order: admin switch ai_storefront_mode='on' -> shop approved/active/priced and
- * not switched off by its owner -> per-visitor burst (6/min) and daily cap
- * (ai_storefront_daily_limit_per_ip, default 15) + hourly cap (ai_storefront_hourly_limit_per_visitor,
- * default 5) -> the SHOP's monthly allowance
- * (ai_shop_monthly_limit + paid GHS 7 resets) -> platform daily safety cap.
+ * not switched off by its owner -> per-visitor burst (6/min) and hourly cap
+ * (ai_storefront_hourly_limit_per_visitor, default 5) -> platform daily safety cap ->
+ * who pays (lib/ai-assistant/shop-credits.ts): the customer's free answers today
+ * (ai_storefront_daily_limit_per_ip, default 15), then the shop's free monthly credits
+ * (ai_shop_free_monthly_credits), then bought credits; none -> wait until tomorrow.
  *
  * Guests have no stored conversation: history comes from the browser, reduced to
  * plain text (a forged tool result can't get in). Visitors are counted by a salted
@@ -22,28 +23,23 @@ import { deepSeekTurn, DeepSeekError } from '@/lib/ai-assistant/deepseek'
 import { runAgentLoop, type EngineMessage } from '@/lib/ai-assistant/engine'
 import {
     BURST_LIMIT_PER_MINUTE,
-    checkWindowLimits,
     formatResetTime,
     hourStartIso,
+    nextHourStart,
     parseWindowLimit,
     WINDOW_DEFAULTS,
     WINDOW_SETTING_KEYS,
-    type WindowCheck,
     cleanGuestHistory,
     cleanUserMessage,
     createSecretRedactor,
-    currentMonthKey,
     dayStartIso,
-    monthlyAllowance,
-    monthStartIso,
     parseGlobalDailyLimit,
-    parseMonthlyLimit,
     resolveAssistantModel,
     SURFACE_LIMITS,
-    USAGE_DEFAULTS,
     USAGE_SETTING_KEYS,
 } from '@/lib/ai-assistant/helpers'
 import { buildShopPrompt, executeShopTool, loadShopContext, SHOP_TOOLS, type ShopContext } from '@/lib/ai-assistant/shop-assistant'
+import { loadShopCreditTerms, payForShopAnswer } from '@/lib/ai-assistant/shop-credits'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -126,50 +122,45 @@ export async function POST(request: Request) {
     const minuteAgo = new Date(Date.now() - 60_000).toISOString()
     const today = dayStartIso()
     const q = () => db.from('ai_shop_questions').select('id', { count: 'exact', head: true })
-    const [burst, ipToday, shopMonth, resets, globalChat, globalShop, ipHour] = await Promise.all([
+    const [burst, ipToday, globalChat, globalShop, ipHour] = await Promise.all([
         q().eq('ip_hash', ipHash).gte('created_at', minuteAgo),
         q().eq('ip_hash', ipHash).gte('created_at', today),
-        q().eq('shop_id', shop.id).gte('created_at', monthStartIso()),
-        db.from('ai_usage_purchases').select('questions_added')
-            .eq('shop_id', shop.id).eq('scope', 'shop').eq('month', currentMonthKey()).eq('status', 'paid'),
         db.from('ai_chat_messages').select('id', { count: 'exact', head: true }).eq('role', 'user').gte('created_at', today),
         q().gte('created_at', today),
         q().eq('ip_hash', ipHash).gte('created_at', hourStartIso()),
     ])
-    if (shopMonth.error) {
-        console.error('[Shop AI] ai_shop_questions unavailable, is migration 20261118020000 run?', shopMonth.error.message)
+    if (ipToday.error) {
+        console.error('[Shop AI] ai_shop_questions unavailable, is migration 20261118020000 run?', ipToday.error.message)
         return NextResponse.json({ notice: `Our assistant is unavailable right now.${contactLine(shop)}` })
     }
     if ((burst.count || 0) >= BURST_LIMIT_PER_MINUTE) {
         return NextResponse.json({ error: 'You are sending messages too fast. Please wait a minute.' }, { status: 429 })
     }
-    // Per-visitor hourly / daily limits (clock windows; the visitor just waits).
-    const visitor = checkWindowLimits({
-        usedHour: ipHour.count || 0,
-        usedDay: ipToday.count || 0,
-        hourLimit: parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorHour], WINDOW_DEFAULTS.visitorHour),
-        dayLimit: parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorDay], WINDOW_DEFAULTS.visitorDay),
-    })
-    if (!visitor.ok) {
-        const block = visitor as Extract<WindowCheck, { ok: false }>
-        const when = formatResetTime(block.resetsAt)
-        const which = block.window === 'day' ? "today's" : "this hour's"
-        return NextResponse.json({ notice: `You've reached ${which} limit for questions. Try again ${when}.${contactLine(shop)}` })
-    }
-    const shopAllowance = monthlyAllowance(
-        parseMonthlyLimit(s[USAGE_SETTING_KEYS.shop.limit], USAGE_DEFAULTS.shop.limit),
-        (resets.data || []).map((r: any) => Number(r.questions_added)),
-    )
-    if ((shopMonth.count || 0) >= shopAllowance) {
-        await notifyOwnerLimitReached(db, shop)
-        return NextResponse.json({ notice: `Our assistant is resting for now.${contactLine(shop) || ' Please try again later.'}` })
+    // Per-visitor hourly cap: anti-abuse, always applies (the visitor waits).
+    const hourCap = parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorHour], WINDOW_DEFAULTS.visitorHour)
+    if ((ipHour.count || 0) >= hourCap) {
+        return NextResponse.json({ notice: `You've reached this hour's limit for questions. Try again ${formatResetTime(nextHourStart().toISOString())}.${contactLine(shop)}` })
     }
     if ((globalChat.count || 0) + (globalShop.count || 0) >= parseGlobalDailyLimit(s.ai_assistant_global_daily_limit)) {
         return NextResponse.json({ notice: `Our assistant is busy right now.${contactLine(shop)}` })
     }
 
-    // Counts toward the shop's allowance even if the reply later fails.
-    await db.from('ai_shop_questions').insert({ shop_id: shop.id, ip_hash: ipHash })
+    // Who pays for this answer (owner's credit model, 2026-11-21): the customer's free
+    // answers for today first, then the shop's free monthly credits, then bought credits.
+    const { freeMonthly } = await loadShopCreditTerms(db)
+    const payer = await payForShopAnswer(db, {
+        shopId: shop.id,
+        visitorUsedToday: ipToday.count || 0,
+        visitorFreePerDay: parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorDay], WINDOW_DEFAULTS.visitorDay),
+        freeMonthly,
+    })
+    if (!payer) {
+        await notifyOwnerCreditsOut(db, shop)
+        return NextResponse.json({ notice: `You've used today's free answers from our assistant. Please try again tomorrow.${contactLine(shop)}` })
+    }
+
+    // Recorded even if the reply later fails (the credit, if any, is already used).
+    await db.from('ai_shop_questions').insert({ shop_id: shop.id, ip_hash: ipHash, paid_by: payer })
 
     const limits = SURFACE_LIMITS.storefront
     const createTurn = deepSeekTurn({
@@ -233,18 +224,18 @@ export async function POST(request: Request) {
     })
 }
 
-/** One in-app notification per shop per day when its monthly allowance runs out. */
-async function notifyOwnerLimitReached(db: any, shop: ShopContext) {
+/** One in-app notification per shop per day when the shop's credits run out. */
+async function notifyOwnerCreditsOut(db: any, shop: ShopContext) {
     try {
         const { count } = await db.from('notifications').select('id', { count: 'exact', head: true })
-            .eq('user_id', shop.ownerId).eq('title', 'Shop assistant paused').gte('created_at', dayStartIso())
+            .eq('user_id', shop.ownerId).eq('title', 'Shop assistant is out of credits').gte('created_at', dayStartIso())
         if ((count || 0) > 0) return
         await db.from('notifications').insert({
             user_id: shop.ownerId,
-            title: 'Shop assistant paused',
-            message: "Your shop's AI assistant has used this month's questions. Reset it from your shop page to keep answering customers.",
+            title: 'Shop assistant is out of credits',
+            message: 'Customers who used their free answers today are being asked to wait. Buy credits on Shop AI to keep answering them.',
             type: 'system',
-            action_url: '/dashboard/shop',
+            action_url: '/dashboard/shop/ai',
         })
     } catch (err) {
         console.error('[Shop AI] owner notification failed', err)
