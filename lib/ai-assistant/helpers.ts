@@ -454,7 +454,7 @@ export function usageMeter(u: UsageSnapshot): { window: 'hour' | 'day' | 'month'
 
 // ── Shop assistant credits (owner's model, 2026-11-21) ───────────────────────
 // Customers get free answers per day; after that each answer uses 1 shop credit:
-// this month's free credits first, then bought credits (never expire).
+// this month's free credits first, then bought credits (last until used up).
 
 export interface CreditPack {
     id: string
