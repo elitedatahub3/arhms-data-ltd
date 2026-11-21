@@ -293,3 +293,38 @@ test('usageMeter shows the window closest to running out', () => {
     assert.equal(usageMeter({ hour: { used: 0, limit: 10 }, day: { used: 0, limit: 30 }, month: { used: 100, limit: 100 } }).label, "100% of this month's usage")
     assert.equal(usageMeter({ ...base, hour: { used: 15, limit: 10 } }).pct, 100)
 })
+
+import { parseCreditPacks, parseFreeMonthlyCredits, chooseAnswerPayer, DEFAULT_CREDIT_PACKS } from '../ai-assistant/helpers.ts'
+
+test('parseCreditPacks validates admin JSON and falls back to the defaults', () => {
+    assert.deepEqual(parseCreditPacks(undefined), DEFAULT_CREDIT_PACKS)
+    assert.deepEqual(parseCreditPacks('not json'), DEFAULT_CREDIT_PACKS)
+    assert.deepEqual(parseCreditPacks('[]'), DEFAULT_CREDIT_PACKS)
+    const packs = parseCreditPacks(JSON.stringify([
+        { id: 'Mini Pack!', name: ' Mini ', credits: '20', price: '2.499', enabled: true },
+        { id: 'bad', name: 'Bad', credits: 0, price: 1 },
+        { id: 'neg', name: 'Neg', credits: 10, price: -1 },
+        { id: 'mini-pack', name: 'Duplicate id', credits: 5, price: 1 },
+        { id: 'off', name: 'Off', credits: 100, price: 9, enabled: false },
+    ]))
+    assert.deepEqual(packs, [
+        { id: 'minipack', name: 'Mini', credits: 20, price: 2.5, enabled: true },
+        { id: 'mini-pack', name: 'Duplicate id', credits: 5, price: 1, enabled: true },
+        { id: 'off', name: 'Off', credits: 100, price: 9, enabled: false },
+    ])
+})
+
+test('parseFreeMonthlyCredits defaults to 50 and allows 0', () => {
+    assert.equal(parseFreeMonthlyCredits(undefined), 50)
+    assert.equal(parseFreeMonthlyCredits('0'), 0)
+    assert.equal(parseFreeMonthlyCredits('-5'), 0)
+})
+
+test('chooseAnswerPayer: visitor free, then shop free monthly, then bought, else wait', () => {
+    const base = { visitorUsedToday: 0, visitorFreePerDay: 3, shopFreeUsedThisMonth: 0, shopFreeMonthly: 50, boughtBalance: 10 }
+    assert.equal(chooseAnswerPayer(base), 'visitor_free')
+    assert.equal(chooseAnswerPayer({ ...base, visitorUsedToday: 3 }), 'shop_free')
+    assert.equal(chooseAnswerPayer({ ...base, visitorUsedToday: 3, shopFreeUsedThisMonth: 50 }), 'shop_credit')
+    assert.equal(chooseAnswerPayer({ ...base, visitorUsedToday: 3, shopFreeUsedThisMonth: 50, boughtBalance: 0 }), null)
+    assert.equal(chooseAnswerPayer({ ...base, visitorUsedToday: 3, shopFreeMonthly: 0 }), 'shop_credit')
+})
