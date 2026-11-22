@@ -187,10 +187,10 @@ const SHEET_LABEL_CLASS = 'text-sm font-black text-gray-900 dark:text-gray-100'
 
 // Services-grid tiles: the logo (or a coloured panel) fills the whole tile and
 // the label sits on a dark fade along the bottom so it reads on any logo.
-// Square on a phone; shorter and capped on wider screens so a lone tile in a
+// 4:3 with a height cap, so the grid stays compact and a lone tile in a
 // one-column grid doesn't grow to the full page width in height.
-const SERVICE_TILE_CLASS = 'group relative w-full aspect-square sm:aspect-[5/4] max-h-60 overflow-hidden rounded-xl border-2 bg-white dark:bg-[#151c2c] transition-all'
-const SERVICE_TILE_LABEL_CLASS = 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-2 pb-2.5 pt-8 text-center text-[10px] sm:text-[11px] font-black uppercase tracking-widest'
+const SERVICE_TILE_CLASS = 'group relative w-full aspect-[4/3] max-h-44 overflow-hidden rounded-xl border-2 bg-white dark:bg-[#151c2c] transition-all'
+const SERVICE_TILE_LABEL_CLASS = 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-2 pb-2 pt-6 text-center text-[10px] sm:text-[11px] font-black uppercase tracking-widest'
 
 function ServiceTile({ label, active, onClick, children }: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
     return (
@@ -211,8 +211,8 @@ function ServiceTile({ label, active, onClick, children }: { label: string; acti
     )
 }
 
-/** Brand logo filling a services-grid tile. A slight zoom pushes the logo
- *  art's own transparent rounded corners outside the tile. */
+/** Brand logo filling a services-grid tile; the 4:3 crop trims the logo art's
+ *  own rounded corners off the top and bottom. */
 function ServiceLogo({ src }: { src: string }) {
     return (
         <Image
@@ -221,7 +221,7 @@ function ServiceLogo({ src }: { src: string }) {
             fill
             sizes="(min-width: 640px) 320px, 50vw"
             unoptimized={src.endsWith('.svg')}
-            className="object-cover scale-[1.08] transition-transform duration-300 group-hover:scale-[1.12]"
+            className="object-cover transition-transform duration-300 group-hover:scale-105"
         />
     )
 }
