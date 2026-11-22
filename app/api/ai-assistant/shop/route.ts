@@ -12,9 +12,11 @@
  * (ai_storefront_daily_limit_per_ip, default 15), then the shop's free monthly credits
  * (ai_shop_free_monthly_credits), then bought credits; none -> wait until tomorrow.
  *
- * Bots: every message is checked with Vercel BotID first (the bubble loads its
- * client), so scripted traffic can't spend shop credits or DeepSeek balance. If the
- * check itself errors, the message is allowed and the limits below still apply.
+ * Bots: every message is checked with Vercel BotID (the bubble loads its client).
+ * Nobody is refused for it (owner's choice, 2026-11-22: protect, don't block, so a
+ * real customer wrongly flagged still gets answers). A suspected bot only gets the
+ * free daily answers, never the shop's credits, and a tighter hourly cap
+ * (SUSPECTED_BOT_HOURLY_CAP). If the check itself errors, nothing changes.
  *
  * Guests have no stored conversation: history comes from the browser, reduced to
  * plain text (a forged tool result can't get in). Visitors are counted by a salted
@@ -58,6 +60,8 @@ const GATE_KEYS = [
     USAGE_SETTING_KEYS.shop.limit,
 ]
 const HISTORY_MAX = 12
+/** Hourly answers for a visitor BotID flags as a bot (they are never refused outright). */
+const SUSPECTED_BOT_HOURLY_CAP = 3
 
 async function gateSettings(db: any): Promise<Record<string, string>> {
     const { data } = await db.from('admin_settings').select('key, value').in('key', GATE_KEYS)
@@ -122,14 +126,12 @@ export async function POST(request: Request) {
     const message = cleanUserMessage(body?.message)
     if (!message) return NextResponse.json({ error: 'Type a message of up to 500 characters.' }, { status: 400 })
 
-    // Bot check before any database or model work.
+    // Bot check: never refuses, only limits (see the header).
+    let suspectedBot = false
     try {
-        const verdict = await checkBotId()
-        if (verdict.isBot) {
-            return NextResponse.json({ error: 'Please open this page in your browser to chat with us.' }, { status: 403 })
-        }
+        suspectedBot = (await checkBotId()).isBot === true
     } catch (err) {
-        console.error('[Shop AI] BotID check failed, allowing the message', err)
+        console.error('[Shop AI] BotID check failed, treating as a person', err)
     }
 
     const db = createServerClient() as any
@@ -163,7 +165,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'You are sending messages too fast. Please wait a minute.' }, { status: 429 })
     }
     // Per-visitor hourly cap: anti-abuse, always applies (the visitor waits).
-    const hourCap = parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorHour], WINDOW_DEFAULTS.visitorHour)
+    const adminHourCap = parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorHour], WINDOW_DEFAULTS.visitorHour)
+    const hourCap = suspectedBot ? Math.min(adminHourCap, SUSPECTED_BOT_HOURLY_CAP) : adminHourCap
     if ((ipHour.count || 0) >= hourCap) {
         return NextResponse.json({ notice: `You've reached this hour's limit for questions. Try again ${formatResetTime(nextHourStart().toISOString())}.${contactLine(shop)}` })
     }
@@ -173,11 +176,16 @@ export async function POST(request: Request) {
 
     // Who pays for this answer (owner's credit model, 2026-11-21): the customer's free
     // answers for today first, then the shop's free monthly credits, then bought credits.
+    // A suspected bot never reaches the shop's credits: only the free daily answers.
+    const visitorFreePerDay = parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorDay], WINDOW_DEFAULTS.visitorDay)
+    if (suspectedBot && (ipToday.count || 0) >= visitorFreePerDay) {
+        return NextResponse.json({ notice: `You've used today's free answers from our assistant. Please try again tomorrow.${contactLine(shop)}` })
+    }
     const { freeMonthly } = await loadShopCreditTerms(db)
     const payer = await payForShopAnswer(db, {
         shopId: shop.id,
         visitorUsedToday: ipToday.count || 0,
-        visitorFreePerDay: parseWindowLimit(s[WINDOW_SETTING_KEYS.visitorDay], WINDOW_DEFAULTS.visitorDay),
+        visitorFreePerDay,
         freeMonthly,
     })
     if (!payer) {
