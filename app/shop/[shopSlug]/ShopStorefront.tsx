@@ -8,7 +8,6 @@ import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import StorefrontUtilities from '@/components/shop/storefront-utilities'
 import StorefrontMtnCheck from '@/components/shop/storefront-mtn-check'
-import { ShopAiTile, useShopAiReady } from '@/components/shop/shop-assistant'
 import { resolveProvider, resolveProviderForScope, isMomoPromptProvider, SCOPE_PROVIDERS, PROVIDER_LABEL, type PaymentProvider } from '@/lib/payment-provider'
 import { NETWORK_ORDER, NetworkLogo, detectPayNetwork, type PayNetwork } from '@/lib/networks'
 import { DeliveryStatusCard } from '@/components/delivery/DeliveryStatusCard'
@@ -278,7 +277,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     // Global State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
     const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
-    const shopAiReady = useShopAiReady()
     const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
     const [loading, setLoading] = useState(false)
     const [pageLoading, setPageLoading] = useState(true)
@@ -1584,7 +1582,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     // Four services wrap to a 2x2 rather than squeezing into one row —
                     // the tiles get unreadably narrow on a phone otherwise.
                     (() => {
-                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled, shopAiReady].filter(Boolean).length
+                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled, !!shop.utilities_enabled].filter(Boolean).length
                         if (count >= 4) return "grid-cols-2"
                         if (count === 3) return "grid-cols-3"
                         if (count === 2) return "grid-cols-2"
@@ -1620,14 +1618,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 <Receipt className="h-1/3 w-1/3 text-white transition-transform duration-300 group-hover:scale-110" />
                             </div>
                         </ServiceTile>
-                    )}
-
-                    {/* ASK AI: the shop's assistant (only when it is on for this shop) */}
-                    {shopAiReady && (
-                        <ShopAiTile
-                            className={cn(SERVICE_TILE_CLASS, "border-gray-100 dark:border-gray-800 hover:border-violet-300")}
-                            labelClassName={cn(SERVICE_TILE_LABEL_CLASS, "text-white")}
-                        />
                     )}
                 </div>
 
