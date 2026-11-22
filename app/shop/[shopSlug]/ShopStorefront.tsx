@@ -186,6 +186,23 @@ const QUICK_AMOUNTS = [1, 2, 5, 10, 20, 50, 100]
 const SHEET_FIELD_CLASS = 'w-full px-4 py-3.5 rounded-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[var(--brand-color)] focus:border-transparent transition-colors'
 const SHEET_LABEL_CLASS = 'text-sm font-black text-gray-900 dark:text-gray-100'
 
+/** Brand logo on a services-grid tile; the ring marks the selected service. */
+function ServiceLogo({ src, active }: { src: string; active: boolean }) {
+    return (
+        <Image
+            src={src}
+            alt=""
+            width={56}
+            height={56}
+            unoptimized={src.endsWith('.svg')}
+            className={cn(
+                "w-14 h-14 rounded-xl object-cover shadow-sm transition-shadow",
+                active && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-white dark:ring-offset-[#151c2c]"
+            )}
+        />
+    )
+}
+
 const getNetworkCardStyle = (net: string) => {
     switch (net) {
         case 'Telecel':
@@ -1560,9 +1577,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                 : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                         )}
                     >
-                        <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'data' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                            <Zap className={cn("w-6 h-6", activeTab === 'data' ? "text-white fill-white" : "text-gray-400")} />
-                        </div>
+                        <ServiceLogo src="/images/services/data-networks.png" active={activeTab === 'data'} />
                         <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase">DATA</span>
                     </button>
 
@@ -1577,9 +1592,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'airtime' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <Smartphone className={cn("w-6 h-6", activeTab === 'airtime' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <ServiceLogo src="/images/services/airtime.svg" active={activeTab === 'airtime'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase">AIRTIME</span>
                         </button>
                     )}
@@ -1595,9 +1608,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'results_checker' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <GraduationCap className={cn("w-6 h-6", activeTab === 'results_checker' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <ServiceLogo src="/images/services/results-waec.png" active={activeTab === 'results_checker'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">RESULTS CHECKER</span>
                         </button>
                     )}
@@ -1613,9 +1624,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                                     : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
                             )}
                         >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'afa' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <BadgeCheck className={cn("w-6 h-6", activeTab === 'afa' ? "text-white" : "text-gray-400")} />
-                            </div>
+                            <ServiceLogo src="/images/services/afa-mtn.png" active={activeTab === 'afa'} />
                             <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">AFA REGISTRATION</span>
                         </button>
                     )}
