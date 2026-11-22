@@ -187,7 +187,7 @@ const SHEET_LABEL_CLASS = 'text-sm font-black text-gray-900 dark:text-gray-100'
 
 // Services-grid tiles: the logo (or a coloured panel) fills the whole tile and
 // the label sits on a dark fade along the bottom so it reads on any logo.
-// 4:3 with a height cap, so the grid stays compact and a lone tile in a
+// 4:3 with a height cap (logos are contained, never cropped), so the grid stays compact and a lone tile in a
 // one-column grid doesn't grow to the full page width in height.
 const SERVICE_TILE_CLASS = 'group relative w-full aspect-[4/3] max-h-44 overflow-hidden rounded-xl border-2 bg-white dark:bg-[#151c2c] transition-all'
 const SERVICE_TILE_LABEL_CLASS = 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-2 pb-2 pt-6 text-center text-[10px] sm:text-[11px] font-black uppercase tracking-widest'
@@ -211,18 +211,24 @@ function ServiceTile({ label, active, onClick, children }: { label: string; acti
     )
 }
 
-/** Brand logo filling a services-grid tile; the 4:3 crop trims the logo art's
- *  own rounded corners off the top and bottom. */
-function ServiceLogo({ src }: { src: string }) {
+/** Brand logo on a services-grid tile. The WHOLE logo shows (object-contain,
+ *  above the label) and the tile is painted in the logo's own edge colour, so
+ *  it still reads as filling the tile. Cropping it to cover a wide tile cut
+ *  off the top and bottom of every logo. */
+function ServiceLogo({ src, bg }: { src: string; bg: string }) {
     return (
-        <Image
-            src={src}
-            alt=""
-            fill
-            sizes="(min-width: 640px) 320px, 50vw"
-            unoptimized={src.endsWith('.svg')}
-            className="object-cover transition-transform duration-300 group-hover:scale-105"
-        />
+        <div className="absolute inset-0" style={{ backgroundColor: bg }}>
+            <div className="absolute inset-x-0 top-1 bottom-7">
+                <Image
+                    src={src}
+                    alt=""
+                    fill
+                    sizes="(min-width: 640px) 200px, 40vw"
+                    unoptimized={src.endsWith('.svg')}
+                    className="object-contain transition-transform duration-300 group-hover:scale-105"
+                />
+            </div>
+        </div>
     )
 }
 
@@ -1590,24 +1596,24 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     })()
                 )}>
                     <ServiceTile label="DATA" active={activeTab === 'data'} onClick={() => { setActiveTab('data'); setIsAirtimeOpen(false) }}>
-                        <ServiceLogo src="/images/services/data-networks.png" />
+                        <ServiceLogo src="/images/services/data-networks.png" bg="#18b1fa" />
                     </ServiceTile>
 
                     {isShopAirtimeEnabled && (
                         <ServiceTile label="AIRTIME" active={activeTab === 'airtime'} onClick={() => { setActiveTab('airtime'); setIsAirtimeOpen(true) }}>
-                            <ServiceLogo src="/images/services/airtime.svg" />
+                            <ServiceLogo src="/images/services/airtime.svg" bg="#FFCC00" />
                         </ServiceTile>
                     )}
 
                     {isShopRcEnabled && (
                         <ServiceTile label="RESULTS CHECKER" active={activeTab === 'results_checker'} onClick={() => { setActiveTab('results_checker'); setIsAirtimeOpen(false) }}>
-                            <ServiceLogo src="/images/services/results-waec.png" />
+                            <ServiceLogo src="/images/services/results-waec.png" bg="#ffffff" />
                         </ServiceTile>
                     )}
 
                     {isShopAfaEnabled && (
                         <ServiceTile label="AFA REGISTRATION" active={activeTab === 'afa'} onClick={() => { setActiveTab('afa'); setIsAirtimeOpen(false) }}>
-                            <ServiceLogo src="/images/services/afa-mtn.png" />
+                            <ServiceLogo src="/images/services/afa-mtn.png" bg="#57504a" />
                         </ServiceTile>
                     )}
 
