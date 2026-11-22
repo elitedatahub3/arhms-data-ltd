@@ -11,8 +11,10 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
+import { BotIdClient } from 'botid/client'
 import { ArrowUp, Loader2, MessageCircle, Sparkles, X } from 'lucide-react'
 
+const BOT_PROTECT = [{ path: '/api/ai-assistant/shop', method: 'POST' }]
 const READY_EVENT = 'shop-ai:ready'
 const OPEN_EVENT = 'shop-ai:open'
 
@@ -155,6 +157,9 @@ export function ShopAssistant({ shopSlug, brandColor }: { shopSlug: string; bran
 
     return (
         <Dialog.Root open={open} onOpenChange={setOpen}>
+            {/* Vercel BotID: invisible bot check on chat messages (verified in /api/ai-assistant/shop).
+                Rendered only in the browser, once the assistant is on. */}
+            <BotIdClient protect={BOT_PROTECT} />
             {/* Floating "Ask AI" pill, above the WhatsApp button so the two never overlap. */}
             <Dialog.Trigger asChild>
                 <button

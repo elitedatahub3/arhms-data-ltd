@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next'
 import withPWA from '@ducanh2912/next-pwa'
 import withBundleAnalyzer from '@next/bundle-analyzer'
+import { withBotId } from 'botid/next/config'
 import path from 'path'
 
 const supabaseImageHost = (() => {
@@ -165,8 +166,19 @@ const withPWAConfig = withPWA({
     reloadOnOnline: false,
     disable: process.env.NODE_ENV === 'development',
     customWorkerSrc: path.resolve(process.cwd(), 'worker'),
+    // Keep the default caching rules; workboxOptions.runtimeCaching only adds the BotID rule in front.
+    extendDefaultRuntimeCaching: true,
     workboxOptions: {
         disableDevLogs: true,
+        // Vercel BotID (shop assistant bot check): its challenge script changes on every
+        // load, so the service worker must never serve a cached copy, or real customers
+        // get classified as bots. Custom rules run before the defaults (which cache *.js).
+        runtimeCaching: [
+            {
+                urlPattern: /\/149e9513-01fa-4fb0-aad4-566afd725d1b\//,
+                handler: 'NetworkOnly',
+            },
+        ],
         // Exclude the homepage HTML from the PWA cache.
         // The landing page is server-rendered and controlled by admin toggles
         // (e.g. `landing_rc_only_enabled`). Caching it causes users to see a
@@ -191,4 +203,5 @@ const withAnalyzer = withBundleAnalyzer({
     openAnalyzer: false,
 })
 
-export default withAnalyzer(withPWAConfig(nextConfig))
+// withBotId adds the same-origin proxy rewrites for Vercel BotID (lib: botid).
+export default withBotId(withAnalyzer(withPWAConfig(nextConfig)))

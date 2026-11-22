@@ -12,12 +12,17 @@
  * (ai_storefront_daily_limit_per_ip, default 15), then the shop's free monthly credits
  * (ai_shop_free_monthly_credits), then bought credits; none -> wait until tomorrow.
  *
+ * Bots: every message is checked with Vercel BotID first (the bubble loads its
+ * client), so scripted traffic can't spend shop credits or DeepSeek balance. If the
+ * check itself errors, the message is allowed and the limits below still apply.
+ *
  * Guests have no stored conversation: history comes from the browser, reduced to
  * plain text (a forged tool result can't get in). Visitors are counted by a salted
  * hash of their IP + shop, never the raw IP.
  */
 import { NextResponse } from 'next/server'
 import { createHash } from 'crypto'
+import { checkBotId } from 'botid/server'
 import { createServerClient } from '@/lib/supabase'
 import { deepSeekTurn, DeepSeekError } from '@/lib/ai-assistant/deepseek'
 import { runAgentLoop, type EngineMessage } from '@/lib/ai-assistant/engine'
@@ -76,8 +81,19 @@ function clientIp(request: Request): string {
     return (request.headers.get('x-forwarded-for') || '').split(',')[0].trim() || request.headers.get('x-real-ip') || 'unknown'
 }
 
+/**
+ * Salted so a stored hash can't be turned back into an IP. The fallback is derived from a
+ * server-only secret: the repo is public, so a salt written in code would be no salt.
+ */
+function guestSalt(): string {
+    const explicit = process.env.AI_GUEST_SALT?.trim()
+    if (explicit) return explicit
+    const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.CRON_SECRET || ''
+    return createHash('sha256').update(`ai-guest-salt:${secret}`).digest('hex')
+}
+
 function visitorHash(ip: string, shopId: string): string {
-    const salt = process.env.AI_GUEST_SALT || 'arhms-ai-storefront'
+    const salt = guestSalt()
     return createHash('sha256').update(`${salt}:${shopId}:${ip}`).digest('hex').slice(0, 40)
 }
 
@@ -105,6 +121,16 @@ export async function POST(request: Request) {
     }
     const message = cleanUserMessage(body?.message)
     if (!message) return NextResponse.json({ error: 'Type a message of up to 500 characters.' }, { status: 400 })
+
+    // Bot check before any database or model work.
+    try {
+        const verdict = await checkBotId()
+        if (verdict.isBot) {
+            return NextResponse.json({ error: 'Please open this page in your browser to chat with us.' }, { status: 403 })
+        }
+    } catch (err) {
+        console.error('[Shop AI] BotID check failed, allowing the message', err)
+    }
 
     const db = createServerClient() as any
     const open = await openShop(db, body?.shopSlug)
