@@ -31,13 +31,15 @@ export function useShopAiReady(): boolean {
 }
 
 /** The ASK AI tile in the storefront's "Choose a service" grid. */
-export function ShopAiTile({ className }: { className?: string }) {
+// The gradient panel fills the whole tile (the storefront's other tiles show a
+// full-bleed logo); the caller supplies the tile and label classes.
+export function ShopAiTile({ className, labelClassName }: { className?: string; labelClassName?: string }) {
     return (
         <button type="button" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))} className={className}>
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 via-pink-500 to-violet-600 shadow-sm">
-                <Sparkles className="h-6 w-6 text-white" />
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-orange-400 via-pink-500 to-violet-600 pb-6">
+                <Sparkles className="h-1/3 w-1/3 text-white transition-transform duration-300 group-hover:scale-110" />
             </div>
-            <span className="text-center text-[10px] font-black uppercase tracking-widest sm:text-[11px]">ASK AI</span>
+            <span className={labelClassName}>ASK AI</span>
         </button>
     )
 }

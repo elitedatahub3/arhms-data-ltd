@@ -186,19 +186,43 @@ const QUICK_AMOUNTS = [1, 2, 5, 10, 20, 50, 100]
 const SHEET_FIELD_CLASS = 'w-full px-4 py-3.5 rounded-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[var(--brand-color)] focus:border-transparent transition-colors'
 const SHEET_LABEL_CLASS = 'text-sm font-black text-gray-900 dark:text-gray-100'
 
-/** Brand logo on a services-grid tile; the ring marks the selected service. */
-function ServiceLogo({ src, active }: { src: string; active: boolean }) {
+// Services-grid tiles: the logo (or a coloured panel) fills the whole tile and
+// the label sits on a dark fade along the bottom so it reads on any logo.
+// Square on a phone; shorter and capped on wider screens so a lone tile in a
+// one-column grid doesn't grow to the full page width in height.
+const SERVICE_TILE_CLASS = 'group relative w-full aspect-square sm:aspect-[5/4] max-h-60 overflow-hidden rounded-xl border-2 bg-white dark:bg-[#151c2c] transition-all'
+const SERVICE_TILE_LABEL_CLASS = 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-2 pb-2.5 pt-8 text-center text-[10px] sm:text-[11px] font-black uppercase tracking-widest'
+
+function ServiceTile({ label, active, onClick, children }: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-pressed={active}
+            className={cn(
+                SERVICE_TILE_CLASS,
+                active
+                    ? "border-emerald-400 ring-2 ring-emerald-400/40"
+                    : "border-gray-100 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-600"
+            )}
+        >
+            {children}
+            <span className={cn(SERVICE_TILE_LABEL_CLASS, active ? "text-emerald-300" : "text-white")}>{label}</span>
+        </button>
+    )
+}
+
+/** Brand logo filling a services-grid tile. A slight zoom pushes the logo
+ *  art's own transparent rounded corners outside the tile. */
+function ServiceLogo({ src }: { src: string }) {
     return (
         <Image
             src={src}
             alt=""
-            width={56}
-            height={56}
+            fill
+            sizes="(min-width: 640px) 320px, 50vw"
             unoptimized={src.endsWith('.svg')}
-            className={cn(
-                "w-14 h-14 rounded-xl object-cover shadow-sm transition-shadow",
-                active && "ring-2 ring-emerald-400 ring-offset-2 ring-offset-white dark:ring-offset-[#151c2c]"
-            )}
+            className="object-cover scale-[1.08] transition-transform duration-300 group-hover:scale-[1.12]"
         />
     )
 }
@@ -1567,89 +1591,43 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                         return "grid-cols-1"
                     })()
                 )}>
-                    {/* DATA Button */}
-                    <button 
-                        onClick={() => { setActiveTab('data'); setIsAirtimeOpen(false) }}
-                        className={cn(
-                            "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
-                            activeTab === 'data' 
-                                ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400" 
-                                : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
-                        )}
-                    >
-                        <ServiceLogo src="/images/services/data-networks.png" active={activeTab === 'data'} />
-                        <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase">DATA</span>
-                    </button>
+                    <ServiceTile label="DATA" active={activeTab === 'data'} onClick={() => { setActiveTab('data'); setIsAirtimeOpen(false) }}>
+                        <ServiceLogo src="/images/services/data-networks.png" />
+                    </ServiceTile>
 
-                    {/* AIRTIME Button */}
                     {isShopAirtimeEnabled && (
-                        <button 
-                            onClick={() => { setActiveTab('airtime'); setIsAirtimeOpen(true) }}
-                            className={cn(
-                                "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
-                                activeTab === 'airtime' 
-                                    ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400" 
-                                    : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
-                            )}
-                        >
-                            <ServiceLogo src="/images/services/airtime.svg" active={activeTab === 'airtime'} />
-                            <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase">AIRTIME</span>
-                        </button>
+                        <ServiceTile label="AIRTIME" active={activeTab === 'airtime'} onClick={() => { setActiveTab('airtime'); setIsAirtimeOpen(true) }}>
+                            <ServiceLogo src="/images/services/airtime.svg" />
+                        </ServiceTile>
                     )}
 
-                    {/* RESULTS CHECKER Button */}
                     {isShopRcEnabled && (
-                        <button 
-                            onClick={() => { setActiveTab('results_checker'); setIsAirtimeOpen(false) }}
-                            className={cn(
-                                "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
-                                activeTab === 'results_checker' 
-                                    ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400" 
-                                    : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
-                            )}
-                        >
-                            <ServiceLogo src="/images/services/results-waec.png" active={activeTab === 'results_checker'} />
-                            <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">RESULTS CHECKER</span>
-                        </button>
+                        <ServiceTile label="RESULTS CHECKER" active={activeTab === 'results_checker'} onClick={() => { setActiveTab('results_checker'); setIsAirtimeOpen(false) }}>
+                            <ServiceLogo src="/images/services/results-waec.png" />
+                        </ServiceTile>
                     )}
 
-                    {/* AFA REGISTRATION Button */}
                     {isShopAfaEnabled && (
-                        <button
-                            onClick={() => { setActiveTab('afa'); setIsAirtimeOpen(false) }}
-                            className={cn(
-                                "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
-                                activeTab === 'afa'
-                                    ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400"
-                                    : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
-                            )}
-                        >
-                            <ServiceLogo src="/images/services/afa-mtn.png" active={activeTab === 'afa'} />
-                            <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">AFA REGISTRATION</span>
-                        </button>
+                        <ServiceTile label="AFA REGISTRATION" active={activeTab === 'afa'} onClick={() => { setActiveTab('afa'); setIsAirtimeOpen(false) }}>
+                            <ServiceLogo src="/images/services/afa-mtn.png" />
+                        </ServiceTile>
                     )}
 
-                    {/* PAY BILLS Button — only when the owner has switched it on */}
+                    {/* PAY BILLS — only when the owner has switched it on. No brand logo, so a coloured panel fills the tile. */}
                     {shop.utilities_enabled && (
-                        <button
-                            onClick={() => { setActiveTab('utilities'); setIsAirtimeOpen(false) }}
-                            className={cn(
-                                "relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all",
-                                activeTab === 'utilities'
-                                    ? "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-400 text-emerald-700 dark:text-emerald-400"
-                                    : "bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-gray-200 text-gray-500"
-                            )}
-                        >
-                            <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", activeTab === 'utilities' ? "bg-emerald-500 shadow-sm" : "bg-gray-100 dark:bg-gray-800")}>
-                                <Receipt className={cn("w-6 h-6", activeTab === 'utilities' ? "text-white" : "text-gray-400")} />
+                        <ServiceTile label="PAY BILLS" active={activeTab === 'utilities'} onClick={() => { setActiveTab('utilities'); setIsAirtimeOpen(false) }}>
+                            <div className="absolute inset-0 flex items-center justify-center pb-6 bg-gradient-to-br from-emerald-500 to-teal-700">
+                                <Receipt className="h-1/3 w-1/3 text-white transition-transform duration-300 group-hover:scale-110" />
                             </div>
-                            <span className="text-[10px] sm:text-[11px] font-black tracking-widest uppercase text-center">PAY BILLS</span>
-                        </button>
+                        </ServiceTile>
                     )}
 
                     {/* ASK AI: the shop's assistant (only when it is on for this shop) */}
                     {shopAiReady && (
-                        <ShopAiTile className="relative flex flex-col items-center justify-center gap-3 py-6 px-2 rounded-xl border-2 transition-all bg-white dark:bg-[#151c2c] border-gray-100 dark:border-gray-800 hover:border-violet-300 text-gray-500" />
+                        <ShopAiTile
+                            className={cn(SERVICE_TILE_CLASS, "border-gray-100 dark:border-gray-800 hover:border-violet-300")}
+                            labelClassName={cn(SERVICE_TILE_LABEL_CLASS, "text-white")}
+                        />
                     )}
                 </div>
 
