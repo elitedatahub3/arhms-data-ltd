@@ -51,10 +51,29 @@ const NETWORK_LABEL: Record<string, string> = {
  * Only these become links: anything else, including full URLs, stays plain text,
  * so a manipulated reply can never send a user off-site.
  */
-const APP_PATH_RE = /((?<![\w.:/-])\/(?:dashboard(?:\/[a-z0-9-]+){0,3}|docs)(?![\w/-]))/g
+// No lookbehind ((?<!...)): Safari before iOS 16.4 cannot parse it, and one such
+// regex literal is a SyntaxError that kills this whole chunk, which the dashboard
+// layout imports, so older iPhones got "Something went wrong" right after login.
+// The preceding character is captured in group 1 instead and kept as plain text.
+const APP_PATH_RE = /(^|[^\w.:/-])(\/(?:dashboard(?:\/[a-z0-9-]+){0,3}|docs)(?![\w/-]))/g
+
+/** Split like String.split with one capture group: odd indexes are the paths. */
+function splitAppPaths(text: string): string[] {
+    const parts: string[] = []
+    let last = 0
+    APP_PATH_RE.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = APP_PATH_RE.exec(text)) !== null) {
+        const start = m.index + m[1].length
+        parts.push(text.slice(last, start), m[2])
+        last = start + m[2].length
+    }
+    parts.push(text.slice(last))
+    return parts
+}
 
 function WithAppLinks({ text, onNavigate }: { text: string; onNavigate?: () => void }) {
-    const parts = text.split(APP_PATH_RE)
+    const parts = splitAppPaths(text)
     return (
         <>
             {parts.map((p, i) =>
