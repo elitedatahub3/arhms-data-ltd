@@ -474,8 +474,14 @@ export async function fetchRecentOrderStatuses(opts: {
                 const createdMs = Date.parse(String(row?.created_at ?? ''))
                 if (Number.isFinite(createdMs) && createdMs < oldestSeenMs) oldestSeenMs = createdMs
 
-                const id = row?.order_id === undefined || row?.order_id === null ? null : String(row.order_id)
-                if (!id || !wanted.has(id)) continue
+                // order_id is the id WE sent on data orders. Airtime (place_airtime) answers
+                // with THEIR order id ("AIR…"), which may come back in either field, so a
+                // wanted `reference` is matched too. Data-order references ("KT-…") are
+                // never in the wanted set, so this changes nothing for them.
+                const id = [row?.order_id, row?.reference]
+                    .map(v => (v === undefined || v === null ? null : String(v)))
+                    .find(v => v !== null && wanted.has(v)) ?? null
+                if (!id) continue
                 // A refund always wins: their wallet history logs it as its own
                 // "Order Refund" row, possibly with status "completed" (the refund
                 // went through), next to an order row that may still read completed.
@@ -554,6 +560,175 @@ export function mapBundlePortalStatus(status: string): MappedStatus {
     if (FAILED.includes(s)) return 'failed'
     if (IN_FLIGHT.includes(s)) return 'processing'
     return 'pending'
+}
+
+// ─── Airtime ───────────────────────────────────────────────────────────────────
+//
+// A second product on the same /v2 endpoint: get_airtime_config and place_airtime.
+// The recipient always receives the face value we send; what leaves OUR BundlePortal
+// wallet is face value × payRatio (e.g. 0.965). Customer pricing is untouched — the
+// airtime_amount we send is already the face value the buyer paid for.
+//
+// Two differences from place_order that shape this code:
+//   • The docs promise idempotency on order_id only for DATA. place_airtime answers
+//     with its OWN order id ("AIR…"), so there is NO retry here — a timeout is
+//     reported as unknown and left for a human, never re-sent. Airtime can't be
+//     recalled.
+//   • "A top-up the provider explicitly rejects is refunded automatically; one it
+//     never answers is left for review" — so a 4xx is safe to call unpaid, a
+//     transport error or 5xx is not.
+
+/** Internal airtime network names (MTN / Telecel / AT) → BundlePortal's. */
+const AIRTIME_NETWORKS: Record<string, string> = {
+    MTN: 'mtn',
+    Telecel: 'telecel',
+    AT: 'airteltigo',
+}
+
+export interface BundlePortalAirtimeConfig {
+    success: boolean
+    enabled?: boolean
+    minAmount?: number
+    maxAmount?: number
+    networks?: string[]
+    payRatio?: number
+    balance?: number
+    error?: string
+}
+
+/** POST /v2 { action: "get_airtime_config" } */
+export async function getBundlePortalAirtimeConfig(): Promise<BundlePortalAirtimeConfig> {
+    if (!BUNDLEPORTAL_API_KEY) return { success: false, error: 'BundlePortal API key not configured' }
+    try {
+        const { status, ok, data, rawText } = await callApi('get_airtime_config', {}, 10_000)
+        if (!ok || data?.success !== true || !data?.data) {
+            return { success: false, error: data?.message || data?.error || `HTTP ${status}: ${rawText.slice(0, 120)}` }
+        }
+        const d = data.data
+        const num = (v: any) => (v === undefined || v === null || isNaN(Number(v)) ? undefined : Number(v))
+        return {
+            success: true,
+            enabled: d.enabled === true,
+            minAmount: num(d.minAmount ?? d.min_amount),
+            maxAmount: num(d.maxAmount ?? d.max_amount),
+            networks: Array.isArray(d.networks) ? d.networks.map((n: any) => String(n).toLowerCase()) : undefined,
+            payRatio: num(d.payRatio ?? d.pay_ratio),
+            balance: num(d.balance),
+        }
+    } catch (error: any) {
+        return { success: false, error: error?.message || 'Connection error' }
+    }
+}
+
+/** True when BundlePortal's airtime config says this network + amount will be accepted. */
+export function bundlePortalAirtimeRefusal(cfg: BundlePortalAirtimeConfig, network: string, amount: number): string | null {
+    if (!cfg.success) return `Could not read BundlePortal airtime config: ${cfg.error || 'unknown error'}`
+    if (!cfg.enabled) return 'BundlePortal airtime is disabled on our account'
+    const bpNetwork = AIRTIME_NETWORKS[network]
+    if (!bpNetwork) return `BundlePortal has no airtime network for ${network}`
+    if (cfg.networks && !cfg.networks.includes(bpNetwork)) return `BundlePortal does not offer ${network} airtime`
+    if (cfg.minAmount !== undefined && amount < cfg.minAmount) return `GHS ${amount.toFixed(2)} is below BundlePortal's minimum of GHS ${cfg.minAmount.toFixed(2)}`
+    if (cfg.maxAmount !== undefined && amount > cfg.maxAmount) return `GHS ${amount.toFixed(2)} is above BundlePortal's maximum of GHS ${cfg.maxAmount.toFixed(2)}`
+    if (cfg.balance !== undefined && cfg.payRatio !== undefined && cfg.balance < amount * cfg.payRatio) {
+        return `BundlePortal balance GHS ${cfg.balance.toFixed(2)} is too low for this top-up`
+    }
+    return null
+}
+
+export interface BundlePortalAirtimeResult {
+    success: boolean
+    /** THEIR order id ("AIR…") — the key the status scan looks for. */
+    supplierOrderId?: string
+    status?: string
+    /** What our BundlePortal wallet was charged (face value × payRatio). */
+    totalPaid?: number
+    newBalance?: number
+    error?: string
+    /** True only for a definite refusal (4xx) — nothing left our BundlePortal wallet. */
+    knownUnpaid?: boolean
+    raw?: any
+}
+
+/** POST /v2 { action: "place_airtime", network, recipient, amount, order_id }. Never retried. */
+export async function purchaseAirtimeViaBundlePortal(params: {
+    network: string
+    phone: string
+    amount: number
+    reference: string
+}): Promise<BundlePortalAirtimeResult> {
+    if (!BUNDLEPORTAL_API_KEY) return { success: false, error: 'BundlePortal API key not configured', knownUnpaid: true }
+    if (!checkCircuit()) return { success: false, error: 'BundlePortal temporarily unavailable (circuit open)', knownUnpaid: true }
+
+    const network = AIRTIME_NETWORKS[params.network]
+    if (!network) return { success: false, error: `Unsupported airtime network ${params.network}`, knownUnpaid: true }
+
+    const body: Record<string, any> = {
+        network,
+        recipient: normalizePhone(params.phone),
+        amount: Number(params.amount.toFixed(2)),
+    }
+    // Sent so their ledger carries our reference where they support it. Harmless if ignored.
+    const orderRef = toOrderRef(params.reference)
+    if (orderRef) body.order_id = orderRef
+
+    console.log(`[BundlePortalAirtime] Purchasing ${network} GHS ${body.amount} -> ${body.recipient} (ref ${params.reference})`)
+
+    let res: Awaited<ReturnType<typeof callApi>>
+    try {
+        res = await callApi('place_airtime', body, 25_000)
+    } catch (error: any) {
+        recordFailure()
+        // We never heard back: the top-up may have gone out. Not refundable.
+        return { success: false, error: `No answer from BundlePortal: ${error?.message || 'connection error'}`, knownUnpaid: false }
+    }
+
+    if (res.ok && res.data?.success === true) {
+        recordSuccess()
+        const d = res.data.data || {}
+        return {
+            success: true,
+            supplierOrderId: d.order_id ? String(d.order_id) : undefined,
+            status: d.status || 'processing',
+            totalPaid: d.amount != null ? Number(d.amount) : undefined,
+            newBalance: d.balance != null ? Number(d.balance) : undefined,
+            raw: sanitizeForLog(res.data),
+        }
+    }
+
+    if (res.status >= 500 || res.data === null) recordFailure()
+    const message = res.data?.message || res.data?.error?.message || res.data?.error || `Top-up refused (HTTP ${res.status})`
+    return {
+        success: false,
+        error: String(message),
+        knownUnpaid: res.status >= 400 && res.status < 500,
+        raw: res.data ? sanitizeForLog(res.data) : res.rawText.slice(0, 300),
+    }
+}
+
+/**
+ * Status of many airtime top-ups in one get_transactions scan (v2 has no
+ * per-order call). Each entry lists every id the order might appear under —
+ * their "AIR…" id first, then our reference. Returns key → status for the
+ * entries found; anything missing was not in the history that was read.
+ */
+export async function fetchBundlePortalAirtimeStatuses(
+    entries: { key: string; ids: string[] }[],
+    opts: { scanBackTo?: string; budgetMs?: number } = {}
+): Promise<{ statuses: Map<string, { status: MappedStatus; raw: string }>; stopReason: ScanStopReason }> {
+    const wantedOrderIds = Array.from(new Set(entries.flatMap(e => e.ids.filter(Boolean))))
+    const scan = await fetchRecentOrderStatuses({
+        wantedOrderIds,
+        budgetMs: opts.budgetMs ?? 20_000,
+        scanBackTo: opts.scanBackTo,
+    })
+    const statuses = new Map<string, { status: MappedStatus; raw: string }>()
+    for (const e of entries) {
+        for (const id of e.ids) {
+            const hit = id ? scan.statuses.get(id) : undefined
+            if (hit) { statuses.set(e.key, hit); break }
+        }
+    }
+    return { statuses, stopReason: scan.stopReason }
 }
 
 // ─── MTN Number Verification ───────────────────────────────────────────────────

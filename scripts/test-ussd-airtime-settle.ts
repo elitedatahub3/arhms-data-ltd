@@ -79,7 +79,11 @@ const originalLoad = (Module as any)._load
         return { processAirtimeDirectOrder: async (reference: string, userId?: string) => { settleCalls.push({ reference, userId }); return typeof settleResult === 'function' ? settleResult() : settleResult } }
     }
     if (request === '@/lib/airtime-provider') {
-        return { purchaseAirtime: async () => purchaseResult, AIRTIME_PROVIDER: 'kingflexy' }
+        return {
+            purchaseAirtime: async () => purchaseResult,
+            resolveAirtimeSupplier: async () => 'kingflexy',
+            AIRTIME_SUPPLIER_LABEL: { kingflexy: 'KingFlexy', bundleportal: 'BundlePortal' },
+        }
     }
     if (request === '@/lib/supabase') return { createServerClient: () => db }
     if (request === '@/lib/web-push') {

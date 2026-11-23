@@ -29,7 +29,15 @@ const AIRTIME_SETTING_KEYS = [
     'airtime_auto_mtn',
     'airtime_auto_telecel',
     'airtime_auto_at',
+    // Which supplier delivers each network: 'kingflexy' (default) | 'bundleportal'.
+    // Read by lib/airtime-provider.ts resolveAirtimeSupplier.
+    'airtime_supplier_mtn',
+    'airtime_supplier_telecel',
+    'airtime_supplier_at',
 ]
+
+const SUPPLIER_KEYS = new Set(['airtime_supplier_mtn', 'airtime_supplier_telecel', 'airtime_supplier_at'])
+const SUPPLIER_VALUES = new Set(['kingflexy', 'bundleportal'])
 
 async function verifyAdmin(supabaseUserClient: any) {
     const { data: { user: authUser }, error: authError } = await supabaseUserClient.auth.getUser()
@@ -84,6 +92,11 @@ export async function POST(request: NextRequest) {
         const updates = Object.entries(body)
             .filter(([key]) => AIRTIME_SETTING_KEYS.includes(key))
             .map(([key, value]) => ({ key, value: String(value) }))
+
+        const badSupplier = updates.find(u => SUPPLIER_KEYS.has(u.key) && !SUPPLIER_VALUES.has(u.value))
+        if (badSupplier) {
+            return NextResponse.json({ error: `Unknown airtime supplier '${badSupplier.value}'` }, { status: 400 })
+        }
 
         if (updates.length === 0) return NextResponse.json({ error: 'No valid settings provided' }, { status: 400 })
 

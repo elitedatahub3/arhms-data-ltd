@@ -20,7 +20,12 @@
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { finalizeAirtimeOrder } from '@/lib/airtime-order-completion'
-import { purchaseAirtime, AIRTIME_PROVIDER } from '@/lib/airtime-provider'
+import {
+    purchaseAirtime,
+    resolveAirtimeSupplier,
+    AIRTIME_SUPPLIER_LABEL,
+    type AirtimePurchaseResult,
+} from '@/lib/airtime-provider'
 
 const NETWORK_SETTING_KEY: Record<string, string> = {
     MTN: 'airtime_auto_mtn',
@@ -64,7 +69,7 @@ async function haltForAdmin(supabase: any, order: any, note: string): Promise<vo
 }
 
 export interface AirtimeDispatchResult {
-    /** True only when KingFlexy accepted the purchase. */
+    /** True only when the airtime supplier accepted the purchase. */
     dispatched: boolean
     /** Why it was not dispatched — for the caller's logs, not the customer. */
     reason?: string
@@ -131,6 +136,8 @@ export async function triggerAirtimeFulfillment(orderId: string): Promise<Airtim
 
         const amount = Number(order.airtime_amount)
         const clientReference = order.reference_code
+        const supplier = await resolveAirtimeSupplier(supabase, order.network)
+        const supplierLabel = AIRTIME_SUPPLIER_LABEL[supplier]
 
         // Claim the leg first. If this insert fails on the unique constraint the
         // order has already been dispatched by another invocation, and sending it
@@ -160,7 +167,7 @@ export async function triggerAirtimeFulfillment(orderId: string): Promise<Airtim
         await supabase
             .from('airtime_orders')
             .update({
-                provider: AIRTIME_PROVIDER,
+                provider: supplier,
                 provider_reference: clientReference,
                 auto_fulfillment_attempted_at: new Date().toISOString(),
                 updated_at: new Date().toISOString(),
@@ -168,15 +175,29 @@ export async function triggerAirtimeFulfillment(orderId: string): Promise<Airtim
             .eq('id', orderId)
 
         console.log(
-            `[AirtimeDispatch] ${order.reference_code} | ${order.network} | GHS ${amount.toFixed(2)} → ${order.beneficiary_phone}`
+            `[AirtimeDispatch] ${order.reference_code} | ${order.network} | GHS ${amount.toFixed(2)} → ${order.beneficiary_phone} | via ${supplierLabel}`
         )
 
-        const result = await purchaseAirtime({
-            network: order.network,
-            phone: order.beneficiary_phone,
-            amount,
-            reference: clientReference,
-        })
+        // BundlePortal publishes its limits (enabled, networks, min/max, balance). Asking
+        // first turns a certain refusal into a clean hold with nothing sent. Done AFTER
+        // the claim on purpose: a hold before it would leave provider NULL, and the
+        // cron's rescue sweep would re-dispatch and re-alert every five minutes.
+        let result: AirtimePurchaseResult
+        let refusal: string | null = null
+        if (supplier === 'bundleportal') {
+            const { getBundlePortalAirtimeConfig, bundlePortalAirtimeRefusal } = await import('@/lib/bundleportal-service')
+            refusal = bundlePortalAirtimeRefusal(await getBundlePortalAirtimeConfig(), order.network, amount)
+        }
+        if (refusal) {
+            result = { success: false, error: refusal, knownUnpaid: true }
+        } else {
+            result = await purchaseAirtime(supplier, {
+                network: order.network,
+                phone: order.beneficiary_phone,
+                amount,
+                reference: clientReference,
+            })
+        }
 
         await supabase
             .from('airtime_fulfillment_legs')
@@ -199,26 +220,28 @@ export async function triggerAirtimeFulfillment(orderId: string): Promise<Airtim
 
         if (!result.success) {
             const refundHint = result.knownUnpaid
-                ? 'KingFlexy confirms nothing was charged to our balance — a manual wallet credit is safe.'
-                : 'KingFlexy did not confirm whether this was charged — check their dashboard before refunding.'
+                ? `${supplierLabel} confirms nothing was charged to our balance — a manual wallet credit is safe.`
+                : `${supplierLabel} did not confirm whether this was charged — check their dashboard before refunding.`
             await haltForAdmin(
                 supabase,
                 order,
-                `KingFlexy rejected the top-up: ${result.error || 'unknown error'}. ${refundHint}`
+                refusal
+                    ? `Not sent to ${supplierLabel}: ${refusal}. ${refundHint}`
+                    : `${supplierLabel} rejected the top-up: ${result.error || 'unknown error'}. ${refundHint}`
             )
             return { dispatched: false, reason: result.error || 'provider rejected purchase' }
         }
 
-        // KingFlexy always dispatches asynchronously — "poll for final status" — so a
-        // successful purchase call never means delivered yet. The reconciliation cron
-        // (sync-kingflexy-airtime) is what ever moves this to 'completed'.
+        // Both suppliers dispatch asynchronously, so a successful purchase call never
+        // means delivered yet. The reconciliation cron (sync-kingflexy-airtime, which
+        // also settles BundlePortal legs) or BundlePortal's webhook moves it to 'completed'.
         await finalizeAirtimeOrder({
             orderId,
             status: 'processing',
             existingOrder: order,
         })
 
-        console.log(`[AirtimeDispatch] ${order.reference_code} dispatched — awaiting KingFlexy confirmation.`)
+        console.log(`[AirtimeDispatch] ${order.reference_code} dispatched — awaiting ${supplierLabel} confirmation.`)
         return { dispatched: true }
     } catch (err: any) {
         // A crash here must never surface to the customer: their money is already

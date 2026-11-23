@@ -139,6 +139,8 @@ interface AirtimeSettings {
     storefront_mashup_enabled: string
     airtime_auto_fulfillment_enabled: string
     airtime_auto_mtn: string; airtime_auto_telecel: string; airtime_auto_at: string
+    // Supplier per network: 'kingflexy' (default when missing) | 'bundleportal'.
+    airtime_supplier_mtn?: string; airtime_supplier_telecel?: string; airtime_supplier_at?: string
     // Developer API fee, charged to every API caller. Blank = use the role fee.
     airtime_fee_mtn_api?: string; airtime_fee_telecel_api?: string; airtime_fee_at_api?: string
 }
@@ -297,6 +299,11 @@ export default function AdminAirtimePage() {
     })
     const [settingsLoading, setSettingsLoading] = useState(true)
     const [savingSettings, setSavingSettings] = useState(false)
+    // BundlePortal's live airtime config, shown under the supplier switches.
+    const [bpConfig, setBpConfig] = useState<{
+        success: boolean; enabled?: boolean; minAmount?: number; maxAmount?: number
+        payRatio?: number; balance?: number; networks?: string[]; error?: string
+    } | null>(null)
 
     const loadOrders = useCallback(async () => {
         setOrdersLoading(true)
@@ -323,6 +330,11 @@ export default function AdminAirtimePage() {
             if (res.ok) { const d = await res.json(); setSettings(d.settings) }
         } catch (e) { console.error(e) }
         setSettingsLoading(false)
+        // Separate and non-blocking: a slow BundlePortal must not hold up the settings form.
+        fetch('/api/admin/airtime/bundleportal-config')
+            .then(r => r.json())
+            .then(setBpConfig)
+            .catch(() => setBpConfig({ success: false, error: 'Could not reach BundlePortal' }))
     }, [])
 
     useEffect(() => { loadOrders() }, [loadOrders])
@@ -896,17 +908,32 @@ export default function AdminAirtimePage() {
                                 </div>
 
                                 <div className="space-y-6">
-                                    {/* Auto-Fulfilment (Hubtel Commission Services) */}
+                                    {/* Auto-Fulfilment (KingFlexy or BundlePortal, per network) */}
                                     <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 border border-slate-100 dark:border-slate-800 shadow-sm space-y-8">
                                         <div className="space-y-2">
                                             <h2 className="text-xl font-black text-slate-900 dark:text-white uppercase tracking-tighter">Auto-Fulfilment</h2>
-                                            <p className="text-xs text-slate-500 font-bold uppercase tracking-widest opacity-70">Send Airtime Automatically Via Hubtel</p>
+                                            <p className="text-xs text-slate-500 font-bold uppercase tracking-widest opacity-70">Send Airtime Automatically Via KingFlexy Or BundlePortal</p>
                                         </div>
 
                                         <div className="bg-rose-50 dark:bg-rose-950/20 rounded-2xl p-4 border border-rose-100 dark:border-rose-950 flex gap-3">
                                             <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0" />
                                             <p className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase leading-relaxed">
-                                                Airtime cannot be recalled once sent. Test each network with a GHS 1 order before switching it on. The Hubtel prepaid account must be funded.
+                                                Airtime cannot be recalled once sent. Test each network with a small order after switching its supplier. The chosen supplier&apos;s wallet must be funded.
+                                            </p>
+                                        </div>
+
+                                        <div className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+                                            <p className="text-[10px] font-black text-slate-900 dark:text-white uppercase tracking-widest">BundlePortal Airtime</p>
+                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight mt-1">
+                                                {bpConfig === null
+                                                    ? 'Checking…'
+                                                    : !bpConfig.success
+                                                        ? `Unavailable: ${bpConfig.error || 'unknown error'}`
+                                                        : `${bpConfig.enabled ? 'Enabled' : 'DISABLED on our account'}`
+                                                          + ` · Balance GHS ${(bpConfig.balance ?? 0).toFixed(2)}`
+                                                          + (bpConfig.payRatio !== undefined ? ` · Pays ${bpConfig.payRatio} per GHS 1` : '')
+                                                          + (bpConfig.minAmount !== undefined && bpConfig.maxAmount !== undefined
+                                                              ? ` · GHS ${bpConfig.minAmount.toFixed(2)}–${bpConfig.maxAmount.toFixed(2)}` : '')}
                                             </p>
                                         </div>
 
@@ -924,23 +951,43 @@ export default function AdminAirtimePage() {
 
                                             {(['MTN', 'Telecel', 'AT'] as const).map(net => {
                                                 const key = `airtime_auto_${net.toLowerCase()}` as keyof AirtimeSettings
+                                                const supplierKey = `airtime_supplier_${net.toLowerCase()}` as keyof AirtimeSettings
+                                                const supplier = settings[supplierKey] === 'bundleportal' ? 'bundleportal' : 'kingflexy'
                                                 const masterOff = settings.airtime_auto_fulfillment_enabled !== 'true'
                                                 return (
                                                     <div
                                                         key={net}
-                                                        className={`flex items-center justify-between p-4 rounded-2xl border border-slate-100 dark:border-slate-800 transition-opacity ${masterOff ? 'opacity-40' : ''}`}
+                                                        className={`p-4 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3 transition-opacity ${masterOff ? 'opacity-40' : ''}`}
                                                     >
-                                                        <div>
-                                                            <Label className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-widest">{net} Auto-Fulfil</Label>
-                                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight mt-1">
-                                                                Orders over GHS 100 are split into multiple top-ups automatically.
-                                                            </p>
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <Label className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-widest">{net} Auto-Fulfil</Label>
+                                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight mt-1">
+                                                                    Sent via {supplier === 'bundleportal' ? 'BundlePortal' : 'KingFlexy'}. One top-up per order.
+                                                                </p>
+                                                            </div>
+                                                            <Switch
+                                                                checked={settings[key] === 'true'}
+                                                                disabled={masterOff}
+                                                                onCheckedChange={v => setSettings(s => ({ ...s, [key]: v ? 'true' : 'false' }))}
+                                                            />
                                                         </div>
-                                                        <Switch
-                                                            checked={settings[key] === 'true'}
-                                                            disabled={masterOff}
-                                                            onCheckedChange={v => setSettings(s => ({ ...s, [key]: v ? 'true' : 'false' }))}
-                                                        />
+                                                        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={`${net} airtime supplier`}>
+                                                            {([['kingflexy', 'KingFlexy'], ['bundleportal', 'BundlePortal']] as const).map(([id, label]) => (
+                                                                <button
+                                                                    key={id}
+                                                                    type="button"
+                                                                    role="radio"
+                                                                    aria-checked={supplier === id}
+                                                                    onClick={() => setSettings(s => ({ ...s, [supplierKey]: id }))}
+                                                                    className={`h-9 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-colors ${supplier === id
+                                                                        ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900 dark:border-white'
+                                                                        : 'bg-transparent text-slate-500 border-slate-200 dark:border-slate-700 hover:border-slate-400'}`}
+                                                                >
+                                                                    {label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
                                                     </div>
                                                 )
                                             })}

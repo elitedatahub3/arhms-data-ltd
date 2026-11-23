@@ -68,6 +68,57 @@ async function findOrder(supabase: any, reference: string | null, orderId: strin
     return null
 }
 
+/**
+ * Airtime top-ups placed with BundlePortal (place_airtime). Their answer carries
+ * THEIR order id ("AIR…"), stored on airtime_fulfillment_legs.transaction_id; we
+ * also send our reference_code as order_id, stored as client_reference. The
+ * airtime webhook payload isn't documented, so every id the payload carries is
+ * tried against both columns.
+ *
+ * Returns null when no airtime leg matches (caller logs "not found"), otherwise
+ * whether the order was settled. The sync cron remains the safety net.
+ */
+async function settleAirtimeFromWebhook(
+    supabase: any,
+    p: { orderId: string | null; reference: string | null; newStatus: string; isTerminal: boolean }
+): Promise<boolean | null> {
+    const ids = Array.from(new Set([p.orderId, p.reference].filter((v): v is string => !!v)))
+    if (ids.length === 0) return null
+
+    const select = 'id, status, created_at, airtime_orders!inner(id, status, provider, network, beneficiary_phone, airtime_amount)'
+    let leg: any = null
+    for (const column of ['transaction_id', 'client_reference']) {
+        const { data, error } = await supabase
+            .from('airtime_fulfillment_legs')
+            .select(select)
+            .in(column, ids)
+            .eq('airtime_orders.provider', 'bundleportal')
+            .limit(2)
+        if (error) throw new Error(`airtime ${column} lookup failed: ${error.message}`)
+        if (data?.length === 1) { leg = data[0]; break }
+        if (data?.length > 1) {
+            console.error(`[BundlePortalWebhook] ${data.length} airtime legs match ${column} — refusing to guess`)
+            return false
+        }
+    }
+    if (!leg) return null
+
+    if (!p.isTerminal) return false
+    if (leg.status === 'success' || leg.status === 'failed') return false // already settled
+
+    const { settleAirtimeLeg } = await import('@/lib/airtime-leg-settle')
+    const outcome = await settleAirtimeLeg(supabase, {
+        legId: leg.id,
+        legCreatedAt: leg.created_at,
+        order: leg.airtime_orders,
+        status: p.newStatus as 'completed' | 'failed',
+        raw: { bundleportal_webhook_status: p.newStatus },
+        supplierLabel: 'BundlePortal',
+    })
+    console.log(`[BundlePortalWebhook] airtime leg ${leg.id} → ${outcome}`)
+    return outcome !== 'closed'
+}
+
 export async function POST(request: NextRequest) {
     try {
         const secret = process.env.BUNDLEPORTAL_WEBHOOK_SECRET
@@ -118,6 +169,11 @@ export async function POST(request: NextRequest) {
         const order = await findOrder(supabase, reference, orderId)
 
         if (!order) {
+            // Not a data order — maybe an airtime top-up (place_airtime).
+            const airtime = await settleAirtimeFromWebhook(supabase, { orderId, reference, newStatus, isTerminal })
+            if (airtime !== null) {
+                return NextResponse.json({ success: true, updated: airtime ? 1 : 0 }, { status: 200 })
+            }
             console.warn(`[BundlePortalWebhook] No order found for order_id ${orderId} / reference ${reference}`)
             return NextResponse.json({ success: true, updated: 0 }, { status: 200 })
         }

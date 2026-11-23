@@ -3,9 +3,12 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { getAirtimeOrderStatus } from '@/lib/airtime-provider'
 import { finalizeAirtimeOrder } from '@/lib/airtime-order-completion'
+import { settleAirtimeLeg } from '@/lib/airtime-leg-settle'
 
 /**
- * Reconciles airtime top-ups against KingFlexy.
+ * Reconciles airtime top-ups against KingFlexy — and, since airtime can now be
+ * routed per network to BundlePortal, against BundlePortal too (Sweep 1b). One
+ * cron for both, so no second cron-job.org job is needed.
  *
  * This does something its Hubtel predecessor could not. Hubtel Commission Services
  * publishes no status endpoint for airtime, so /api/cron/sync-hubtel-airtime could
@@ -37,6 +40,13 @@ const RESCUE_WINDOW_HOURS = 24
 
 /** Prefixes fulfillment_note once an admin has been alerted about a too-old order. */
 const NEVER_SENT_MARKER = '[NEVER-SENT]'
+
+/** BundlePortal legs older than this are left to an admin; see Sweep 1b. */
+const BP_MAX_AGE_HOURS = 72
+/** How long a BundlePortal top-up may be missing from their history before an admin is told. */
+const BP_NOT_FOUND_MINUTES = 30
+/** Prefixes fulfillment_note once that alert has gone out, so it goes out once. */
+const BP_NOT_FOUND_MARKER = '[BP-NOT-FOUND]'
 
 export async function GET(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
@@ -141,6 +151,89 @@ export async function GET(request: NextRequest) {
             }
 
             results.pending++
+        }
+
+        // ── Sweep 1b: legs sent to BundlePortal ──────────────────────────────
+        // Its own query and batch, so BundlePortal legs and KingFlexy legs can never
+        // crowd each other out of the oldest-first window. v2 has no per-order status
+        // call, so the whole batch is answered by ONE get_transactions scan.
+        // Bounded in age: older legs have already been flagged to an admin below and
+        // would otherwise pin this batch forever.
+        const bpFloor = new Date(Date.now() - BP_MAX_AGE_HOURS * 3600 * 1000).toISOString()
+        const { data: bpLegs, error: bpError } = await supabase
+            .from('airtime_fulfillment_legs')
+            .select('id, order_id, client_reference, transaction_id, amount, status, created_at, airtime_orders!inner(id, reference_code, network, beneficiary_phone, airtime_amount, status, provider, fulfillment_note, created_at)')
+            .in('status', ['submitting', 'pending'])
+            .eq('airtime_orders.provider', 'bundleportal')
+            .lt('created_at', staleCutoff)
+            .gte('created_at', bpFloor)
+            .order('created_at', { ascending: true })
+            .limit(BATCH)
+
+        if (bpError) {
+            results.errors.push(`bundleportal leg query: ${bpError.message}`)
+        } else if (bpLegs?.length) {
+            const { fetchBundlePortalAirtimeStatuses } = await import('@/lib/bundleportal-service')
+            // A few minutes' slack before the oldest leg: their created_at is their clock.
+            const scanBackTo = new Date(new Date(bpLegs[0].created_at).getTime() - 10 * 60 * 1000).toISOString()
+            const { statuses, stopReason } = await fetchBundlePortalAirtimeStatuses(
+                bpLegs.map((leg: any) => ({
+                    key: leg.id,
+                    // Their "AIR…" id first, then our reference in case they echo order_id.
+                    ids: [leg.transaction_id, leg.client_reference].filter(Boolean),
+                })),
+                { scanBackTo }
+            )
+            // Only a scan that really read back past the oldest leg can call a leg "not found".
+            const scanCovered = stopReason === 'reached_cutoff' || stopReason === 'end_of_history' || stopReason === 'all_found'
+
+            for (const leg of bpLegs) {
+                results.checked++
+                const order = leg.airtime_orders
+                const hit = statuses.get(leg.id)
+
+                if (hit && (hit.status === 'completed' || hit.status === 'failed')) {
+                    const outcome = await settleAirtimeLeg(supabase, {
+                        legId: leg.id,
+                        legCreatedAt: leg.created_at,
+                        order,
+                        status: hit.status,
+                        raw: { bundleportal_status: hit.raw },
+                        supplierLabel: 'BundlePortal',
+                        alertCutoffMinutes: ALERT_CUTOFF_MINUTES,
+                    })
+                    if (outcome === 'completed') results.completed++
+                    if (outcome === 'failed') results.failed++
+                    continue
+                }
+
+                if (hit) { results.pending++; continue }
+
+                // Not in their history. Never marked failed: a top-up they never
+                // answered may still have been delivered. Flag it to a human ONCE.
+                const ageMin = (Date.now() - new Date(leg.created_at).getTime()) / 60000
+                const flagged = String(order.fulfillment_note || '').includes(BP_NOT_FOUND_MARKER)
+                if (scanCovered && ageMin >= BP_NOT_FOUND_MINUTES && !flagged
+                    && (order.status === 'processing' || order.status === 'pending')) {
+                    results.flagged++
+                    const note = `${BP_NOT_FOUND_MARKER} BundlePortal has no record of this top-up ${Math.round(ageMin)} min after sending. Check their dashboard before refunding or resending.`
+                    await supabase
+                        .from('airtime_orders')
+                        .update({
+                            fulfillment_note: order.fulfillment_note ? `${note} | ${order.fulfillment_note}` : note,
+                            updated_at: new Date().toISOString(),
+                        })
+                        .eq('id', order.id)
+                    await sendPushToAdmins({
+                        title: '⚠️ Airtime top-up not found at BundlePortal',
+                        body: `${order.reference_code}: ${order.network} GHS ${Number(order.airtime_amount).toFixed(2)} → ${order.beneficiary_phone}. Check BundlePortal before acting.`,
+                        url: '/admin/airtime',
+                    }).catch(() => {})
+                } else {
+                    results.pending++
+                }
+            }
+            if (!scanCovered) results.errors.push(`bundleportal scan incomplete: ${stopReason}`)
         }
 
         // ── Sweep 2: paid but never dispatched ───────────────────────────────
