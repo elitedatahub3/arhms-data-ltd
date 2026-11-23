@@ -32,7 +32,8 @@ import { normaliseSupplierStatus } from '@/lib/order-status-display'
 const KUNTANII_API_KEY = process.env.KUNTANII_API_KEY || ''
 // Kuntanii scopes an order to the API key that placed it: after a key change, the
 // new key gets 404 for every order the old one placed. Older keys listed here
-// (comma-separated) are tried for STATUS lookups only, never to place orders.
+// (comma-separated) are tried for status lookups and not-received reports only,
+// never to place orders.
 // Keep a key here until its last order has settled, and revoke it at Kuntanii only then.
 const KUNTANII_PREVIOUS_API_KEYS = (process.env.KUNTANII_PREVIOUS_API_KEYS || '')
     .split(',').map(k => k.trim()).filter(k => k && k !== KUNTANII_API_KEY)
@@ -481,4 +482,128 @@ export async function verifyKuntaniiNumbers(phoneNumbers: string[]): Promise<{
 /** Kuntanii documents no balance endpoint. */
 export async function fetchSupplierBalance(): Promise<{ success: boolean; balance?: number; currency?: string; error?: string; unsupported?: boolean }> {
     return { success: false, unsupported: true, error: 'Kuntanii has no balance endpoint' }
+}
+
+// ─── Not-received reports (disputes) ───────────────────────────────────────────
+//   POST /api/integrations/orders/{externalOrderId}/not-received { phoneNumber, dataGb?, reasonCode?, description? }
+//     → 201 { reportReference, orderReference, disputeStatus, orderStatus, … }
+//   GET  /api/integrations/orders/{externalOrderId}/not-received?page=N
+//     → every report on that order (incl. ones Kuntanii staff opened), 25 per page.
+// Only allowed on a processed order. Reports are scoped to the API key that placed
+// the order, so 404s fall back to KUNTANII_PREVIOUS_API_KEYS like checkOrderStatus.
+// A Kuntanii refund is a billing credit to US — it never refunds our customer.
+
+export interface NotReceivedReport {
+    reportReference: string | null
+    phoneNumber: string | null
+    dataGb: number | null
+    /** open | escalated | resolved | rejected */
+    status: string | null
+    /** pending | escalated | confirmed_sent | refunded | retry_approved | rejected | resolved */
+    outcome: string | null
+    resolution: string | null
+    createdAt: string | null
+    resolvedAt: string | null
+    refundGhs: number | null
+}
+
+function pickReport(r: any): NotReceivedReport {
+    const refunds: any[] = Array.isArray(r?.refunds) ? r.refunds : []
+    return {
+        reportReference: r?.reportReference ?? null,
+        phoneNumber: r?.phoneNumber ?? null,
+        dataGb: r?.dataGb ?? null,
+        status: r?.disputeStatus ?? r?.status ?? null,
+        outcome: r?.outcome ?? null,
+        resolution: r?.resolution ?? null,
+        createdAt: r?.createdAt ?? r?.reportedAt ?? null,
+        resolvedAt: r?.resolvedAt ?? null,
+        refundGhs: refunds.length > 0 ? refunds.reduce((sum, x) => sum + (Number(x?.amountGhs) || 0), 0) : null,
+    }
+}
+
+type OrderCall = { key: string; status: number; ok: boolean; data: any; rawText: string }
+
+/** Try each candidate externalOrderId under each API key until one isn't a 404. */
+async function callForOrder(keys: string[], method: 'GET' | 'POST', suffix: string, body?: any): Promise<OrderCall | null> {
+    let last: OrderCall | null = null
+    for (const key of [...new Set(keys.filter(Boolean))]) {
+        const path = `/api/integrations/orders/${encodeURIComponent(key)}/not-received${suffix}`
+        for (const apiKey of [KUNTANII_API_KEY, ...KUNTANII_PREVIOUS_API_KEYS]) {
+            const res = await callApi(method, path, { body, timeoutMs: 15_000, apiKey })
+            last = { key, ...res }
+            if (res.status !== 404) return last
+        }
+    }
+    return last
+}
+
+function apiError(res: OrderCall): string {
+    const d = res.data
+    const msg = d?.error?.message || d?.message || (typeof d?.error === 'string' ? d.error : null)
+    const code = d?.error?.code || d?.code
+    return [code, msg].filter(Boolean).join(': ') || `HTTP ${res.status}: ${res.rawText.slice(0, 160)}`
+}
+
+function unwrap(data: any): any {
+    return data?.data && typeof data.data === 'object' && !Array.isArray(data.data) ? data.data : data
+}
+
+/** Raise a not-received dispute for one recipient on a processed Kuntanii order. */
+export async function reportNotReceived(
+    keys: string[],
+    input: { phoneNumber: string; dataGb?: number | null; description?: string; reasonCode?: string },
+): Promise<{
+    success: boolean
+    externalOrderId?: string
+    report?: NotReceivedReport & { orderReference: string | null; orderStatus: string | null }
+    error?: string
+}> {
+    if (!KUNTANII_API_KEY) return { success: false, error: 'KUNTANII_API_KEY not configured' }
+    try {
+        const body: Record<string, unknown> = { phoneNumber: normalizePhone(input.phoneNumber) }
+        if (input.dataGb) body.dataGb = input.dataGb
+        if (input.reasonCode) body.reasonCode = input.reasonCode
+        if (input.description) body.description = input.description.slice(0, 500)
+        const res = await callForOrder(keys, 'POST', '', body)
+        if (!res) return { success: false, error: 'No Kuntanii reference for this order' }
+        if (!res.ok || res.data?.success === false) return { success: false, externalOrderId: res.key, error: apiError(res) }
+        const payload = unwrap(res.data)
+        return {
+            success: true,
+            externalOrderId: res.key,
+            report: { ...pickReport(payload), orderReference: payload?.orderReference ?? null, orderStatus: payload?.orderStatus ?? null },
+        }
+    } catch (err: any) {
+        return { success: false, error: err?.message || 'Report failed' }
+    }
+}
+
+/** Every not-received report Kuntanii holds for an order. */
+export async function listNotReceivedReports(
+    keys: string[],
+): Promise<{ success: boolean; externalOrderId?: string; reports: NotReceivedReport[]; notFound?: boolean; error?: string }> {
+    if (!KUNTANII_API_KEY) return { success: false, reports: [], error: 'KUNTANII_API_KEY not configured' }
+    const reports: NotReceivedReport[] = []
+    try {
+        let candidates = keys
+        let externalOrderId: string | undefined
+        for (let page = 1; page <= 4; page++) {
+            const res = await callForOrder(candidates, 'GET', `?page=${page}`)
+            if (!res) return { success: false, reports, error: 'No Kuntanii reference for this order' }
+            if (res.status === 404) return { success: true, externalOrderId: res.key, reports, notFound: page === 1 }
+            if (!res.ok) return { success: false, externalOrderId: res.key, reports, error: apiError(res) }
+            externalOrderId = res.key
+            candidates = [res.key]
+            const payload = unwrap(res.data)
+            const list: any[] = Array.isArray(payload?.reports) ? payload.reports
+                : Array.isArray(res.data?.data) ? res.data.data
+                : Array.isArray(payload?.items) ? payload.items : []
+            reports.push(...list.map(pickReport))
+            if (!(payload?.pagination?.hasNext ?? res.data?.pagination?.hasNext)) break
+        }
+        return { success: true, externalOrderId, reports }
+    } catch (err: any) {
+        return { success: false, reports, error: err?.message || 'Lookup failed' }
+    }
 }

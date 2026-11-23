@@ -47,6 +47,7 @@ import {
     Wifi,
     Trophy,
     Sparkles,
+    Flag,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -102,6 +103,7 @@ const adminNavItems = [
     { href: '/admin/fulfillment', label: 'Fulfillment', icon: Activity },
     { href: '/admin/delivery-status', label: 'Delivery Status', icon: Activity },
     { href: '/admin/up2u-checker', label: 'UP2U Checker', icon: ShieldCheck },
+    { href: '/admin/kuntanii-reports', label: 'Kuntanii Reports', icon: Flag },
     { href: '/admin/datagod', label: 'DataGod Console', icon: Activity },
     { href: '/admin/airtime', label: 'Airtime', icon: Phone },
     { href: '/admin/standard-bundles', label: 'Standard Bundles', icon: Wifi },
