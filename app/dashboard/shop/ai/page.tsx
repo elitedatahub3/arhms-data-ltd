@@ -78,8 +78,8 @@ export default function ShopAiPage() {
 
     return (
         <div className="mx-auto max-w-2xl space-y-5 pb-24">
-            <Link href="/dashboard/shop" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="h-4 w-4" /> Back to my shop
+            <Link href="/dashboard/shop" onClick={e => { if (window.history.length > 1) { e.preventDefault(); window.history.back() } }} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                <ArrowLeft className="h-4 w-4" /> Back
             </Link>
 
             <div className="flex items-center gap-4">

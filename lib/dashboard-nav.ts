@@ -42,7 +42,7 @@ export const shopNavItems: NavItem[] = [
  * Shop Setup is the exception: the shared /dashboard/shop/setup editor serves
  * subs too (the sub shop page already links to it). There is no Withdraw page
  * here; withdrawals are requested from the sub's own dashboard home
- * (/dashboard/sub).
+ * (/dashboard/sub). Shop AI is shared too: a sub's storefront is a shop_profiles row it owns.
  */
 export const subShopNavItems: NavItem[] = [
     { href: '/dashboard/sub/shop', label: 'Overview', icon: LayoutDashboard },
@@ -52,5 +52,6 @@ export const subShopNavItems: NavItem[] = [
     { href: '/dashboard/sub/storefront-orders', label: 'Store Orders', icon: ClipboardList },
     { href: '/dashboard/sub/ussd', label: 'USSD Code', icon: Smartphone },
     { href: '/dashboard/sub/sms', label: 'Customer SMS', icon: MessageSquare },
+    { href: '/dashboard/shop/ai', label: 'Shop AI', icon: Sparkles },
     { href: '/dashboard/sub/sub-agents', label: 'My Sub-Agents', icon: Crown },
 ]
