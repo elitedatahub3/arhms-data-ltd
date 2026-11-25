@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { MtnRegistrationDialog } from '@/components/dashboard/mtn-registration-dialog'
+import { MtnVerifyPanel } from '@/components/dashboard/mtn-verify-panel'
 import {
     Search,
     LayoutGrid,
@@ -46,7 +47,6 @@ import {
     FileText,
     CloudUpload,
     ExternalLink,
-    ShieldCheck,
     Smartphone,
     Receipt,
     Wallet,
@@ -1221,22 +1221,7 @@ export default function DataPackagesPage() {
                 </div>
 
                 {/* MTN Registration Check - all users */}
-                <button
-                    type="button"
-                    onClick={() => router.push('/dashboard/mtn-registration')}
-                    className="w-full max-w-3xl mx-auto bg-white dark:bg-[#1A1A1A] rounded-3xl p-6 shadow-md lg:shadow-lg flex items-center gap-4 text-left hover:shadow-xl transition-shadow"
-                >
-                    <div className="bg-amber-100 dark:bg-amber-900/30 p-4 rounded-2xl shrink-0">
-                        <ShieldCheck className="w-8 h-8 text-amber-600 dark:text-amber-500" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <h2 className="text-lg sm:text-xl font-bold leading-tight">Check MTN Number Registration</h2>
-                        <p className="text-sm sm:text-base text-muted-foreground mt-0.5">
-                            Check on Server 1, 2 or 3 · Server 1 sends unregistered numbers to MTN
-                        </p>
-                    </div>
-                    <ExternalLink className="w-6 h-6 text-muted-foreground shrink-0" />
-                </button>
+                <MtnVerifyPanel />
 
                 {/* Bulk Order Section - Agents, Admins, and Sub-Admins */}
                 {(dbUser?.role === 'agent' || dbUser?.role === 'admin' || dbUser?.role === 'sub-admin') && (
