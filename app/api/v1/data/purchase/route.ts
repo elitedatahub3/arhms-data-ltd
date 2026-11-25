@@ -172,7 +172,7 @@ export async function POST(request: NextRequest) {
         amount:      priceToCharge,
         description: `API: ${pkg.network} ${pkg.size} → ${cleanPhone}`,
         reference:   referenceCode,
-        source:      'api_purchase',
+        source:      'purchase',
         status:      'completed',
     }).then(() => {}).catch(() => {})
 

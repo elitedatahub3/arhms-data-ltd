@@ -235,7 +235,7 @@ export async function POST(request: NextRequest) {
         amount:      intent.totalPaid,
         description: `API ${intent.label}: GHS ${intent.billAmount.toFixed(2)} → ${intent.accountNumber}`,
         reference:   referenceCode,
-        source:      'api_purchase',
+        source:      'purchase',
         status:      'completed',
     }).then(() => {}).catch(() => {})
 
