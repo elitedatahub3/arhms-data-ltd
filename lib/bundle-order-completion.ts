@@ -27,6 +27,12 @@ export interface FinalizeBundleOrderParams {
     providerReference?: string | null
     providerResponse?: any
     existingOrder?: any
+    /**
+     * Special Bundles only: with status 'completed', return this much to the
+     * wallet for the legs that failed while the rest delivered. Claimed on
+     * bundle_orders.refunded_amount, so it is paid at most once.
+     */
+    partialRefund?: number
 }
 
 export interface FinalizeBundleOrderResult {
@@ -113,6 +119,46 @@ export async function finalizeBundleOrder(params: FinalizeBundleOrderParams): Pr
         }
     }
 
+    // ── Partial refund (Special Bundles) ─────────────────────────────────────
+    let partiallyRefunded = 0
+    const partial = Math.round(Number(params.partialRefund || 0) * 100) / 100
+    if (!refund && status === 'completed' && partial > 0 && existing.payment_status === 'paid' && existing.refunded_amount == null) {
+        const { data: claim } = await supabase
+            .from('bundle_orders')
+            .update({ refunded_amount: partial, updated_at: new Date().toISOString() })
+            .eq('id', orderId)
+            .is('refunded_amount', null)
+            .select('id')
+            .maybeSingle()
+        if (claim) {
+            const { error: creditError } = await supabase.rpc('credit_wallet_balance', { p_user_id: existing.user_id, p_amount: partial })
+            if (creditError) {
+                console.error('[BundleCompletion] CRITICAL: partial refund failed for', existing.reference_code, creditError)
+                await supabase.from('bundle_orders').update({ refunded_amount: null }).eq('id', orderId)
+                return { success: false, error: 'Partial refund failed; will retry.' }
+            }
+            partiallyRefunded = partial
+            try {
+                const { data: wallet } = await supabase.from('wallets').select('id').eq('user_id', existing.user_id).single()
+                if (wallet?.id) {
+                    const { error: txError } = await supabase.from('wallet_transactions').insert({
+                        wallet_id: wallet.id,
+                        user_id: existing.user_id,
+                        type: 'credit',
+                        amount: partial,
+                        description: `Partial refund: part of ${existing.network} ${existing.bundle_label} to ${existing.beneficiary_phone} could not be delivered`,
+                        reference: `REFUND-PART-${existing.reference_code}`,
+                        source: 'refund',
+                        status: 'completed',
+                    })
+                    if (txError) console.error('[BundleCompletion] Partial refund audit row failed (non-fatal):', txError.message)
+                }
+            } catch (e) {
+                console.error('[BundleCompletion] Partial refund audit row failed (non-fatal):', e)
+            }
+        }
+    }
+
     const finalStatus: BundleFinalStatus = refunded ? 'refunded' : status
     const now = new Date().toISOString()
 
@@ -147,7 +193,9 @@ export async function finalizeBundleOrder(params: FinalizeBundleOrderParams): Pr
     const title = finalStatus === 'completed'
         ? 'Bundle Delivered'
         : refunded ? 'Bundle Refunded' : 'Bundle Failed'
-    const message = finalStatus === 'completed'
+    const message = finalStatus === 'completed' && partiallyRefunded > 0
+        ? `Part of ${what} was delivered to ${existing.beneficiary_phone}; GHS ${partiallyRefunded.toFixed(2)} for the rest has been returned to your wallet. Ref: ${existing.reference_code}`
+        : finalStatus === 'completed'
         ? `${what} has been delivered to ${existing.beneficiary_phone}. Ref: ${existing.reference_code}`
         : refunded
             ? `${what} to ${existing.beneficiary_phone} could not be delivered, so GHS ${refundAmount.toFixed(2)} has been returned to your wallet. Ref: ${existing.reference_code}`

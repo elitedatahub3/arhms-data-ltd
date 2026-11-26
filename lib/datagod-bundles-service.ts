@@ -215,6 +215,62 @@ function bundleIdFor(category: string, b: any): string {
     return `${slug(category)}|${face}|${String(b?.display ?? '').trim()}`.slice(0, 200)
 }
 
+// ─── Special Bundles (multi-leg) ─────────────────────────────────────────────
+//
+// Datagod's API has no Special Bundles, but every one of theirs is the MTN
+// 406.89MB / GHS 3 Data bundle bought N times to the same number (0.81GB = x2,
+// … 6.10GB = x15). We build the same tab: one customer order, N purchases
+// ("legs", lib/bundle-legs.ts), N × the base cost.
+
+export const SPECIAL_FAMILY = 'special'
+export const SPECIAL_MULTIPLIERS = [2, 3, 5, 8, 10, 15] as const
+/** The base bundle: MTN, Data category, face value GHS 3 (406.89MB as of 2026-11). */
+const SPECIAL_BASE: { network: BundleNetwork; idPrefix: string } = { network: 'MTN', idPrefix: 'data|3.00|' }
+
+/** special|x<N>|<base bundle id>. The base id itself contains '|'. */
+export function specialBundleId(n: number, baseId: string): string {
+    return `${SPECIAL_FAMILY}|x${n}|${baseId}`
+}
+
+export function parseSpecialBundleId(id: unknown): { legs: number; baseId: string } | null {
+    if (typeof id !== 'string') return null
+    const m = /^special\|x(\d{1,2})\|(.+)$/.exec(id)
+    if (!m) return null
+    const legs = Number(m[1])
+    return legs >= 2 && legs <= 20 ? { legs, baseId: m[2] } : null
+}
+
+/** "406.89MB" × 2 → "0.81GB" (decimal GB, as Datagod and KingFlexy label them). */
+function specialSizeLabel(baseDisplay: string, n: number): string {
+    const m = /^([\d.]+)\s*(MB|GB)$/i.exec(baseDisplay.trim())
+    if (!m) return `${n} x ${baseDisplay}`
+    const mb = Number(m[1]) * (m[2].toUpperCase() === 'GB' ? 1000 : 1) * n
+    // Labelled in GB from half a gigabyte up, so x2 reads "0.81GB" like Datagod's own.
+    return mb >= 500 ? `${(mb / 1000).toFixed(2)}GB` : `${mb.toFixed(2)}MB`
+}
+
+function addSpecialBundles(network: BundleNetwork, bundles: DgBundle[], families: KfBundleFamily[]): void {
+    if (network !== SPECIAL_BASE.network) return
+    // If Datagod ever drops or renames the base bundle, the tab simply disappears.
+    const base = bundles.find(b => b.dgBundleId?.startsWith(SPECIAL_BASE.idPrefix))
+    if (!base) return
+    const specials: DgBundle[] = SPECIAL_MULTIPLIERS.map(n => ({
+        value: null,
+        packId: null,
+        amount: Math.round(base.amount * n * 100) / 100,
+        size: specialSizeLabel(base.size, n),
+        plan: null,
+        family: SPECIAL_FAMILY,
+        familyLabel: 'Special Bundles',
+        validity: null,
+        dgBundleId: specialBundleId(n, base.dgBundleId),
+        // Never purchasable as one call: purchaseBundleViaDatagod refuses special ids.
+        dgToken: base.dgToken,
+    }))
+    bundles.unshift(...specials)
+    families.unshift({ key: SPECIAL_FAMILY, label: 'Special Bundles', description: 'Low cost non-expiry bundles, special for you' })
+}
+
 function normaliseCatalog(network: BundleNetwork, d: any): DgCatalog {
     const categories: any[] = Array.isArray(d?.categories) ? d.categories : []
     const bundles: DgBundle[] = []
@@ -251,6 +307,8 @@ function normaliseCatalog(network: BundleNetwork, d: any): DgCatalog {
         }
         if (added && !families.some(f => f.key === family)) families.push({ key: family, label: name, description: null })
     }
+
+    addSpecialBundles(network, bundles, families)
 
     const ttl = Number(pick(d, 'token_valid_seconds', 'token_ttl_seconds'))
     return {
@@ -336,6 +394,12 @@ export async function purchaseBundleViaDatagod(params: DgBundlePurchaseParams, i
     const cfg = configError()
     if (cfg) return { outcome: 'definite_refusal', httpStatus: 0, error: 'DATAGOD_COMMISSION_KEY is missing or not a dg2_ key', keyProblem: true }
     if (!checkCircuit()) return { outcome: 'retry_same_ref', httpStatus: 0, error: 'Datagod temporarily unavailable (circuit open).' }
+
+    // A Special Bundle id carries the base bundle's token; buying it in one call
+    // would deliver ONE base bundle for N times the price. Legs only.
+    if (parseSpecialBundleId(params.dgBundleId)) {
+        return { outcome: 'definite_refusal', httpStatus: 0, error: 'Special Bundles must be sent as legs (lib/bundle-legs.ts), never as one purchase.' }
+    }
 
     // 1. A fresh token. A failed catalog read means nothing was sent, so the order
     //    can wait for the cron rather than being refunded on a blip.

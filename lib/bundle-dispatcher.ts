@@ -13,6 +13,10 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { isBundleNetwork, mapKfBundleStatus } from '@/lib/kingflexy-bundles-service'
 import { purchaseBundleForOrder, orderProvider, BUNDLE_PROVIDER_LABEL } from '@/lib/bundle-provider'
+import { isMultiLegOrder, progressMultiLegOrder } from '@/lib/bundle-legs'
+
+/** Legs a Special Bundle sends at once. Datagod allows ~10 purchases a minute per key. */
+const LEG_FIRST_BATCH = 6
 import { finalizeBundleOrder } from '@/lib/bundle-order-completion'
 import { BUNDLE_SETTING_KEYS } from '@/lib/bundle-pricing'
 
@@ -74,6 +78,13 @@ export async function sendBundleToProvider(order: any): Promise<void> {
 
     if (!isBundleNetwork(order.network)) {
         await finalizeBundleOrder({ orderId: order.id, status: 'failed', refund: true, note: `Unknown network ${order.network}.`, existingOrder: order })
+        return
+    }
+
+    // Special Bundles: N purchases, paced. The first batch goes now; the cron and
+    // the buyer's History page send the rest.
+    if (isMultiLegOrder(order)) {
+        await progressMultiLegOrder(order, { sends: LEG_FIRST_BATCH, checks: 0 })
         return
     }
 

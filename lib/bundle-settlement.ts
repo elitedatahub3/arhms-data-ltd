@@ -12,6 +12,7 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { getBundleOrderStatusForOrder, orderProvider, BUNDLE_PROVIDER_LABEL } from '@/lib/bundle-provider'
 import { finalizeBundleOrder } from '@/lib/bundle-order-completion'
+import { isMultiLegOrder, progressMultiLegOrder } from '@/lib/bundle-legs'
 import { sendBundleToProvider, triggerBundleDispatch, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
 
 export type BundleSettleOutcome =
@@ -30,6 +31,14 @@ export async function reconcileBundleOrder(
     opts: { hint?: 'completed' | 'failed'; hintReason?: string; resendIfMissing?: boolean } = {}
 ): Promise<BundleSettleOutcome> {
     if (FINAL.has(order.status)) return 'already_final'
+
+    // Special Bundles settle leg by leg. Only callers allowed to resend (cron,
+    // History) also send waiting legs; an admin Recheck only asks.
+    if (isMultiLegOrder(order)) {
+        if (order.status !== 'processing') return 'in_flight'
+        const r = await progressMultiLegOrder(order, { sends: opts.resendIfMissing ? 8 : 0, checks: 15 })
+        return r === 'partial' ? 'completed' : r
+    }
 
     // Always the provider that took the order, whatever the switch says now.
     const name = BUNDLE_PROVIDER_LABEL[orderProvider(order)]

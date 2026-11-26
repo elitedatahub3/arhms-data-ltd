@@ -97,9 +97,12 @@ export async function POST(request: NextRequest) {
     // Datagod orders need the provider / dg_bundle_id columns. Refuse the switch
     // rather than let every Datagod purchase fail on insert.
     if (rows.some(r => PROVIDER_KEYS.has(r.key) && r.value === 'datagod')) {
-        const probe = await supabase.from('bundle_orders').select('provider, dg_bundle_id').limit(1)
-        if (probe.error) {
-            return NextResponse.json({ error: 'Run migration 20261127000000_bundle_provider.sql before switching a network to Datagod.' }, { status: 409 })
+        const [probe, legsProbe] = await Promise.all([
+            supabase.from('bundle_orders').select('provider, dg_bundle_id, refunded_amount').limit(1),
+            supabase.from('bundle_order_legs').select('id').limit(1),
+        ])
+        if (probe.error || legsProbe.error) {
+            return NextResponse.json({ error: 'Run migrations 20261127000000_bundle_provider.sql and 20261127010000_bundle_order_legs.sql before switching a network to Datagod.' }, { status: 409 })
         }
     }
 
