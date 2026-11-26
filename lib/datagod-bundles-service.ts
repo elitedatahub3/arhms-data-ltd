@@ -196,21 +196,6 @@ export interface DgCatalog extends KfBundleCatalog {
     fetchedAt: number
 }
 
-/**
- * The token's first segment is base64url JSON, e.g.
- *   {"network":"TELECEL","value":"BDLHRBOOST2","amount":1,"display":"…","category":"Hourly","issuedAt":…}
- * `value` is the provider's stable product code. Reading it is a convenience, not
- * a contract: if it ever stops decoding we fall back to category + display.
- */
-function tokenPayload(token: string): any {
-    try {
-        const seg = token.split('.')[0]
-        return JSON.parse(Buffer.from(seg.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))
-    } catch {
-        return null
-    }
-}
-
 /** Short, URL-safe family key from a category name ("Fuse (Mins + Data)" → "fuse-mins-data"). */
 function slug(s: string): string {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bundles'
@@ -220,15 +205,14 @@ function slug(s: string): string {
  * Real shape (probed 2026-11-26):
  *   data: { network, token_valid_seconds, categories: [{ name, bundles: [
  *     { bundle_token, display, face_amount, pay_amount, customer_cashback } ] }] }
- * There is no bundle id, so one is derived (see bundleIdFor) that is the same on
- * every catalog read, which is what lets dispatch find the bundle again with a
- * fresh token.
+ * There is no bundle id, so one is derived from documented fields only (category,
+ * display, face_amount) and is the same on every catalog read. That is what lets
+ * dispatch find the bundle again with a fresh token. The token itself is never
+ * parsed or stored: Datagod's docs say to send it back untouched.
  */
-function bundleIdFor(category: string, b: any, token: string): string {
+function bundleIdFor(category: string, b: any): string {
     const face = Number(b?.face_amount ?? 0).toFixed(2)
-    const code = tokenPayload(token)?.value
-    if (typeof code === 'string' && code) return `${code}:${face}`
-    return `${slug(category)}:${String(b?.display ?? '').trim()}:${face}`.slice(0, 200)
+    return `${slug(category)}|${face}|${String(b?.display ?? '').trim()}`.slice(0, 200)
 }
 
 function normaliseCatalog(network: BundleNetwork, d: any): DgCatalog {
@@ -247,7 +231,7 @@ function normaliseCatalog(network: BundleNetwork, d: any): DgCatalog {
             const size = String(b?.display ?? '').trim()
             // A row we cannot buy back is worse than a missing row.
             if (!token || !(amount > 0) || !size || b?.available === false) continue
-            const dgBundleId = bundleIdFor(name, b, token)
+            const dgBundleId = bundleIdFor(name, b)
             // Two rows deriving one id would make purchase ambiguous: keep the first.
             if (seen.has(dgBundleId)) continue
             seen.add(dgBundleId)
@@ -407,13 +391,18 @@ export async function purchaseBundleViaDatagod(params: DgBundlePurchaseParams, i
     if (res.status === 409) {
         // Token aged out between our catalog read and the POST. Nothing charged:
         // re-read and resend under the SAME reference, once.
-        if (hasErrorCode(res, 'BUNDLE_TOKEN_EXPIRED')) {
+        // PRICE_CHANGED: Datagod repriced between our catalog read and the POST.
+        // Nothing charged and the reference is released, so re-read once. The retry
+        // still refuses if the new price is above what the customer paid (step 2).
+        if (hasErrorCode(res, 'BUNDLE_TOKEN_EXPIRED') || hasErrorCode(res, 'PRICE_CHANGED')) {
+            invalidateDgBundleCatalog()
             return isRetry
                 ? { outcome: 'retry_same_ref', httpStatus: 409, error: message, raw }
                 : purchaseBundleViaDatagod(params, true)
         }
-        if (hasErrorCode(res, 'PRICE_CHANGED')) {
-            invalidateDgBundleCatalog()
+        // Datagod does not offer this bundle to this number. Nothing charged, and a
+        // retry will not change it: refund so the buyer can pick another bundle.
+        if (hasErrorCode(res, 'BUNDLE_UNAVAILABLE_FOR_NUMBER')) {
             return { outcome: 'definite_refusal', httpStatus: 409, error: message, raw }
         }
         // REFERENCE_REUSED: Datagod has a DIFFERENT order under our reference. Do not
@@ -426,8 +415,9 @@ export async function purchaseBundleViaDatagod(params: DgBundlePurchaseParams, i
     // 402 = our Datagod wallet is short. Nothing charged.
     if (res.status === 402) return { outcome: 'kf_wallet_empty', httpStatus: 402, error: message, raw }
 
-    // 401/403: our key is missing, pending, revoked or the wrong type. Nothing
-    // charged, but every order will keep failing until an admin fixes it.
+    // 401/403: our key is missing, pending, revoked or the wrong type, or the
+    // account itself is blocked (PHONE_NOT_VERIFIED, NOT_AVAILABLE, suspended).
+    // Nothing charged, but every order will keep failing until an admin acts.
     if (res.status === 401 || res.status === 403) return { outcome: 'definite_refusal', httpStatus: res.status, error: message, raw, keyProblem: true }
 
     if (res.status === 404) invalidateDgBundleCatalog()

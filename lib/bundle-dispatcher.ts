@@ -133,8 +133,8 @@ export async function sendBundleToProvider(order: any): Promise<void> {
                 }).catch(() => {})
             } else if (result.keyProblem) {
                 await sendPushToAdmins({
-                    title: `${name} rejected our API key`,
-                    body: `Standard Bundle ${order.reference_code} was refused (HTTP ${result.httpStatus}) and refunded. Check the ${name} key is set, approved and a Commission Services key, or switch the network back.`,
+                    title: `${name} refused our account`,
+                    body: `Standard Bundle ${order.reference_code} was refused and refunded: ${(result.error || `HTTP ${result.httpStatus}`).slice(0, 160)}. Fix it with ${name} or switch the network back.`,
                     url: BUNDLES_ADMIN_PATH,
                 }).catch(() => {})
             }
