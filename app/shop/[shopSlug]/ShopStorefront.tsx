@@ -16,7 +16,7 @@ import {
     Phone, Mail, MessageCircle, ShoppingCart, Loader2,
     CheckCircle2, AlertCircle, X, Search, Zap, Smartphone, ChevronDown, Check, Menu, Bell,
     History, TrendingUp, Coins, Calendar, CalendarRange, RefreshCw, Info, Clock, Copy, ArrowRight, AlertTriangle, Users, Target, Sparkles, Download, Share2, GraduationCap, Store, BadgeCheck
-, Receipt, Wallet } from 'lucide-react'
+, Receipt, Wallet, Wifi } from 'lucide-react'
 import {
     ID_TYPES, REGIONS, AFA_REQUIRED_FIELDS, MIN_AFA_AGE,
     validateId, maskIdNumber, ageFromDob, maxDobInputValue,
@@ -41,6 +41,7 @@ import { MtnRegistrationDialog } from '@/components/dashboard/mtn-registration-d
 import { AnnouncementModal } from '@/components/announcements/announcement-modal'
 import type { AnnouncementTone } from '@/lib/announcement-tones'
 import { isUssdEnabled } from '@/lib/ussd-availability'
+import StorefrontBundles from '@/components/shop/storefront-bundles'
 
 const ShopPwaInstallPrompt = dynamic(() => import('@/components/ShopPwaInstallPrompt'), { ssr: false })
 
@@ -128,6 +129,8 @@ interface ShopData {
     banner_pos_y?: number
     banner_zoom?: number
     utilities_enabled?: boolean
+    /** Owner switched Standard Bundles on (My Shop > Pricing). */
+    bundles_enabled?: boolean
     ussd_code?: string | null
     ussd_status?: string | null
 }
@@ -282,7 +285,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     
     // Global State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-    const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities'>('data')
+    const [activeTab, setActiveTab] = useState<'data' | 'airtime' | 'mashup' | 'results_checker' | 'afa' | 'utilities' | 'bundles'>('data')
     const [showAnnouncementModal, setShowAnnouncementModal] = useState(false)
     const [loading, setLoading] = useState(false)
     const [pageLoading, setPageLoading] = useState(true)
@@ -387,6 +390,14 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     // The owner must have priced AFA; /api/shop/afa/config returns enabled:false otherwise.
     const isShopAfaEnabled = isGlobalAfaEnabled && !!afaConfig?.selling_price
 
+    // Standard Bundles: admin master + storefront switches, and the owner's own switch.
+    const bundleNetworks = (['MTN', 'Telecel', 'AT'] as const).filter(n => adminSettings[`bundles_enabled_${n.toLowerCase()}`] !== 'false')
+    const isShopBundlesEnabled =
+        adminSettings['bundles_enabled'] === 'true' &&
+        adminSettings['storefront_bundles_enabled'] === 'true' &&
+        shop.bundles_enabled === true &&
+        bundleNetworks.length > 0
+
     const [ussdCopied, setUssdCopied] = useState(false)
 
     const [isSpecialMtnMashupHidden, setIsSpecialMtnMashupHidden] = useState(adminSettings['special_mtn_mashup_hidden'] === 'true')
@@ -438,7 +449,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             .catch(() => {})
     }, [])
 
-    const networks = useMemo(() => {
+    const realNetworks = useMemo(() => {
         const available = NETWORK_ORDER.filter(n => {
             if (n === 'Special MTN Mashup' && isSpecialMtnMashupHidden) return false
             if (n === 'EXPRESS MTN' && isExpressMtnHidden) return false
@@ -448,6 +459,28 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
         const extra = [...new Set(packages.map(p => p.network))].filter(n => !(NETWORK_ORDER as string[]).includes(n))
         return [...available, ...extra]
     }, [packages, isSpecialMtnMashupHidden, isExpressMtnHidden, isStandardMtnHidden])
+
+    // When the shop sells no MTN data of its own, the MTN Special Bundles (Datagod)
+    // take MTN's place in the DATA tile; every other Standard Bundle stays in the
+    // Standard Bundles tile. When it does sell MTN data, Specials live there too.
+    const shopSellsMtnData = realNetworks.includes('MTN') || realNetworks.includes('EXPRESS MTN')
+    const specialInDataTile =
+        isShopBundlesEnabled &&
+        !shopSellsMtnData &&
+        bundleNetworks.includes('MTN') &&
+        String(adminSettings['bundles_provider_mtn'] || '').replace(/"/g, '') === 'datagod'
+
+    const networks = useMemo(
+        () => (specialInDataTile ? ['MTN', ...realNetworks] : realNetworks),
+        [specialInDataTile, realNetworks]
+    )
+
+    // Back from a Paystack card page for a Standard Bundle: open the tab whose
+    // panel resumes the wait (it reads ?bundle_ref itself).
+    useEffect(() => {
+        if (isShopBundlesEnabled && new URLSearchParams(window.location.search).get('bundle_ref')) setActiveTab('bundles')
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
 
     const [activeNetwork, setActiveNetwork] = useState<string>(networks[0] || '')
 
@@ -1588,7 +1621,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     // Four services wrap to a 2x2 rather than squeezing into one row —
                     // the tiles get unreadably narrow on a phone otherwise.
                     (() => {
-                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled, !!shop.utilities_enabled].filter(Boolean).length
+                        const count = [true, isShopAirtimeEnabled, isShopRcEnabled, isShopAfaEnabled, !!shop.utilities_enabled, isShopBundlesEnabled].filter(Boolean).length
                         if (count >= 4) return "grid-cols-2"
                         if (count === 3) return "grid-cols-3"
                         if (count === 2) return "grid-cols-2"
@@ -1622,6 +1655,15 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                         <ServiceTile label="PAY BILLS" active={activeTab === 'utilities'} onClick={() => { setActiveTab('utilities'); setIsAirtimeOpen(false) }}>
                             <div className="absolute inset-0 flex items-center justify-center pb-6 bg-gradient-to-br from-emerald-500 to-teal-700">
                                 <Receipt className="h-1/3 w-1/3 text-white transition-transform duration-300 group-hover:scale-110" />
+                            </div>
+                        </ServiceTile>
+                    )}
+
+                    {/* STANDARD BUNDLES — owner switched on in My Shop > Pricing. */}
+                    {isShopBundlesEnabled && (
+                        <ServiceTile label="STANDARD BUNDLES" active={activeTab === 'bundles'} onClick={() => { setActiveTab('bundles'); setIsAirtimeOpen(false) }}>
+                            <div className="absolute inset-0 flex items-center justify-center pb-6 bg-gradient-to-br from-sky-500 to-indigo-700">
+                                <Wifi className="h-1/3 w-1/3 text-white transition-transform duration-300 group-hover:scale-110" />
                             </div>
                         </ServiceTile>
                     )}
@@ -2031,6 +2073,21 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     </div>
                 )}
 
+                {/* ── Standard Bundles Tab Content ── */}
+                {isShopBundlesEnabled && activeTab === 'bundles' && (
+                    <div className="bg-white dark:bg-[#151c2c] rounded-2xl border border-gray-100 dark:border-gray-800 p-4 sm:p-6">
+                        <h2 className="text-lg font-black mb-1">Standard Bundles</h2>
+                        <p className="text-xs text-gray-500 mb-4">Pick a network and a bundle, then pay with Mobile Money.</p>
+                        <StorefrontBundles
+                            shopSlug={shop.shop_slug}
+                            brandColor={shop.brand_color}
+                            // Specials already sit in DATA (as MTN) when the shop has no MTN data.
+                            scope={specialInDataTile ? 'no-special' : 'all'}
+                            networks={[...bundleNetworks]}
+                        />
+                    </div>
+                )}
+
                 {/* ── Utilities (Pay Bills) Tab Content ── */}
                 {shop.utilities_enabled && activeTab === 'utilities' && (
                     <div className="bg-white dark:bg-[#151c2c] rounded-2xl border border-gray-100 dark:border-gray-800 p-4 sm:p-6">
@@ -2300,7 +2357,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 )}
 
                 {/* Search Bar matching screenshot */}
-                {activeTab === 'data' && (
+                {activeTab === 'data' && !(specialInDataTile && activeNetwork === 'MTN') && (
                     <div className="flex gap-3 mb-8">
                         <div className="relative flex-1">
                             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -2317,8 +2374,12 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     </div>
                 )}
 
-                {/* Package grid */}
-                {filteredPackages.length === 0 ? (
+                {/* Package grid — or, when MTN is the Special Bundles stand-in, those instead */}
+                {activeTab === 'data' && specialInDataTile && activeNetwork === 'MTN' ? (
+                    <div className="mb-6">
+                        <StorefrontBundles shopSlug={shop.shop_slug} brandColor={shop.brand_color} scope="special" networks={['MTN']} />
+                    </div>
+                ) : filteredPackages.length === 0 ? (
                     <div className="text-center py-24 text-gray-400 flex flex-col items-center">
                         <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-900 flex items-center justify-center mb-6">
                             <AlertCircle className="w-8 h-8 opacity-40" />

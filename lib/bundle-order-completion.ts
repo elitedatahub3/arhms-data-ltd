@@ -12,6 +12,7 @@
  */
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToUser } from '@/lib/web-push'
+import { creditShopBundleProfit } from '@/lib/bundle-shop'
 
 export type BundleFinalStatus = 'processing' | 'completed' | 'failed' | 'refunded'
 
@@ -183,12 +184,38 @@ export async function finalizeBundleOrder(params: FinalizeBundleOrderParams): Pr
 
     if (finalStatus === 'processing') return { success: true, refunded, order: existing }
 
+    // Storefront orders: the shop earns its percentage only on a delivered bundle.
+    // Runs on every completed settle (idempotent), so a failed credit is retried.
+    if (finalStatus === 'completed') {
+        await creditShopBundleProfit(supabase, existing, partiallyRefunded || Number(existing.refunded_amount || 0))
+            .catch(e => console.error('[BundleCompletion] Shop profit credit failed (non-fatal):', e))
+    }
+
     // A refund that was already given earlier must not be announced again when a
     // later failure signal arrives for the same order.
     const alreadyAnnounced = existing.status === finalStatus
     if (alreadyAnnounced) return { success: true, refunded, order: existing }
 
     // ── Notify ───────────────────────────────────────────────────────────────
+    // A storefront order belongs to the shop owner; the buyer was a guest. Tell
+    // the owner which customer to settle with when money comes back to them.
+    if (existing.source === 'storefront' && finalStatus !== 'completed') {
+        const shopTitle = refunded ? 'Shop bundle refunded' : 'Shop bundle failed'
+        const shopMessage = refunded
+            ? `Your shop customer's ${existing.network} ${existing.bundle_label} to ${existing.beneficiary_phone} could not be delivered. GHS ${refundAmount.toFixed(2)} (what they paid) is back in your wallet - please refund your customer. Ref: ${existing.reference_code}`
+            : `Your shop customer's ${existing.network} ${existing.bundle_label} to ${existing.beneficiary_phone} could not be delivered. Our team is looking into it. Ref: ${existing.reference_code}`
+        await supabase.from('notifications').insert({ user_id: existing.user_id, title: shopTitle, message: shopMessage, type: 'order_update', action_url: '/dashboard/shop/orders' })
+        await sendPushToUser(existing.user_id, { title: shopTitle, body: shopMessage, url: '/dashboard/shop/orders', tag: `bundle-${existing.reference_code}` }).catch(() => {})
+        return { success: true, refunded, order: existing }
+    }
+    if (existing.source === 'storefront' && partiallyRefunded > 0) {
+        const msg = `Part of your shop customer's ${existing.network} ${existing.bundle_label} to ${existing.beneficiary_phone} was delivered. GHS ${partiallyRefunded.toFixed(2)} for the rest is back in your wallet - please refund your customer that amount. Ref: ${existing.reference_code}`
+        await supabase.from('notifications').insert({ user_id: existing.user_id, title: 'Shop bundle partly delivered', message: msg, type: 'order_update', action_url: '/dashboard/shop/orders' })
+        await sendPushToUser(existing.user_id, { title: 'Shop bundle partly delivered', body: msg, url: '/dashboard/shop/orders', tag: `bundle-${existing.reference_code}` }).catch(() => {})
+        return { success: true, refunded, order: existing }
+    }
+    if (existing.source === 'storefront') return { success: true, refunded, order: existing }
+
     const what = `${existing.network} ${existing.bundle_label}`
     const title = finalStatus === 'completed'
         ? 'Bundle Delivered'

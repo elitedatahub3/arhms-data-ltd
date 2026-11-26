@@ -19,6 +19,7 @@ import {
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { MAX_SHOP_PROFIT_GHS } from '@/lib/shop-price-limits'
+import ShopBundlePricing from '@/components/shop/bundle-pricing'
 
 interface Package {
     id: string
@@ -746,6 +747,9 @@ export default function ShopPricingPage() {
                     )}
                 </div>
             )}
+
+            {/* Standard Bundles — one percentage, saved on its own (own Save button). */}
+            <ShopBundlePricing />
 
             {/* AFA Registration Section — one price, unlike the RC grid. Cost is
                 the owner's own role price, returned by /api/shop/afa-pricing so

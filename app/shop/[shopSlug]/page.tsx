@@ -96,7 +96,23 @@ export default async function ShopPage({ params }: Props) {
             // with this and ignores whatever the browser sends, so the checkout sheet
             // has to read the same key or it will ask for details the gateway never uses.
             'active_payment_provider_shop',
+            // Standard Bundles tile (lib/bundle-shop.ts)
+            'bundles_enabled',
+            'storefront_bundles_enabled',
+            'bundles_enabled_mtn',
+            'bundles_enabled_telecel',
+            'bundles_enabled_at',
+            'bundles_provider_mtn',
         ]) as any)
+
+    // Read on its own so a database without migration 20261127020000 (no such
+    // column yet) just hides Standard Bundles instead of 404ing every storefront.
+    const { data: bundleFlags } = await (supabaseAdmin
+        .from('shop_profiles')
+        .select('bundles_enabled')
+        .eq('id', shop.id)
+        .maybeSingle() as any)
+    shop.bundles_enabled = bundleFlags?.bundles_enabled === true
 
     const adminSettingsMap: Record<string, string> = {}
     for (const row of adminSettings || []) {

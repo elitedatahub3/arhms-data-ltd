@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     since.setHours(0, 0, 0, 0)
     const { data: today } = await supabase
         .from('bundle_orders')
-        .select('status, total_paid, cost_amount, kf_commission')
+        .select('status, total_paid, cost_amount, kf_commission, shop_profit')
         .gte('created_at', since.toISOString())
 
     const summary = { orders: 0, completed: 0, sales: 0, markup: 0, kfCommission: 0 }
@@ -49,7 +49,8 @@ export async function GET(request: NextRequest) {
         if (o.status === 'completed') {
             summary.completed++
             summary.sales += Number(o.total_paid || 0)
-            summary.markup += Number(o.total_paid || 0) - Number(o.cost_amount || 0)
+            // A storefront order's shop_profit belongs to the shop, not to us.
+            summary.markup += Number(o.total_paid || 0) - Number(o.cost_amount || 0) - Number(o.shop_profit || 0)
             summary.kfCommission += Number(o.kf_commission || 0)
         }
     }

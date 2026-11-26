@@ -21,6 +21,7 @@ const TIERS = [
 const SWITCHES: { key: string; label: string; hint: string }[] = [
     { key: 'bundles_enabled', label: 'Standard Bundles on', hint: 'Master switch. Off hides the page and stops all new orders.' },
     { key: 'page_access_standard_bundles', label: 'Show dashboard page', hint: 'Page-access toggle for /dashboard/standard-bundles.' },
+    { key: 'storefront_bundles_enabled', label: 'Open to shop storefronts', hint: 'Lets shop owners switch Standard Bundles on and set their own % (My Shop > Pricing).' },
     { key: 'bundles_enabled_mtn', label: 'MTN', hint: '' },
     { key: 'bundles_enabled_telecel', label: 'Telecel', hint: '' },
     { key: 'bundles_enabled_at', label: 'AirtelTigo', hint: '' },

@@ -141,7 +141,11 @@ export async function processBundleDirectOrder(
             status: 'pending',
             payment_method: 'gateway',
             payment_status: 'paid',
-            source: 'dashboard',
+            // Storefront checkouts carry the shop and its cut; the owner is user_id.
+            source: columns.source === 'storefront' ? 'storefront' : 'dashboard',
+            ...(columns.source === 'storefront' && columns.shop_id
+                ? { shop_id: columns.shop_id, shop_profit: Number(columns.shop_profit || 0) }
+                : {}),
         })
         .select()
         .single()

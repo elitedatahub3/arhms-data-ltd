@@ -20,6 +20,7 @@ import { resolveBundleTier } from '@/lib/bundle-pricing'
 import { buildBundleIntent, bundleOrderColumns, isBundlesDashboardOpen, loadBundleSettings } from '@/lib/bundle-order-intent'
 import { BUNDLE_PAYMENT_PREFIX, isBundlePaymentReference } from '@/lib/bundle-order-payments'
 import { BUNDLES_USER_PATH } from '@/lib/bundle-order-completion'
+import { isBundlesStorefrontOpen, loadBundleShop, shopBundleMarkup, type StorefrontShop } from '@/lib/bundle-shop'
 
 /**
  * Direct-pay (MoMo / card) Standard Bundle purchase.
@@ -46,11 +47,6 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        const supabaseUserClient = await createRouteHandlerClient()
-        const { data: { user: authUser } } = await supabaseUserClient.auth.getUser()
-        if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const userId = authUser.id
         const supabase = createServerClient() as any
 
         let body: any
@@ -60,7 +56,25 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
         }
 
-        const { network, bundleKey, phone, momoPhone, momoNetwork, otpCode, reference: existingRef, quote } = body || {}
+        const { network, bundleKey, phone, momoPhone, momoNetwork, otpCode, reference: existingRef, quote, shopSlug } = body || {}
+
+        // ── Who is buying ────────────────────────────────────────────────────
+        // A signed-in customer buys for themselves. A storefront buyer is a GUEST,
+        // so the shop owner stands as the account of record, exactly as storefront
+        // bill payments do (lib/bundle-shop.ts).
+        let userId: string
+        let shop: StorefrontShop | null = null
+        if (typeof shopSlug === 'string' && shopSlug.trim()) {
+            const found = await loadBundleShop(supabase, shopSlug)
+            if (!found.shop) return NextResponse.json({ error: found.error }, { status: found.status })
+            shop = found.shop
+            userId = shop.owner_id
+        } else {
+            const supabaseUserClient = await createRouteHandlerClient()
+            const { data: { user: authUser } } = await supabaseUserClient.auth.getUser()
+            if (!authUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+            userId = authUser.id
+        }
 
         const [settings, { data: profile }, { data: payRows }] = await Promise.all([
             loadBundleSettings(supabase),
@@ -69,13 +83,15 @@ export async function POST(request: NextRequest) {
         ])
         if (!profile) return NextResponse.json({ error: 'User not found' }, { status: 404 })
 
-        if (!isBundlesDashboardOpen(settings)) {
+        if (shop ? !isBundlesStorefrontOpen(settings) : !isBundlesDashboardOpen(settings)) {
             return NextResponse.json({ error: 'Standard Bundles are not available right now.' }, { status: 403 })
         }
 
+        // Priced at the owner's tier for a storefront; the shop's cut goes on top.
         const built = await buildBundleIntent({ network, bundleKey, phone }, settings, resolveBundleTier(profile))
         if (!built.ok) return NextResponse.json({ error: built.error }, { status: built.status })
         const intent = built.intent
+        const shopProfit = shop ? shopBundleMarkup(intent.totalPaid, shop.bundle_markup_percent) : 0
 
         const payMap: Record<string, any> = {}
         for (const row of ((payRows as any[]) || [])) payMap[row.key] = row.value
@@ -85,7 +101,7 @@ export async function POST(request: NextRequest) {
 
         // Gateway fee on top of the bundle price. Same rule as the airtime/data
         // checkouts: Paystack, PaySwitch and Hubtel charge us, Moolre charges the payer.
-        const subtotal = intent.totalPaid
+        const subtotal = Math.round((intent.totalPaid + shopProfit) * 100) / 100
         let gatewayFee = 0
         let totalAmount = subtotal
         if (gateway === 'paystack' || gateway === 'paystack_momo' || gateway === 'payswitch') {
@@ -165,7 +181,10 @@ export async function POST(request: NextRequest) {
                         label: intent.label,
                         // Priced at checkout and settled verbatim: the customer gets
                         // exactly the bundle and price they agreed to.
-                        order: bundleOrderColumns(intent),
+                        order: shop
+                            ? { ...bundleOrderColumns(intent), total_paid: subtotal, shop_profit: shopProfit, shop_id: shop.id, source: 'storefront' }
+                            : bundleOrderColumns(intent),
+                        ...(shop ? { shop_id: shop.id, shop_slug: String(shopSlug).trim(), buyer_phone: intent.phone } : {}),
                     },
                 })
                 .select()
@@ -202,7 +221,9 @@ export async function POST(request: NextRequest) {
                     email: userEmail,
                     amount: Math.round(totalAmount * 100), // pesewas
                     reference,
-                    callback_url: `${process.env.NEXT_PUBLIC_APP_URL}${BUNDLES_USER_PATH}?reference=${reference}`,
+                    callback_url: shop
+                        ? `${process.env.NEXT_PUBLIC_APP_URL}/shop/${encodeURIComponent(String(shopSlug).trim())}?bundle_ref=${reference}`
+                        : `${process.env.NEXT_PUBLIC_APP_URL}${BUNDLES_USER_PATH}?reference=${reference}`,
                     metadata: { order_type: 'bundle_order', network: intent.network },
                 }),
             })
