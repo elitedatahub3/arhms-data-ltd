@@ -165,6 +165,8 @@ export interface KfBundle {
     family: string
     familyLabel: string
     validity: string | null
+    /** Set only on Datagod bundles (lib/datagod-bundles-service.ts): their stable catalog id. */
+    dgBundleId?: string | null
 }
 
 export interface KfBundleFamily {

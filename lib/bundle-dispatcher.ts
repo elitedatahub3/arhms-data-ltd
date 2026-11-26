@@ -11,7 +11,8 @@
  */
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { purchaseBundleViaKingFlexy, isBundleNetwork, mapKfBundleStatus } from '@/lib/kingflexy-bundles-service'
+import { isBundleNetwork, mapKfBundleStatus } from '@/lib/kingflexy-bundles-service'
+import { purchaseBundleForOrder, orderProvider, BUNDLE_PROVIDER_LABEL } from '@/lib/bundle-provider'
 import { finalizeBundleOrder } from '@/lib/bundle-order-completion'
 import { BUNDLE_SETTING_KEYS } from '@/lib/bundle-pricing'
 
@@ -54,7 +55,7 @@ export async function triggerBundleDispatch(orderId: string, opts: { force?: boo
             .maybeSingle()
         if (!claimed) return { dispatched: false, reason: 'already claimed' }
 
-        await sendBundleToKingFlexy(claimed)
+        await sendBundleToProvider(claimed)
         return { dispatched: true }
     } catch (e: any) {
         console.error('[BundleDispatch] Unexpected error for', orderId, e)
@@ -63,25 +64,20 @@ export async function triggerBundleDispatch(orderId: string, opts: { force?: boo
 }
 
 /**
- * POSTs an already-claimed ('processing') order. Also used by the cron to re-send an
- * order KingFlexy says it never received — same reference, so it is safe.
+ * POSTs an already-claimed ('processing') order to the provider stored on it
+ * (bundle_orders.provider). Also used by the cron to re-send an order the provider
+ * says it never received — same reference, so it is safe.
  */
-export async function sendBundleToKingFlexy(order: any): Promise<void> {
+export async function sendBundleToProvider(order: any): Promise<void> {
     const supabase = createServerClient() as any
+    const name = BUNDLE_PROVIDER_LABEL[orderProvider(order)]
 
     if (!isBundleNetwork(order.network)) {
         await finalizeBundleOrder({ orderId: order.id, status: 'failed', refund: true, note: `Unknown network ${order.network}.`, existingOrder: order })
         return
     }
 
-    const result = await purchaseBundleViaKingFlexy({
-        network: order.network,
-        phone: order.beneficiary_phone,
-        reference: order.reference_code,
-        value: order.kf_value,
-        amount: Number(order.cost_amount),
-        packId: order.kf_pack_id,
-    })
+    const result = await purchaseBundleForOrder(order)
 
     switch (result.outcome) {
         case 'accepted': {
@@ -100,7 +96,7 @@ export async function sendBundleToKingFlexy(order: any): Promise<void> {
                     orderId: order.id,
                     status: 'failed',
                     refund: true,
-                    note: 'KingFlexy could not deliver the bundle.',
+                    note: `${name} could not deliver the bundle.`,
                     providerReference: result.orderReference ?? null,
                     providerResponse: result.raw ?? null,
                     existingOrder: order,
@@ -125,14 +121,20 @@ export async function sendBundleToKingFlexy(order: any): Promise<void> {
                 orderId: order.id,
                 status: 'failed',
                 refund: true,
-                note: `KingFlexy refused the order (HTTP ${result.httpStatus}): ${result.error ?? 'no reason given'}.`,
+                note: `${name} refused the order (HTTP ${result.httpStatus}): ${result.error ?? 'no reason given'}.`,
                 providerResponse: result.raw ?? null,
                 existingOrder: order,
             })
             if (result.outcome === 'kf_wallet_empty') {
                 await sendPushToAdmins({
-                    title: 'Top up the KingFlexy wallet',
-                    body: `Standard Bundle ${order.reference_code} was refused for low KingFlexy balance and refunded. Bundles will keep failing until it is topped up.`,
+                    title: `Top up the ${name} wallet`,
+                    body: `Standard Bundle ${order.reference_code} was refused for low ${name} balance and refunded. Bundles will keep failing until it is topped up.`,
+                    url: BUNDLES_ADMIN_PATH,
+                }).catch(() => {})
+            } else if (result.keyProblem) {
+                await sendPushToAdmins({
+                    title: `${name} rejected our API key`,
+                    body: `Standard Bundle ${order.reference_code} was refused (HTTP ${result.httpStatus}) and refunded. Check the ${name} key is set, approved and a Commission Services key, or switch the network back.`,
                     url: BUNDLES_ADMIN_PATH,
                 }).catch(() => {})
             }
@@ -142,12 +144,12 @@ export async function sendBundleToKingFlexy(order: any): Promise<void> {
         case 'retry_same_ref':
         case 'unknown':
         default: {
-            // May or may not exist upstream. Stay 'processing'; the cron asks
-            // KingFlexy and re-sends with the same reference if they never got it.
+            // May or may not exist upstream. Stay 'processing'; the cron asks the
+            // provider and re-sends with the same reference if they never got it.
             await supabase
                 .from('bundle_orders')
                 .update({
-                    fulfillment_note: `Awaiting KingFlexy (${result.outcome}${result.httpStatus ? `, HTTP ${result.httpStatus}` : ''}): ${result.error ?? ''}`.slice(0, 500),
+                    fulfillment_note: `Awaiting ${name} (${result.outcome}${result.httpStatus ? `, HTTP ${result.httpStatus}` : ''}): ${result.error ?? ''}`.slice(0, 500),
                     provider_response: result.raw ?? null,
                     updated_at: new Date().toISOString(),
                 })

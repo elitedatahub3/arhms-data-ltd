@@ -3,9 +3,13 @@ import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { reconcileBundleOrder, retryMissedRefund } from '@/lib/bundle-settlement'
 import { triggerBundleDispatch, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
+import { orderProvider, BUNDLE_PROVIDER_LABEL } from '@/lib/bundle-provider'
 
 /**
- * Reconciles Standard Bundle orders against KingFlexy. Schedule on cron-job.org
+ * Reconciles Standard Bundle orders against the provider stored on each order
+ * (KingFlexy or Datagod). The path keeps its KingFlexy name because cron-job.org
+ * already calls it. Datagod sends no webhooks, so for Datagod orders this sweep
+ * (plus the buyer opening History) is the ONLY way they settle. Schedule on cron-job.org
  * every 2–5 minutes, non-www URL, `Authorization: Bearer $CRON_SECRET`.
  *
  * Not gated on CRON_JOBS_ENABLED, like sync-kingflexy-utility: it settles money
@@ -24,6 +28,10 @@ export const maxDuration = 60
 const STALE_MINUTES = 2
 const BATCH = 25
 const RESCUE_WINDOW_HOURS = 24
+// Datagod's default per-key limits are 30 status and 10 purchase calls a minute,
+// shared with live traffic, so the sweep stays well under both.
+const DATAGOD_STATUS_PER_RUN = 15
+const DATAGOD_SENDS_PER_RUN = 5
 
 export async function GET(request: NextRequest) {
     if (request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -52,14 +60,18 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: error.message }, { status: 500 })
         }
 
+        let dgChecks = 0
         for (const order of (inFlight || [])) {
+            // Datagod rate-limits status calls per key per minute; the rest wait
+            // for the next run (oldest first, so nothing starves).
+            if (orderProvider(order) === 'datagod' && ++dgChecks > DATAGOD_STATUS_PER_RUN) continue
             results.checked++
             const outcome = await reconcileBundleOrder(order, { resendIfMissing: true })
             bump(outcome)
 
             if ((outcome === 'in_flight' || outcome === 'status_unavailable') && order.created_at < rescueFloor && !order.flagged_at) {
                 results.flagged++
-                await flag(supabase, order, `has been processing at KingFlexy for over ${RESCUE_WINDOW_HOURS}h. Check it with them, then complete or refund it.`)
+                await flag(supabase, order, `has been processing at ${BUNDLE_PROVIDER_LABEL[orderProvider(order)]} for over ${RESCUE_WINDOW_HOURS}h. Check it with them, then complete or refund it.`)
             } else if (outcome === 'in_flight' || outcome === 'status_unavailable' || outcome === 'resent') {
                 // Touch updated_at so the oldest rows do not hog every batch.
                 await supabase.from('bundle_orders').update({ updated_at: new Date().toISOString() }).eq('id', order.id).eq('status', 'processing')
@@ -77,7 +89,9 @@ export async function GET(request: NextRequest) {
             .order('created_at', { ascending: true })
             .limit(BATCH)
 
+        let dgSends = 0
         for (const order of (undispatched || [])) {
+            if (orderProvider(order) === 'datagod' && ++dgSends > DATAGOD_SENDS_PER_RUN) continue
             results.checked++
             if (order.created_at < rescueFloor) {
                 results.flagged++

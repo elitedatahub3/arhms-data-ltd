@@ -10,9 +10,9 @@
  */
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
-import { getKfBundleOrderStatus } from '@/lib/kingflexy-bundles-service'
+import { getBundleOrderStatusForOrder, orderProvider, BUNDLE_PROVIDER_LABEL } from '@/lib/bundle-provider'
 import { finalizeBundleOrder } from '@/lib/bundle-order-completion'
-import { sendBundleToKingFlexy, triggerBundleDispatch, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
+import { sendBundleToProvider, triggerBundleDispatch, BUNDLES_ADMIN_PATH } from '@/lib/bundle-dispatcher'
 
 export type BundleSettleOutcome =
     | 'completed' | 'refunded' | 'in_flight' | 'resent' | 'not_found_upstream'
@@ -31,7 +31,9 @@ export async function reconcileBundleOrder(
 ): Promise<BundleSettleOutcome> {
     if (FINAL.has(order.status)) return 'already_final'
 
-    const upstream = await getKfBundleOrderStatus(order.reference_code)
+    // Always the provider that took the order, whatever the switch says now.
+    const name = BUNDLE_PROVIDER_LABEL[orderProvider(order)]
+    const upstream = await getBundleOrderStatusForOrder(order)
 
     if (upstream.found) {
         if (upstream.status === 'completed') {
@@ -50,7 +52,7 @@ export async function reconcileBundleOrder(
                 orderId: order.id,
                 status: 'failed',
                 refund: true,
-                note: `KingFlexy: ${upstream.reason || `order ${upstream.status}`}.`,
+                note: `${name}: ${upstream.reason || `order ${upstream.status}`}.`,
                 providerReference: upstream.orderReference ?? null,
                 providerResponse: upstream.raw ?? null,
                 existingOrder: order,
@@ -66,7 +68,7 @@ export async function reconcileBundleOrder(
 
     if (upstream.notFound) {
         if (opts.resendIfMissing && order.status === 'processing') {
-            await sendBundleToKingFlexy(order)
+            await sendBundleToProvider(order)
             return 'resent'
         }
         return 'not_found_upstream'
@@ -83,7 +85,7 @@ export async function reconcileBundleOrder(
             orderId: order.id,
             status: 'failed',
             refund: true,
-            note: `KingFlexy: ${opts.hintReason || 'order failed'}.`,
+            note: `${name}: ${opts.hintReason || 'order failed'}.`,
             existingOrder: order,
         })
         return 'refunded'
@@ -102,6 +104,9 @@ export async function settleBundleWebhook(event: any): Promise<BundleSettleOutco
         order = byTheirs.data
     }
     if (!order) return 'unknown_order'
+    // This is KingFlexy's signed webhook. A Datagod order with a colliding
+    // reference must never be settled by it.
+    if (orderProvider(order) !== 'kingflexy') return 'unknown_order'
 
     const isCompleted = event?.event === 'order.completed'
 

@@ -27,7 +27,19 @@ const SWITCHES: { key: string; label: string; hint: string }[] = [
     { key: 'bundles_auto_dispatch', label: 'Send orders automatically', hint: 'Off holds new orders as Pending until you press Send.' },
 ]
 
-const STATUS_TABS = ['all', 'pending', 'processing', 'completed', 'refunded', 'failed'] as const
+// Mirrors lib/bundle-provider.ts. A missing setting means KingFlexy.
+const PROVIDERS = [
+    { key: 'kingflexy', label: 'KingFlexy' },
+    { key: 'datagod', label: 'Datagod' },
+] as const
+const PROVIDER_LABEL: Record<string, string> = { kingflexy: 'KingFlexy', datagod: 'Datagod' }
+const PROVIDER_NETWORKS = [
+    { key: 'bundles_provider_mtn', label: 'MTN' },
+    { key: 'bundles_provider_telecel', label: 'Telecel' },
+    { key: 'bundles_provider_at', label: 'AirtelTigo' },
+] as const
+
+const STATUS_TABS =['all', 'pending', 'processing', 'completed', 'refunded', 'failed'] as const
 
 const STATUS_CLASS: Record<string, string> = {
     pending: 'bg-amber-100 text-amber-800',
@@ -71,9 +83,10 @@ export default function AdminStandardBundlesPage() {
     useEffect(() => { if (view === 'orders') loadOrders() }, [view, status]) // eslint-disable-line react-hooks/exhaustive-deps
 
     async function act(order: any, action: 'send' | 'recheck' | 'complete' | 'refund') {
+        const who = PROVIDER_LABEL[order.provider] || 'KingFlexy'
         if (action === 'refund' && order.status === 'processing' &&
-            !confirm('This order is still processing at KingFlexy. Refunding now could pay for a bundle that is later delivered. Refund anyway?')) return
-        if (action === 'complete' && !confirm(`Mark ${order.reference_code} as delivered? Only do this after confirming with KingFlexy.`)) return
+            !confirm(`This order is still processing at ${who}. Refunding now could pay for a bundle that is later delivered. Refund anyway?`)) return
+        if (action === 'complete' && !confirm(`Mark ${order.reference_code} as delivered? Only do this after confirming with ${who}.`)) return
         setBusy(`${order.id}:${action}`)
         try {
             const res = await fetch('/api/admin/bundles/orders', {
@@ -83,7 +96,7 @@ export default function AdminStandardBundlesPage() {
             })
             const body = await res.json()
             if (!res.ok) throw new Error(body?.error || 'Action failed')
-            toast.success(action === 'recheck' ? `KingFlexy says: ${body.outcome}` : 'Done')
+            toast.success(action === 'recheck' ? `${who} says: ${body.outcome}` : 'Done')
             loadOrders()
         } catch (e: any) {
             toast.error(e.message)
@@ -94,7 +107,7 @@ export default function AdminStandardBundlesPage() {
 
     // ── Settings ────────────────────────────────────────────────────────────
     const [settings, setSettings] = useState<Record<string, string>>({})
-    const [provider, setProvider] = useState<Record<string, any> | null>(null)
+    const [providers, setProviders] = useState<Record<string, Record<string, any>> | null>(null)
     const [settingsLoading, setSettingsLoading] = useState(false)
     const [saving, setSaving] = useState(false)
     const [checking, setChecking] = useState(false)
@@ -106,7 +119,7 @@ export default function AdminStandardBundlesPage() {
             const body = await res.json()
             if (!res.ok) throw new Error(body?.error || 'Failed to load settings')
             setSettings(body.settings || {})
-            if (body.provider) setProvider(body.provider)
+            if (body.providers) setProviders(body.providers)
         } catch (e: any) {
             toast.error(e.message)
         } finally {
@@ -144,7 +157,7 @@ export default function AdminStandardBundlesPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h1 className="flex items-center gap-2 text-2xl font-black"><Wifi className="w-6 h-6 text-sky-500" /> Standard Bundles</h1>
-                    <p className="text-sm text-muted-foreground">KingFlexy /bundles resold at catalog price plus your markup.</p>
+                    <p className="text-sm text-muted-foreground">KingFlexy or Datagod bundles (chosen per network) resold at catalog price plus your markup.</p>
                 </div>
                 <div className="flex gap-1 rounded-full bg-secondary p-1">
                     {(['orders', 'settings'] as const).map(v => (
@@ -208,6 +221,7 @@ export default function AdminStandardBundlesPage() {
                                                 <p className="font-mono text-xs">{o.reference_code}</p>
                                                 {o.provider_reference && <p className="font-mono text-[11px] text-muted-foreground">{o.provider_reference}</p>}
                                                 <p className="text-[11px] text-muted-foreground">{new Date(o.created_at).toLocaleString()} · {o.source}/{o.payment_method}</p>
+                                                <p className="text-[11px] font-bold text-sky-700">{PROVIDER_LABEL[o.provider] || 'KingFlexy'}</p>
                                             </td>
                                             <td className="p-3">
                                                 <p className="font-medium">{[o.users?.first_name, o.users?.last_name].filter(Boolean).join(' ') || '—'}</p>
@@ -270,11 +284,45 @@ export default function AdminStandardBundlesPage() {
                             ))}
                         </section>
 
+                        <section className="rounded-2xl border bg-card p-5 space-y-4 lg:col-span-2">
+                            <div>
+                                <h2 className="font-bold">Provider per network</h2>
+                                <p className="text-xs text-muted-foreground">
+                                    Decides who takes NEW orders. Orders already sent stay with the provider that took them, so switching is safe at any time.
+                                    Run Test connection below before switching a network to a provider.
+                                </p>
+                            </div>
+                            <div className="grid sm:grid-cols-3 gap-3">
+                                {PROVIDER_NETWORKS.map(n => {
+                                    const current = settings[n.key] === 'datagod' ? 'datagod' : 'kingflexy'
+                                    return (
+                                        <div key={n.key} className="rounded-xl border p-3">
+                                            <p className="font-medium text-sm mb-2">{n.label}</p>
+                                            <div role="radiogroup" aria-label={`${n.label} provider`} className="flex gap-1 rounded-full bg-secondary p-1">
+                                                {PROVIDERS.map(p => (
+                                                    <button
+                                                        key={p.key}
+                                                        type="button"
+                                                        role="radio"
+                                                        aria-checked={current === p.key}
+                                                        onClick={() => setSettings(s => ({ ...s, [n.key]: p.key }))}
+                                                        className={cn('flex-1 px-3 py-1.5 rounded-full text-xs font-bold', current === p.key ? 'bg-background shadow-sm' : 'text-muted-foreground')}
+                                                    >
+                                                        {p.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </section>
+
                         <section className="rounded-2xl border bg-card p-5 space-y-4">
-                            <h2 className="font-bold">Markup on KingFlexy&apos;s catalog price</h2>
+                            <h2 className="font-bold">Markup on the provider&apos;s catalog price</h2>
                             <p className="text-xs text-muted-foreground">
-                                KingFlexy charges us the catalog price with no discount, so the markup is our margin on top of their commission.
-                                Buyers pay the higher of the percentage and the minimum, rounded up to the pesewa.
+                                The same markup applies whichever provider a network uses. KingFlexy charges the catalog price and pays a commission on top;
+                                Datagod&apos;s price is what we pay. Buyers pay the higher of the percentage and the minimum, rounded up to the pesewa.
                             </p>
                             {TIERS.map(t => (
                                 <div key={t.key} className="flex items-center justify-between gap-3">
@@ -306,25 +354,28 @@ export default function AdminStandardBundlesPage() {
                         <section className="rounded-2xl border bg-card p-5 space-y-3 lg:col-span-2">
                             <div className="flex items-center justify-between gap-3">
                                 <div>
-                                    <h2 className="font-bold">KingFlexy connection</h2>
-                                    <p className="text-xs text-muted-foreground">Loads a fresh catalog for each network with our Commission Services key.</p>
+                                    <h2 className="font-bold">Provider connections</h2>
+                                    <p className="text-xs text-muted-foreground">Loads a fresh catalog for each network from KingFlexy and Datagod with our Commission Services keys.</p>
                                 </div>
                                 <Button variant="outline" onClick={() => loadSettings(true)} disabled={checking}>
                                     {checking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <PlugZap className="w-4 h-4 mr-2" />} Test connection
                                 </Button>
                             </div>
-                            {provider && (
-                                <div className="grid sm:grid-cols-3 gap-2">
-                                    {Object.entries(provider).map(([net, r]: [string, any]) => (
-                                        <div key={net} className={cn('rounded-xl border p-3 text-sm', r.ok ? 'border-emerald-300' : 'border-red-300')}>
-                                            <p className="font-bold">{net}</p>
-                                            <p className={r.ok ? 'text-emerald-700' : 'text-red-700'}>
-                                                {r.ok ? `${r.bundles} bundles${r.enabled ? '' : ' (paused by KingFlexy)'}` : r.error}
-                                            </p>
-                                        </div>
-                                    ))}
+                            {providers && PROVIDERS.filter(p => providers[p.key]).map(p => (
+                                <div key={p.key} className="space-y-1">
+                                    <p className="text-xs font-bold text-muted-foreground uppercase">{p.label}</p>
+                                    <div className="grid sm:grid-cols-3 gap-2">
+                                        {Object.entries(providers[p.key]).map(([net, r]: [string, any]) => (
+                                            <div key={net} className={cn('rounded-xl border p-3 text-sm', r.ok ? 'border-emerald-300' : 'border-red-300')}>
+                                                <p className="font-bold">{net}</p>
+                                                <p className={r.ok ? 'text-emerald-700' : 'text-red-700'}>
+                                                    {r.ok ? `${r.bundles} bundles${r.enabled ? '' : ` (paused by ${p.label})`}` : r.error}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
-                            )}
+                            ))}
                         </section>
 
                         <div className="lg:col-span-2 flex justify-end">

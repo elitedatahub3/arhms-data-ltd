@@ -89,7 +89,9 @@ export async function processBundleDirectOrder(
         !columns.bundle_label ||
         !(Number(columns.cost_amount) > 0) ||
         !(Number(columns.total_paid) > 0) ||
-        (columns.kf_value == null) === (columns.kf_pack_id == null)
+        (columns.provider === 'datagod'
+            ? !columns.dg_bundle_id
+            : (columns.kf_value == null) === (columns.kf_pack_id == null))
     ) {
         console.error('[BundleSettle] Malformed payment metadata:', reference, meta)
         return { success: false, error: 'Malformed payment metadata' }
@@ -129,6 +131,8 @@ export async function processBundleDirectOrder(
             validity: columns.validity ?? null,
             kf_value: columns.kf_value ?? null,
             kf_pack_id: columns.kf_pack_id ?? null,
+            // Old BUNPAY- intents carry no provider: they were KingFlexy.
+            ...(columns.provider === 'datagod' ? { provider: 'datagod', dg_bundle_id: String(columns.dg_bundle_id) } : {}),
             cost_amount: Number(columns.cost_amount),
             markup_amount: Number(columns.markup_amount ?? 0),
             total_paid: Number(columns.total_paid),

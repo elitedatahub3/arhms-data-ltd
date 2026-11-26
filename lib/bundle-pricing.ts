@@ -19,6 +19,8 @@ export const BUNDLE_SETTING_KEYS = {
     storefront: 'storefront_bundles_enabled',
     /** The admin page-access toggle for /dashboard/standard-bundles. */
     pageAccess: 'page_access_standard_bundles',
+    /** kingflexy | datagod: which provider takes NEW orders on a network (lib/bundle-provider.ts). */
+    provider: (n: string) => `bundles_provider_${n.toLowerCase()}`,
 } as const
 
 /** Every admin_settings key the bundles feature reads. */
@@ -33,6 +35,9 @@ export function bundleSettingKeys(): string[] {
         BUNDLE_SETTING_KEYS.autoDispatch,
         BUNDLE_SETTING_KEYS.storefront,
         BUNDLE_SETTING_KEYS.pageAccess,
+        BUNDLE_SETTING_KEYS.provider('MTN'),
+        BUNDLE_SETTING_KEYS.provider('Telecel'),
+        BUNDLE_SETTING_KEYS.provider('AT'),
     ]
 }
 
@@ -99,7 +104,11 @@ export function resolveBundleTier(userRow: any, now: Date = new Date()): BundleP
  * re-finds the bundle in its own copy of the catalog, so a stale or forged id can
  * only ever match a real, currently-listed bundle at today's price.
  */
-export function bundleKey(b: { packId: string | null; value: string | null; amount: number }): string {
+export function bundleKey(b: { packId: string | null; value: string | null; amount: number; dgBundleId?: string | null }): string {
+    // Datagod bundles are bought by their catalog id (dispatch fetches a fresh
+    // token). The d: prefix also means a key from one provider can never match the
+    // other provider's catalog after the switch is flipped.
+    if (b.dgBundleId) return `d:${b.dgBundleId}`
     // KingFlexy wants value AND amount sent back, so both identify a bundle.
     return b.packId ? `p:${b.packId}` : `v:${b.amount.toFixed(2)}:${b.value}`
 }

@@ -11,8 +11,8 @@
  * from there.
  */
 import { validateGhanaianPhone } from '@/lib/phone-validation'
+import { getProviderCatalog, resolveBundleProvider, type BundleProvider } from '@/lib/bundle-provider'
 import {
-    getBundleCatalog,
     isBundleNetwork,
     type BundleNetwork,
     type KfBundle,
@@ -97,7 +97,7 @@ export async function getPricedCatalog(
     if (!isBundleNetworkEnabled(settings, network)) {
         return { ok: true, catalog: { network, available: false, families: [], bundles: [] } }
     }
-    const res = await getBundleCatalog(network)
+    const res = await getProviderCatalog(resolveBundleProvider(settings, network), network)
     if (!res.success) return { ok: false, status: 502, error: res.error }
 
     const markup = parseMarkupSettings(settings)
@@ -127,6 +127,8 @@ export interface BundleIntentInput {
 }
 
 export interface BundleIntent {
+    /** Who takes this order. Stored on the row; later steps always ask this provider. */
+    provider: BundleProvider
     network: BundleNetwork
     phone: string
     bundle: KfBundle
@@ -180,7 +182,8 @@ export async function buildBundleIntent(
         }
     }
 
-    const res = await getBundleCatalog(network)
+    const provider = resolveBundleProvider(settings, network)
+    const res = await getProviderCatalog(provider, network)
     if (!res.success) return { ok: false, status: 502, error: res.error }
     if (!res.catalog.enabled) {
         return { ok: false, status: 503, error: `${BUNDLE_NETWORK_LABEL[network]} bundles are paused by the provider. Please try again later.` }
@@ -188,6 +191,12 @@ export async function buildBundleIntent(
 
     const bundle = res.catalog.bundles.find(b => bundleKey(b) === input.bundleKey)
     if (!bundle) {
+        // A d: key against KingFlexy (or the reverse) means the admin switched
+        // provider while this buyer had the page open.
+        const keyIsDatagod = input.bundleKey.startsWith('d:')
+        if (keyIsDatagod !== (provider === 'datagod')) {
+            return { ok: false, status: 409, error: 'The bundle list has changed. Please refresh and choose again.' }
+        }
         return { ok: false, status: 404, error: 'That bundle is no longer available. Please refresh and choose again.' }
     }
 
@@ -196,6 +205,7 @@ export async function buildBundleIntent(
     return {
         ok: true,
         intent: {
+            provider,
             network,
             phone: phoneCheck.normalizedNumber,
             bundle,
@@ -210,15 +220,19 @@ export async function buildBundleIntent(
 
 /** Columns every channel writes for a new bundle_orders row. */
 export function bundleOrderColumns(intent: BundleIntent) {
+    const datagod = intent.provider === 'datagod'
     return {
+        // Written only for Datagod. KingFlexy rows rely on the column default, so
+        // KingFlexy orders keep working even before migration 20261127000000 runs.
+        ...(datagod ? { provider: 'datagod' as const, dg_bundle_id: intent.bundle.dgBundleId } : {}),
         network: intent.network,
         beneficiary_phone: intent.phone,
         family: intent.bundle.family,
         family_label: intent.bundle.familyLabel,
         bundle_label: intent.bundle.size,
         validity: intent.bundle.validity,
-        kf_value: intent.bundle.packId ? null : intent.bundle.value,
-        kf_pack_id: intent.bundle.packId,
+        kf_value: datagod || intent.bundle.packId ? null : intent.bundle.value,
+        kf_pack_id: datagod ? null : intent.bundle.packId,
         cost_amount: intent.cost,
         markup_amount: intent.markup,
         total_paid: intent.totalPaid,
