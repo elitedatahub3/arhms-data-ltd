@@ -19,7 +19,8 @@ interface Payload { available: boolean; enabled: boolean; percent: number; max_p
 
 const SAMPLE = 10
 
-export default function ShopBundlePricing() {
+/** standalone: on its own page (My Shop > Standard Bundles), so say why it is empty instead of hiding. */
+export default function ShopBundlePricing({ standalone = false }: { standalone?: boolean }) {
     const [data, setData] = useState<Payload | null>(null)
     const [percent, setPercent] = useState('')
     const [enabled, setEnabled] = useState(false)
@@ -38,8 +39,18 @@ export default function ShopBundlePricing() {
 
     useEffect(() => { load() }, [load])
 
-    // Admin has not opened Standard Bundles to shops: say nothing.
-    if (!data || (!data.available && !data.enabled)) return null
+    // Admin has not opened Standard Bundles to shops: say nothing on the Pricing
+    // page; on its own page, explain.
+    if (!data || (!data.available && !data.enabled)) {
+        if (!standalone || !data) return null
+        return (
+            <Card>
+                <CardContent className="p-6 text-sm text-muted-foreground">
+                    Standard Bundles are not open for shops yet. Once they are, you can switch them on here and set your own percentage.
+                </CardContent>
+            </Card>
+        )
+    }
 
     const p = Number(percent)
     const valid = Number.isFinite(p) && p >= 0 && p <= data.max_percent

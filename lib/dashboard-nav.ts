@@ -10,6 +10,7 @@ import {
     Receipt,
     Crown,
     MessageSquare,
+    Wifi,
     type LucideIcon,
 } from 'lucide-react'
 
@@ -29,6 +30,7 @@ export const shopNavItems: NavItem[] = [
     { href: '/dashboard/shop/pricing', label: 'Pricing', icon: Tag },
     { href: '/dashboard/shop/orders', label: 'Orders', icon: ShoppingCart },
     { href: '/dashboard/shop/utilities', label: 'Bill Payments', icon: Receipt },
+    { href: '/dashboard/shop/bundles', label: 'Standard Bundles', icon: Wifi },
     { href: '/dashboard/shop/ussd', label: 'USSD Code', icon: Smartphone },
     { href: '/dashboard/shop/sms', label: 'Customer SMS', icon: MessageSquare },
     { href: '/dashboard/shop/ai', label: 'Shop AI', icon: Sparkles },
@@ -50,6 +52,8 @@ export const subShopNavItems: NavItem[] = [
     { href: '/dashboard/sub', label: 'Earnings & Withdraw', icon: Banknote },
     { href: '/dashboard/sub/pricing', label: 'Pricing', icon: Tag },
     { href: '/dashboard/sub/storefront-orders', label: 'Store Orders', icon: ClipboardList },
+    // Shared with owners: /api/shop/bundle-pricing resolves the caller's own shop_profiles row.
+    { href: '/dashboard/shop/bundles', label: 'Standard Bundles', icon: Wifi },
     { href: '/dashboard/sub/ussd', label: 'USSD Code', icon: Smartphone },
     { href: '/dashboard/sub/sms', label: 'Customer SMS', icon: MessageSquare },
     { href: '/dashboard/shop/ai', label: 'Shop AI', icon: Sparkles },
