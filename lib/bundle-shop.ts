@@ -7,10 +7,10 @@
  * (bundle_orders.shop_profit), paid into the shop wallet once delivered.
  *
  * MTN placement on the storefront:
- *  - shop sells no MTN data → only the MTN Special Bundles show, inside the DATA
- *    tile as its MTN tab; the rest live in the Standard Bundles tile.
- *  - shop sells MTN data → everything, Special Bundles included, lives in the
- *    Standard Bundles tile.
+ *  - shop sells no MTN data → ALL MTN Standard Bundles (Special Bundles, Data,
+ *    Video, …) show inside the DATA tile as its MTN tab; the Standard Bundles
+ *    tile keeps Telecel and AirtelTigo.
+ *  - shop sells MTN data → every network lives in the Standard Bundles tile.
  */
 import { BUNDLE_SETTING_KEYS } from '@/lib/bundle-pricing'
 import { isBundlesEnabled, type BundleSettings } from '@/lib/bundle-order-intent'

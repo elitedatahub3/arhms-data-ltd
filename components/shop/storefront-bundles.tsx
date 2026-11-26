@@ -22,11 +22,31 @@ import { cn } from '@/lib/utils'
 type NetworkId = 'MTN' | 'Telecel' | 'AT'
 type Scope = 'special' | 'no-special' | 'all'
 
-const NETWORKS: { id: NetworkId; label: string; prefixes: string[]; bg: string }[] = [
-    { id: 'MTN', label: 'MTN', prefixes: ['024', '025', '053', '054', '055', '059', '098'], bg: 'bg-[#ffcc00] text-black' },
-    { id: 'Telecel', label: 'Telecel', prefixes: ['020', '050'], bg: 'bg-[#da291c] text-white' },
-    { id: 'AT', label: 'AirtelTigo', prefixes: ['026', '027', '056', '057'], bg: 'bg-[#2463eb] text-white' },
+// Same colours and card parts as /dashboard/standard-bundles, so a storefront
+// buyer sees exactly the cards a dashboard buyer sees (only the price differs).
+const NETWORKS: { id: NetworkId; label: string; prefixes: string[]; card: string; band: string; chip: string; badge: string }[] = [
+    {
+        id: 'MTN', label: 'MTN', prefixes: ['024', '025', '053', '054', '055', '059', '098'],
+        card: 'bg-[#FFC20E] text-black', band: 'bg-black/10 group-hover:bg-black/15 text-black', chip: 'bg-black/10 text-black', badge: 'bg-[#FFC20E] text-black',
+    },
+    {
+        id: 'Telecel', label: 'Telecel', prefixes: ['020', '050'],
+        card: 'bg-[#E3262F] text-white', band: 'bg-black/15 group-hover:bg-black/25 text-white', chip: 'bg-white/20 text-white', badge: 'bg-[#E3262F] text-white',
+    },
+    {
+        id: 'AT', label: 'AirtelTigo', prefixes: ['026', '027', '028', '056', '057', '058'],
+        card: 'bg-[#2563EB] text-white', band: 'bg-black/15 group-hover:bg-black/25 text-white', chip: 'bg-white/20 text-white', badge: 'bg-[#2563EB] text-white',
+    },
 ]
+
+function NetworkMark({ id, className }: { id: NetworkId; className?: string }) {
+    const n = NETWORKS.find(x => x.id === id)!
+    return (
+        <span className={cn('inline-flex shrink-0 items-center justify-center rounded-full font-black text-[10px] tracking-tight', n.badge, className)}>
+            {id === 'AT' ? 'at' : id === 'Telecel' ? 't' : 'MTN'}
+        </span>
+    )
+}
 
 const networkForPhone = (digits: string): NetworkId | null =>
     digits.length >= 3 ? NETWORKS.find(n => n.prefixes.includes(digits.slice(0, 3)))?.id ?? null : null
@@ -261,14 +281,16 @@ export default function StorefrontBundles({
             )}
 
             {families.length > 1 && (
-                <div className="flex gap-2 overflow-x-auto pb-1">
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
                     {families.map(f => (
                         <button
                             key={f.key}
                             type="button"
                             onClick={() => setFamily(f.key)}
-                            className={cn('shrink-0 rounded-full border px-4 py-1.5 text-sm font-bold', family === f.key ? 'text-white border-transparent' : 'bg-white dark:bg-[#151c2c]')}
-                            style={family === f.key ? { backgroundColor: accent } : undefined}
+                            className={cn(
+                                'shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-colors',
+                                family === f.key ? 'bg-foreground text-background border-foreground' : 'bg-card hover:bg-secondary'
+                            )}
                         >
                             {f.label}
                         </button>
@@ -287,25 +309,30 @@ export default function StorefrontBundles({
                     <Button variant="outline" size="sm" onClick={() => loadCatalog(network)}><RefreshCw className="w-4 h-4 mr-2" /> Try again</Button>
                 </div>
             ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                     {visible.map(b => {
-                        const n = NETWORKS.find(x => x.id === network)!
+                        const theme = NETWORKS.find(x => x.id === network)!
                         return (
-                            <div key={b.key} className={cn('rounded-2xl overflow-hidden flex flex-col', n.bg)}>
-                                <div className="p-4 text-center flex-1">
-                                    <span className="inline-block text-[10px] font-black px-2 py-0.5 rounded-full bg-black/10">{n.label}</span>
-                                    <p className="mt-3 text-xl font-black leading-tight break-words">{b.size}</p>
-                                    {b.validity && <p className="text-[11px] opacity-80">{b.validity}</p>}
-                                    <p className="mt-1 text-lg font-black">GH₵{b.price.toFixed(2)}</p>
+                            <button
+                                key={b.key}
+                                type="button"
+                                onClick={() => { setSelected(b); setStage('form') }}
+                                aria-label={`Buy ${b.size} for GH₵${b.price.toFixed(2)}`}
+                                className={cn('group rounded-2xl overflow-hidden flex flex-col text-left shadow-sm cursor-pointer transition-transform hover:-translate-y-0.5 hover:shadow-md active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2', theme.card)}
+                            >
+                                <div className="w-full flex items-center justify-between p-3">
+                                    <NetworkMark id={network} className="w-7 h-7 ring-2 ring-white/40" />
+                                    <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', theme.chip)}>{network}</span>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={() => { setSelected(b); setStage('form') }}
-                                    className="flex items-center justify-center gap-2 bg-black/10 hover:bg-black/20 py-3 text-sm font-black"
-                                >
+                                <div className="w-full flex-1 flex flex-col items-center justify-center text-center px-2 pb-3">
+                                    <p className="text-xl sm:text-2xl font-black leading-tight">{b.size}</p>
+                                    <p className="text-sm font-bold mt-1">GH₵{b.price.toFixed(2)}</p>
+                                    {b.validity && <p className="text-[11px] opacity-80 mt-0.5">{b.validity}</p>}
+                                </div>
+                                <span className={cn('w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold transition-colors', theme.band)}>
                                     <ShoppingCart className="w-4 h-4" /> Buy Now
-                                </button>
-                            </div>
+                                </span>
+                            </button>
                         )
                     })}
                 </div>
