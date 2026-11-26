@@ -184,7 +184,15 @@ export async function POST(request: NextRequest) {
                         order: shop
                             ? { ...bundleOrderColumns(intent), total_paid: subtotal, shop_profit: shopProfit, shop_id: shop.id, source: 'storefront' }
                             : bundleOrderColumns(intent),
-                        ...(shop ? { shop_id: shop.id, shop_slug: String(shopSlug).trim(), buyer_phone: intent.phone } : {}),
+                        ...(shop ? {
+                            shop_id: shop.id,
+                            shop_slug: String(shopSlug).trim(),
+                            buyer_phone: intent.phone,
+                            // Optional receipt email from the storefront sheet; kept only if it looks like one.
+                            ...(typeof body?.email === 'string' && /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(body.email.trim())
+                                ? { buyer_email: body.email.trim().slice(0, 254) }
+                                : {}),
+                        } : {}),
                     },
                 })
                 .select()

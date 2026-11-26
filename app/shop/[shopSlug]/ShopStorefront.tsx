@@ -16,7 +16,7 @@ import {
     Phone, Mail, MessageCircle, ShoppingCart, Loader2,
     CheckCircle2, AlertCircle, X, Search, Zap, Smartphone, ChevronDown, Check, Menu, Bell,
     History, TrendingUp, Coins, Calendar, CalendarRange, RefreshCw, Info, Clock, Copy, ArrowRight, AlertTriangle, Users, Target, Sparkles, Download, Share2, GraduationCap, Store, BadgeCheck
-, Receipt, Wallet, Wifi } from 'lucide-react'
+, Receipt, Wallet } from 'lucide-react'
 import {
     ID_TYPES, REGIONS, AFA_REQUIRED_FIELDS, MIN_AFA_AGE,
     validateId, maskIdNumber, ageFromDob, maxDobInputValue,
@@ -1661,9 +1661,8 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     {/* STANDARD BUNDLES — owner switched on in My Shop > Pricing. */}
                     {showBundlesTile && (
                         <ServiceTile label="STANDARD BUNDLES" active={activeTab === 'bundles'} onClick={() => { setActiveTab('bundles'); setIsAirtimeOpen(false) }}>
-                            <div className="absolute inset-0 flex items-center justify-center pb-6 bg-gradient-to-br from-sky-500 to-indigo-700">
-                                <Wifi className="h-1/3 w-1/3 text-white transition-transform duration-300 group-hover:scale-110" />
-                            </div>
+                            {/* Same network logo as the DATA tile. */}
+                            <ServiceLogo src="/images/services/data-networks.png" bg="#18b1fa" />
                         </ServiceTile>
                     )}
                 </div>

@@ -13,11 +13,18 @@
  * Payment: /api/bundles/gateway-init with shopSlug, then /api/shop/bundles/status.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, ShoppingCart, CheckCircle2, XCircle, RefreshCw, Wifi } from 'lucide-react'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { Loader2, ShoppingCart, CheckCircle2, XCircle, RefreshCw, Wifi, X, AlertCircle, Smartphone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+
+// Same field/label styling as the storefront's data checkout sheet (ShopStorefront.tsx).
+const SHEET_FIELD_CLASS = 'w-full px-4 py-3.5 rounded-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[var(--brand-color)] focus:border-transparent transition-colors'
+const SHEET_LABEL_CLASS = 'text-sm font-black text-gray-900 dark:text-gray-100'
+const PAY_NETWORKS: { id: 'MTN' | 'Telecel' | 'AT'; label: string; dot: string }[] = [
+    { id: 'MTN', label: 'MTN', dot: 'bg-[#ffcc00]' },
+    { id: 'Telecel', label: 'Telecel', dot: 'bg-[#da291c]' },
+    { id: 'AT', label: 'AirtelTigo', dot: 'bg-[#2463eb]' },
+]
 
 type NetworkId = 'MTN' | 'Telecel' | 'AT'
 type Scope = 'special' | 'no-special' | 'all'
@@ -82,6 +89,7 @@ export default function StorefrontBundles({
     const [phone, setPhone] = useState('')
     const [momoPhone, setMomoPhone] = useState('')
     const [momoNetwork, setMomoNetwork] = useState<NetworkId | ''>('')
+    const [email, setEmail] = useState('')
     const [quote, setQuote] = useState<Quote | null>(null)
     const [quoteError, setQuoteError] = useState<string | null>(null)
     const [submitting, setSubmitting] = useState(false)
@@ -189,7 +197,7 @@ export default function StorefrontBundles({
         const res = await fetch('/api/bundles/gateway-init', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ shopSlug, network, bundleKey: selected?.key, phone: phoneDigits, momoPhone: momoDigits, momoNetwork, ...extra }),
+            body: JSON.stringify({ shopSlug, network, bundleKey: selected?.key, phone: phoneDigits, momoPhone: momoDigits, momoNetwork, email: email.trim() || undefined, ...extra }),
         })
         return { res, body: await res.json().catch(() => ({})) }
     }
@@ -258,7 +266,6 @@ export default function StorefrontBundles({
 
     const visible = useMemo(() => bundles.filter(b => !family || b.family === family), [bundles, family])
     const activeFamily = families.find(f => f.key === family)
-    const accent = brandColor || '#0f172a'
 
     return (
         <div className="space-y-4">
@@ -338,95 +345,183 @@ export default function StorefrontBundles({
                 </div>
             )}
 
-            <Dialog open={!!selected} onOpenChange={o => { if (!o) closeDialog() }}>
-                <DialogContent className="max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>{selected?.size}{selected?.price ? ` · GH₵${selected.price.toFixed(2)}` : ''}</DialogTitle>
-                        <DialogDescription>
-                            {stage === 'form' ? `${NETWORKS.find(x => x.id === network)?.label} bundle, delivered to the number you enter.` : 'Standard Bundle'}
-                        </DialogDescription>
-                    </DialogHeader>
+            {/* Checkout sheet: the same sheet the storefront's data checkout uses
+                (network banner, Beneficiary, Mobile Money number, Network, Email,
+                fee line, one brand-coloured Pay button pinned to the bottom). */}
+            {selected && (() => {
+                const theme = NETWORKS.find(x => x.id === network)!
+                const busy = submitting || (stage === 'waiting' && !otpRequired)
+                const brandStyle = brandColor ? { backgroundColor: brandColor } : undefined
+                return (
+                    <div className="fixed inset-0 z-[70] flex items-end justify-center">
+                        <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px] animate-in fade-in duration-200" onClick={closeDialog} />
+                        <div className="relative w-full sm:max-w-lg bg-white dark:bg-gray-900 rounded-t-xl sm:rounded-b-xl sm:mb-6 shadow-e4 sheet-maxh overflow-y-auto animate-sheet-up">
+                            <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 pt-3 pb-1 rounded-t-[28px]">
+                                <div className="mx-auto w-10 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700" />
+                                <button
+                                    onClick={closeDialog}
+                                    aria-label="Close checkout"
+                                    className="absolute top-2 right-4 w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
 
-                    {stage === 'form' && !otpRequired && (
-                        <div className="space-y-3">
-                            <div>
-                                <label className="text-sm font-medium">Number to receive the bundle</label>
-                                <Input inputMode="numeric" placeholder={`e.g. ${NETWORKS.find(x => x.id === network)?.prefixes[0]}1234567`} value={phone} onChange={e => setPhone(e.target.value)} />
-                                {phoneDigits.length === 10 && !phoneValid && (
-                                    <p className="text-xs text-red-600 mt-1">That is not a {NETWORKS.find(x => x.id === network)?.label} number.</p>
+                            <div className="px-5 pb-8 pt-3 space-y-5">
+                                {/* Selected bundle banner */}
+                                <div className={cn('rounded-2xl px-4 py-4 flex items-center justify-between gap-3', theme.card)}>
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <NetworkMark id={network} className="w-10 h-10 ring-2 ring-white/40" />
+                                        <p className="text-lg font-black tracking-tight truncate">{theme.label} · {selected.size}</p>
+                                    </div>
+                                    {selected.price > 0 && <p className="text-lg font-black tracking-tight shrink-0">GH₵{selected.price.toFixed(2)}</p>}
+                                </div>
+
+                                {stage === 'form' && !otpRequired && (
+                                    <>
+                                        <div className="space-y-2">
+                                            <label className={SHEET_LABEL_CLASS}>
+                                                Beneficiary number <span className="font-semibold text-gray-400">(gets the data)</span>
+                                            </label>
+                                            <input type="tel" inputMode="numeric" value={phone} onChange={e => setPhone(e.target.value)}
+                                                placeholder={`${theme.prefixes[0]}1234567`} className={SHEET_FIELD_CLASS} />
+                                            {phoneDigits.length === 10 && !phoneValid && (
+                                                <p className="text-xs font-bold text-red-600">That is not a {theme.label} number.</p>
+                                            )}
+                                        </div>
+
+                                        {needsMomo && (
+                                            <>
+                                                <div className="space-y-2">
+                                                    <label className={SHEET_LABEL_CLASS}>
+                                                        Mobile Money number <span className="font-semibold text-gray-400">(to pay)</span>
+                                                    </label>
+                                                    <input type="tel" inputMode="numeric" value={momoPhone} onChange={e => setMomoPhone(e.target.value)}
+                                                        placeholder="0241234567" className={SHEET_FIELD_CLASS} />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <label className={SHEET_LABEL_CLASS}>Network</label>
+                                                    <div className="grid grid-cols-3 gap-2">
+                                                        {PAY_NETWORKS.map(({ id, label, dot }) => (
+                                                            <button
+                                                                key={id}
+                                                                type="button"
+                                                                onClick={() => setMomoNetwork(id)}
+                                                                className={cn(
+                                                                    'flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-bold transition-all',
+                                                                    momoNetwork === id
+                                                                        ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                                                                        : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                                                                )}
+                                                            >
+                                                                <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', dot)} />
+                                                                {label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+
+                                        <div className="space-y-2">
+                                            <label className={SHEET_LABEL_CLASS}>
+                                                Email <span className="font-semibold text-gray-400">(for receipt, optional)</span>
+                                            </label>
+                                            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                                                placeholder="you@example.com" className={SHEET_FIELD_CLASS} />
+                                        </div>
+                                    </>
+                                )}
+
+                                {otpRequired && (
+                                    <div className="space-y-2">
+                                        <label className={SHEET_LABEL_CLASS}>Code sent to your phone</label>
+                                        <input inputMode="numeric" value={otpCode} onChange={e => setOtpCode(e.target.value)} placeholder="Enter code" className={SHEET_FIELD_CLASS} />
+                                    </div>
+                                )}
+
+                                {stage === 'done' && (
+                                    <div className="py-4 text-center space-y-2">
+                                        <CheckCircle2 className="w-10 h-10 mx-auto text-emerald-500" />
+                                        <p className="font-black">
+                                            {result?.status === 'completed'
+                                                ? `${result?.bundle_label} delivered to ${result?.beneficiary_phone}`
+                                                : `Payment received. ${result?.bundle_label || 'Your bundle'} is on its way to ${result?.beneficiary_phone || 'the number'}.`}
+                                        </p>
+                                        <p className="text-xs text-gray-400">Ref: {reference}</p>
+                                    </div>
+                                )}
+
+                                {stage === 'failed' && (
+                                    <div className="py-4 text-center space-y-2">
+                                        <XCircle className="w-10 h-10 mx-auto text-red-500" />
+                                        <p className="font-black">{error}</p>
+                                        {reference && <p className="text-xs text-gray-400">Ref: {reference}</p>}
+                                    </div>
+                                )}
+
+                                {(error || quoteError) && stage !== 'failed' && (
+                                    <div className="flex items-start gap-2 p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                                        <p className="text-xs font-bold text-red-800 dark:text-red-300">{error || quoteError}</p>
+                                    </div>
                                 )}
                             </div>
-                            {needsMomo && (
-                                <div>
-                                    <label className="text-sm font-medium">Mobile Money number to pay from</label>
-                                    <Input inputMode="numeric" placeholder="0XXXXXXXXX" value={momoPhone} onChange={e => setMomoPhone(e.target.value)} />
-                                    <div className="mt-2 grid grid-cols-3 gap-2">
-                                        {NETWORKS.map(n => (
-                                            <button key={n.id} type="button" onClick={() => setMomoNetwork(n.id)}
-                                                className={cn('rounded-lg border px-2 py-1.5 text-xs font-bold', momoNetwork === n.id ? 'border-foreground bg-secondary' : 'text-muted-foreground')}>
-                                                {n.label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                            {quote && (
-                                <div className="rounded-xl bg-secondary/60 p-3 text-sm space-y-1">
-                                    <div className="flex justify-between"><span>Bundle</span><span>GH₵{quote.price.toFixed(2)}</span></div>
-                                    {quote.fee > 0 && <div className="flex justify-between"><span>Payment fee</span><span>GH₵{quote.fee.toFixed(2)}</span></div>}
-                                    <div className="flex justify-between font-black"><span>Total</span><span>GH₵{quote.total.toFixed(2)}</span></div>
-                                </div>
-                            )}
-                            {quoteError && <p className="text-sm text-red-600">{quoteError}</p>}
-                            {error && <p className="text-sm text-red-600">{error}</p>}
-                            <Button className="w-full h-12 font-black" style={{ backgroundColor: accent }} disabled={!phoneValid || !quote || !momoReady || submitting} onClick={pay}>
-                                {submitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Pay{quote ? ` GH₵${quote.total.toFixed(2)}` : ''}
-                            </Button>
-                        </div>
-                    )}
 
-                    {otpRequired && (
-                        <div className="space-y-3">
-                            <p className="text-sm">Enter the code sent to your phone to approve the payment.</p>
-                            <Input inputMode="numeric" placeholder="Code" value={otpCode} onChange={e => setOtpCode(e.target.value)} />
-                            {error && <p className="text-sm text-red-600">{error}</p>}
-                            <Button className="w-full h-12 font-black" style={{ backgroundColor: accent }} disabled={!otpCode.trim() || submitting} onClick={submitOtp}>
-                                {submitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Confirm code
-                            </Button>
-                        </div>
-                    )}
+                            {/* Cost summary + action, pinned to the bottom */}
+                            <div className="sticky bottom-0 border-t border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 px-5 pt-3 pb-4 safe-b space-y-3">
+                                {(stage === 'form' || stage === 'waiting') && (
+                                    <dl className="space-y-1.5">
+                                        <div className="flex items-center justify-between text-sm">
+                                            <dt className="font-semibold text-gray-500 dark:text-gray-400">Bundle</dt>
+                                            <dd className="font-bold tabular text-gray-900 dark:text-gray-100">GH₵{(quote?.price ?? selected.price).toFixed(2)}</dd>
+                                        </div>
+                                        <div className="flex items-center justify-between text-sm">
+                                            <dt className="font-semibold text-gray-500 dark:text-gray-400">Payment fee</dt>
+                                            <dd className="font-semibold text-gray-500 dark:text-gray-400">
+                                                {quote && quote.fee > 0 ? `GH₵${quote.fee.toFixed(2)}` : needsMomo ? 'added by Mobile Money' : 'shown at checkout'}
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                )}
 
-                    {stage === 'waiting' && !otpRequired && (
-                        <div className="py-6 text-center space-y-3">
-                            <Loader2 className="w-8 h-8 animate-spin mx-auto" />
-                            <p className="font-bold">Approve the payment prompt on your phone</p>
-                            <p className="text-xs text-muted-foreground">Keep this page open. Ref: {reference}</p>
-                        </div>
-                    )}
+                                {stage === 'done' || stage === 'failed' ? (
+                                    <button onClick={closeDialog} style={brandStyle}
+                                        className="w-full py-4 rounded-md bg-[var(--brand-color)] text-white font-black text-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
+                                        {stage === 'done' ? 'Done' : 'Close'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={otpRequired ? submitOtp : pay}
+                                        disabled={busy || (otpRequired ? !otpCode.trim() : (!phoneValid || !quote || !momoReady))}
+                                        style={brandStyle}
+                                        className="w-full py-4 rounded-md bg-[var(--brand-color)] text-white font-black text-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-transform disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[var(--brand-color)]"
+                                    >
+                                        {busy
+                                            ? <><Loader2 className="w-5 h-5 animate-spin" /> {stage === 'waiting' ? 'Waiting for approval...' : 'Processing...'}</>
+                                            : otpRequired
+                                                ? <>Confirm code</>
+                                                : needsMomo
+                                                    ? <><Smartphone className="w-5 h-5" /> Pay GH₵{(quote?.total ?? selected.price).toFixed(2)}</>
+                                                    : <><Smartphone className="w-5 h-5" /> Proceed to payment</>}
+                                    </button>
+                                )}
 
-                    {stage === 'done' && (
-                        <div className="py-6 text-center space-y-3">
-                            <CheckCircle2 className="w-10 h-10 mx-auto text-emerald-500" />
-                            <p className="font-bold">
-                                {result?.status === 'completed'
-                                    ? `${result?.bundle_label} delivered to ${result?.beneficiary_phone}`
-                                    : `Payment received. ${result?.bundle_label || 'Your bundle'} is on its way to ${result?.beneficiary_phone || 'the number'}.`}
-                            </p>
-                            <p className="text-xs text-muted-foreground">Ref: {reference}</p>
-                            <Button variant="outline" onClick={closeDialog}>Done</Button>
+                                {stage === 'waiting' && (
+                                    <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
+                                        Approve the prompt on your phone. You can close this; your bundle is sent automatically once the payment lands. Ref: {reference}
+                                    </p>
+                                )}
+                                {stage === 'form' && (
+                                    <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
+                                        {needsMomo ? 'Your phone will show the exact total to approve.' : 'You will choose how to pay and see the exact total on the next page.'}
+                                    </p>
+                                )}
+                            </div>
                         </div>
-                    )}
-
-                    {stage === 'failed' && (
-                        <div className="py-6 text-center space-y-3">
-                            <XCircle className="w-10 h-10 mx-auto text-red-500" />
-                            <p className="font-bold">{error}</p>
-                            {reference && <p className="text-xs text-muted-foreground">Ref: {reference}</p>}
-                            <Button variant="outline" onClick={closeDialog}>Close</Button>
-                        </div>
-                    )}
-                </DialogContent>
-            </Dialog>
+                    </div>
+                )
+            })()}
         </div>
     )
 }
