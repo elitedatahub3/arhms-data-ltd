@@ -248,6 +248,21 @@ export async function getBundleCatalog(network: BundleNetwork): Promise<CatalogR
     }
 }
 
+/**
+ * ADMIN ONLY (Test connection): an uncached catalog read that returns the precise
+ * reason instead of the generic buyer message. Never show it to buyers.
+ */
+export async function diagnoseKfBundleCatalog(network: BundleNetwork): Promise<CatalogResult> {
+    if (!KF_COMMISSION_KEY) return { success: false, error: 'KINGFLEXY_COMMISSION_KEY is not set on this deployment.' }
+    if (!KF_COMMISSION_KEY.startsWith('kf_cs_live_')) return { success: false, error: 'KINGFLEXY_COMMISSION_KEY is not a kf_cs_live_ Commission Services key.' }
+    const res = await kfRequest('GET', `/bundles/catalog?network=${encodeURIComponent(network)}`, undefined, 15_000)
+    if (res.transportError) return { success: false, error: `Could not reach KingFlexy: ${res.transportError}` }
+    if (!res.ok || res.data?.success !== true) {
+        return { success: false, error: `KingFlexy answered HTTP ${res.status}: ${errorMessage(res, 'no message')}${res.status === 403 ? ' (ask KingFlexy to enable bundles on our key)' : ''}` }
+    }
+    return { success: true, catalog: normaliseCatalog(network, res.data.data) }
+}
+
 /** Drop the cached catalog — after a 404 "bundle no longer available", or from admin. */
 export function invalidateBundleCatalog(): void {
     try {

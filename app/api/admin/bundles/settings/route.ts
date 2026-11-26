@@ -5,7 +5,7 @@ import { PUBLIC_CONFIG_CACHE_TAG } from '@/lib/cache-tags'
 import { verifyBundlesAdmin } from '@/lib/bundle-admin'
 import { BUNDLE_PRICE_TIERS, BUNDLE_SETTING_KEYS, bundleSettingKeys } from '@/lib/bundle-pricing'
 import { BUNDLE_NETWORKS } from '@/lib/kingflexy-bundles-service'
-import { BUNDLE_PROVIDERS, getProviderCatalog, invalidateAllBundleCatalogs, isBundleProvider } from '@/lib/bundle-provider'
+import { BUNDLE_PROVIDERS, diagnoseProviderCatalog, invalidateAllBundleCatalogs, isBundleProvider } from '@/lib/bundle-provider'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +44,9 @@ export async function GET(request: NextRequest) {
         await Promise.all(BUNDLE_PROVIDERS.map(async p => {
             const out: Record<string, Check> = {}
             for (const n of BUNDLE_NETWORKS) {
-                const res = await getProviderCatalog(p, n)
+                // The diagnostic read: same request, but the real reason on failure
+                // (missing key, HTTP status, network error) instead of the buyer text.
+                const res = await diagnoseProviderCatalog(p, n)
                 out[n] = res.success
                     ? { ok: true, bundles: res.catalog.bundles.length, enabled: res.catalog.enabled }
                     : { ok: false, error: res.error }

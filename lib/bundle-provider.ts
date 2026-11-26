@@ -12,6 +12,7 @@ import {
     invalidateBundleCatalog as invalidateKfBundleCatalog,
     purchaseBundleViaKingFlexy,
     getKfBundleOrderStatus,
+    diagnoseKfBundleCatalog,
     type BundleNetwork,
     type CatalogResult,
     type KfBundleStatusResult,
@@ -21,6 +22,7 @@ import {
     invalidateDgBundleCatalog,
     purchaseBundleViaDatagod,
     getDgBundleOrderStatus,
+    diagnoseDgBundleCatalog,
     type DgBundlePurchaseResult,
 } from '@/lib/datagod-bundles-service'
 
@@ -57,6 +59,11 @@ export function orderProvider(order: any): BundleProvider {
 
 export function getProviderCatalog(provider: BundleProvider, network: BundleNetwork): Promise<CatalogResult> {
     return provider === 'datagod' ? getDgBundleCatalog(network) : getKfBundleCatalog(network)
+}
+
+/** Admin Test connection only: uncached, with the precise failure reason. */
+export function diagnoseProviderCatalog(provider: BundleProvider, network: BundleNetwork): Promise<CatalogResult> {
+    return provider === 'datagod' ? diagnoseDgBundleCatalog(network) : diagnoseKfBundleCatalog(network)
 }
 
 export function invalidateAllBundleCatalogs(): void {

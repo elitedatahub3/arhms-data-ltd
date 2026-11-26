@@ -306,6 +306,23 @@ export async function getDgBundleCatalog(network: BundleNetwork): Promise<Catalo
     }
 }
 
+/**
+ * ADMIN ONLY (Test connection): the same uncached catalog read, but the precise
+ * reason comes back instead of the generic buyer message. Never show it to buyers.
+ */
+export async function diagnoseDgBundleCatalog(network: BundleNetwork): Promise<CatalogResult> {
+    if (!DG_KEY) return { success: false, error: 'DATAGOD_COMMISSION_KEY is not set on this deployment (add it in Vercel, then redeploy).' }
+    if (!DG_KEY.startsWith('dg2_')) return { success: false, error: `DATAGOD_COMMISSION_KEY does not look like a v2 key (starts "${DG_KEY.slice(0, 6)}…", expected dg2_).` }
+    const res = await dgRequest('GET', `/bundles/catalog?network=${encodeURIComponent(network)}`, undefined, 15_000)
+    if (res.transportError) return { success: false, error: `Could not reach ${DG_V2_URL}: ${res.transportError}` }
+    if (!res.ok || res.data?.success !== true) {
+        return { success: false, error: `Datagod answered HTTP ${res.status}: ${errorMessage(res, 'no message')}` }
+    }
+    const catalog = normaliseCatalog(network, res.data.data)
+    if (!catalog.bundles.length) return { success: false, error: 'Datagod answered, but no bundle in the reply could be read.' }
+    return { success: true, catalog }
+}
+
 export function invalidateDgBundleCatalog(): void {
     try {
         revalidateTag(DG_BUNDLE_CATALOG_TAG)
