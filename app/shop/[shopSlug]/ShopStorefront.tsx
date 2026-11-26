@@ -461,13 +461,12 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
     }, [packages, isSpecialMtnMashupHidden, isExpressMtnHidden, isStandardMtnHidden])
 
     // When the shop sells no MTN data of its own, ALL MTN Standard Bundles (Special
-    // Bundles, Data, Video, …) take MTN's place in the DATA tile, and the Standard
-    // Bundles tile keeps Telecel and AirtelTigo. When it does sell MTN data, MTN
-    // Standard Bundles stay in the Standard Bundles tile.
+    // Bundles, Data, Video, …) also fill MTN's place in the DATA tile. The
+    // Standard Bundles tile always offers every enabled network, MTN included.
     const shopSellsMtnData = realNetworks.includes('MTN') || realNetworks.includes('EXPRESS MTN')
     const specialInDataTile = isShopBundlesEnabled && !shopSellsMtnData && bundleNetworks.includes('MTN')
-    const bundlesTileNetworks = specialInDataTile ? bundleNetworks.filter(n => n !== 'MTN') : [...bundleNetworks]
-    const showBundlesTile = isShopBundlesEnabled && bundlesTileNetworks.length > 0
+    const bundlesTileNetworks = [...bundleNetworks]
+    const showBundlesTile = isShopBundlesEnabled
 
     const networks = useMemo(
         () => (specialInDataTile ? ['MTN', ...realNetworks] : realNetworks),
@@ -2081,7 +2080,6 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                         <StorefrontBundles
                             shopSlug={shop.shop_slug}
                             brandColor={shop.brand_color}
-                            // MTN already sits in DATA when the shop has no MTN data of its own.
                             scope="all"
                             networks={bundlesTileNetworks}
                         />
