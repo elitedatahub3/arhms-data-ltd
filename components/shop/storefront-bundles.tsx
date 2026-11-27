@@ -46,6 +46,32 @@ const NETWORKS: { id: NetworkId; label: string; prefixes: string[]; card: string
     },
 ]
 
+/**
+ * Provider names pack everything into one string ("1 Hour - 440MB (GHs 1)",
+ * "Kokoo 446MB(GHS3-1Day(s))", "Video 1.54GB"). Show them like the shop's own
+ * data cards: the data size big, the rest as a small detail line. The price in
+ * the name ("GHs 1") is dropped, since the card shows the real price.
+ */
+export function splitBundleName(name: string): { headline: string; detail: string } {
+    const volRe = /(\d+(?:\.\d+)?)\s*(MB|GB|TB)\b/i
+    const m = volRe.exec(name)
+    if (!m) return { headline: name, detail: '' }
+    const headline = `${m[1]}${m[2].toUpperCase()}`
+    const detail = name
+        .replace(volRe, ' ')
+        .replace(/\(s\)/gi, '')
+        .replace(/GH[₵S]*\s*[\d.]+\s*-?\s*/gi, '')
+        .replace(/[()_]/g, ' ')
+        // "1Day" → "1 Day", "3Day" → "3 Days", "26mins" → "26 mins"
+        .replace(/(\d+)\s*Days?\b/gi, (_m, n) => `${n} ${Number(n) === 1 ? 'Day' : 'Days'}`)
+        .replace(/(\d+)\s*(mins?)\b/gi, '$1 $2')
+        .replace(/\s+,/g, ',')
+        .replace(/\s+/g, ' ')
+        .replace(/^[\s,\-–]+|[\s,\-–]+$/g, '')
+        .trim()
+    return { headline, detail }
+}
+
 function NetworkMark({ id, className }: { id: NetworkId; className?: string }) {
     const n = NETWORKS.find(x => x.id === id)!
     return (
@@ -316,9 +342,12 @@ export default function StorefrontBundles({
                     <Button variant="outline" size="sm" onClick={() => loadCatalog(network)}><RefreshCw className="w-4 h-4 mr-2" /> Try again</Button>
                 </div>
             ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                // Same size as the shop's own data cards: at most three per row.
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {visible.map(b => {
                         const theme = NETWORKS.find(x => x.id === network)!
+                        const { headline, detail } = splitBundleName(b.size)
+                        const extra = [detail, b.validity].filter(Boolean).join(' · ')
                         return (
                             <button
                                 key={b.key}
@@ -329,12 +358,12 @@ export default function StorefrontBundles({
                             >
                                 <div className="w-full flex items-center justify-between p-3">
                                     <NetworkMark id={network} className="w-7 h-7 ring-2 ring-white/40" />
-                                    <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', theme.chip)}>{network}</span>
+                                    <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', theme.chip)}>{theme.label}</span>
                                 </div>
-                                <div className="w-full flex-1 flex flex-col items-center justify-center text-center px-2 pb-3">
-                                    <p className="text-xl sm:text-2xl font-black leading-tight">{b.size}</p>
-                                    <p className="text-sm font-bold mt-1">GH₵{b.price.toFixed(2)}</p>
-                                    {b.validity && <p className="text-[11px] opacity-80 mt-0.5">{b.validity}</p>}
+                                <div className="w-full flex-1 flex flex-col items-center justify-center text-center px-3 pb-4 min-h-[96px]">
+                                    <p className="text-2xl sm:text-3xl font-black leading-none tracking-tight whitespace-nowrap">{headline}</p>
+                                    <p className="text-base font-black mt-1.5">GH₵{b.price.toFixed(2)}</p>
+                                    {extra && <p className="text-[11px] font-semibold opacity-85 mt-1 leading-snug">• {extra}</p>}
                                 </div>
                                 <span className={cn('w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold transition-colors', theme.band)}>
                                     <ShoppingCart className="w-4 h-4" /> Buy Now
@@ -372,7 +401,12 @@ export default function StorefrontBundles({
                                 <div className={cn('rounded-2xl px-4 py-4 flex items-center justify-between gap-3', theme.card)}>
                                     <div className="flex items-center gap-3 min-w-0">
                                         <NetworkMark id={network} className="w-10 h-10 ring-2 ring-white/40" />
-                                        <p className="text-lg font-black tracking-tight truncate">{theme.label} · {selected.size}</p>
+                                        <div className="min-w-0">
+                                            <p className="text-lg font-black tracking-tight truncate">{theme.label} · {splitBundleName(selected.size).headline}</p>
+                                            {splitBundleName(selected.size).detail && (
+                                                <p className="text-xs font-semibold opacity-85 truncate">{splitBundleName(selected.size).detail}</p>
+                                            )}
+                                        </div>
                                     </div>
                                     {selected.price > 0 && <p className="text-lg font-black tracking-tight shrink-0">GH₵{selected.price.toFixed(2)}</p>}
                                 </div>
