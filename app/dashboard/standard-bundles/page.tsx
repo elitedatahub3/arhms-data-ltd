@@ -1,16 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Wifi, Wallet, ShoppingCart, Loader2, History, RefreshCw, CheckCircle2, AlertTriangle, Clock, XCircle, RotateCcw, Smartphone } from 'lucide-react'
+import { Wifi, Wallet, ShoppingCart, Loader2, History, RefreshCw, CheckCircle2, AlertTriangle, Clock, XCircle, RotateCcw, Smartphone, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/contexts/auth-context'
 import { refreshDashboardSummary } from '@/hooks/use-dashboard-summary'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+
+// Same field/label styling as the storefront checkout sheet.
+const SHEET_FIELD_CLASS = 'w-full px-4 py-3.5 rounded-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-primary focus:border-transparent transition-colors'
+const SHEET_LABEL_CLASS = 'text-sm font-black text-gray-900 dark:text-gray-100'
 
 type NetworkId = 'MTN' | 'Telecel' | 'AT'
 
@@ -599,14 +600,39 @@ export default function StandardBundlesPage() {
                 </div>
             )}
 
-            <Dialog open={!!selected} onOpenChange={open => { if (!open && (!submitting || pollingRef)) setSelected(null) }}>
-                <DialogContent className="sm:max-w-md max-h-[92vh] overflow-y-auto">
-                    <DialogHeader>
-                        <DialogTitle>Buy {theme.label} {selected?.size}</DialogTitle>
-                        <DialogDescription>
-                            {selected?.familyLabel}{selected?.validity ? ` · ${selected.validity}` : ''}
-                        </DialogDescription>
-                    </DialogHeader>
+            {/* Checkout sheet: the storefront's checkout layout (network banner,
+                labelled fields, pinned summary + one big action), plus the
+                dashboard-only Wallet / Direct Pay choice. */}
+            {selected && (
+                <div className="fixed inset-0 z-[70] flex items-end justify-center">
+                    <div
+                        className="absolute inset-0 bg-black/50 backdrop-blur-[2px] animate-in fade-in duration-200"
+                        onClick={() => { if (!submitting || pollingRef) setSelected(null) }}
+                    />
+                    <div className="relative w-full sm:max-w-lg bg-white dark:bg-gray-900 rounded-t-xl sm:rounded-b-xl sm:mb-6 shadow-e4 sheet-maxh overflow-y-auto animate-sheet-up">
+                        <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 pt-3 pb-1 rounded-t-[28px]">
+                            <div className="mx-auto w-10 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700" />
+                            <button
+                                onClick={() => { if (!submitting || pollingRef) setSelected(null) }}
+                                aria-label="Close checkout"
+                                className="absolute top-2 right-4 w-9 h-9 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="px-5 pb-6 pt-3 space-y-5">
+                            {/* Selected bundle banner */}
+                            <div className={cn('rounded-2xl px-4 py-4 flex items-center justify-between gap-3', theme.card)}>
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <NetworkMark id={network} className="w-10 h-10 ring-2 ring-white/40" />
+                                    <div className="min-w-0">
+                                        <p className="text-lg font-black tracking-tight truncate">{theme.label} · {selected.size}</p>
+                                        <p className="text-xs font-semibold opacity-85 truncate">{selected.familyLabel}{selected.validity ? ` · ${selected.validity}` : ''}</p>
+                                    </div>
+                                </div>
+                                <p className="text-lg font-black tracking-tight shrink-0">{ghs(selected.price)}</p>
+                            </div>
 
                     {pollingRef ? (
                         <div className="py-4 text-center space-y-3">
@@ -620,147 +646,193 @@ export default function StandardBundlesPage() {
                             <Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" />
                         </div>
                     ) : otpRequired ? (
-                        <div className="space-y-3">
-                            <p className="text-sm text-muted-foreground">{otpMessage || 'Enter the one-time code sent to your phone.'}</p>
-                            <Input
+                        <div className="space-y-2">
+                            <label className={SHEET_LABEL_CLASS}>Code sent to your phone</label>
+                            <p className="text-xs font-semibold text-gray-400">{otpMessage || 'Enter the one-time code sent to your phone.'}</p>
+                            <input
                                 inputMode="numeric"
                                 autoComplete="one-time-code"
-                                placeholder="Code"
+                                placeholder="Enter code"
                                 value={otpCode}
                                 maxLength={8}
                                 onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                                className={SHEET_FIELD_CLASS}
                             />
                         </div>
                     ) : (
-                        <div className="space-y-4">
-                            <div className="space-y-1.5">
-                                <Label htmlFor="bundle-phone">{theme.label} number to receive the bundle</Label>
-                                <Input
+                        <>
+                            {/* Beneficiary */}
+                            <div className="space-y-2">
+                                <label htmlFor="bundle-phone" className={SHEET_LABEL_CLASS}>
+                                    Beneficiary number <span className="font-semibold text-gray-400">(gets the data)</span>
+                                </label>
+                                <input
                                     id="bundle-phone"
+                                    type="tel"
                                     inputMode="numeric"
                                     autoComplete="tel"
-                                    placeholder={`e.g. ${theme.prefixes[0]}1234567`}
+                                    placeholder={`${theme.prefixes[0]}1234567`}
                                     value={phone}
                                     maxLength={10}
                                     onChange={e => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                    className={SHEET_FIELD_CLASS}
                                 />
                                 {phoneMismatch && (
-                                    <p className="text-xs text-red-600 flex items-center gap-1">
+                                    <p className="text-xs font-bold text-red-600 flex items-center gap-1">
                                         <AlertTriangle className="w-3.5 h-3.5" />
                                         {phoneNetwork ? `This looks like a ${NETWORKS.find(n => n.id === phoneNetwork)?.label} number.` : 'Unrecognised prefix.'} Enter a {theme.label} number.
                                     </p>
                                 )}
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                                {([
-                                    { id: 'wallet', icon: Wallet, title: 'Wallet', sub: balance == null ? '—' : `${ghs(balance)} available` },
-                                    { id: 'direct', icon: Smartphone, title: 'Direct Pay', sub: 'Mobile Money' },
-                                ] as const).map(m => (
-                                    <button
-                                        key={m.id}
-                                        type="button"
-                                        onClick={() => setPayMethod(m.id)}
-                                        className={cn(
-                                            'p-3 rounded-xl border flex items-center gap-2 text-left transition-colors',
-                                            payMethod === m.id ? 'border-foreground bg-secondary/60 shadow-sm' : 'hover:border-foreground/30'
-                                        )}
-                                    >
-                                        <m.icon className={cn('w-5 h-5 shrink-0', m.id === 'wallet' ? 'text-emerald-600' : 'text-sky-500')} />
-                                        <span className="min-w-0">
-                                            <span className="block font-bold text-sm">{m.title}</span>
-                                            <span className="block text-xs text-muted-foreground truncate">{m.sub}</span>
-                                        </span>
-                                    </button>
-                                ))}
+                            {/* Pay with */}
+                            <div className="space-y-2">
+                                <label className={SHEET_LABEL_CLASS}>Pay with</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {([
+                                        { id: 'wallet', icon: Wallet, title: 'Wallet', sub: balance == null ? '—' : `${ghs(balance)} available` },
+                                        { id: 'direct', icon: Smartphone, title: 'Mobile Money', sub: 'Direct Pay' },
+                                    ] as const).map(m => (
+                                        <button
+                                            key={m.id}
+                                            type="button"
+                                            onClick={() => setPayMethod(m.id)}
+                                            className={cn(
+                                                'p-3 rounded-2xl border flex items-center gap-2 text-left transition-all',
+                                                payMethod === m.id
+                                                    ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 shadow-sm'
+                                                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                                            )}
+                                        >
+                                            <m.icon className={cn('w-5 h-5 shrink-0', m.id === 'wallet' ? 'text-emerald-600' : 'text-sky-500')} />
+                                            <span className="min-w-0">
+                                                <span className="block font-bold text-sm">{m.title}</span>
+                                                <span className="block text-xs text-gray-400 truncate">{m.sub}</span>
+                                            </span>
+                                        </button>
+                                    ))}
+                                </div>
+                                {payMethod === 'wallet' && insufficient && (
+                                    <p className="text-xs font-bold text-red-600">
+                                        Your wallet balance is too low for this bundle.{' '}
+                                        <button type="button" className="underline" onClick={() => setPayMethod('direct')}>Pay with Mobile Money</button>
+                                        {' '}or <a href="/dashboard/wallet" className="underline">top up</a>.
+                                    </p>
+                                )}
                             </div>
 
                             {payMethod === 'direct' && needsMomo && (
-                                <div className="space-y-3">
-                                    <div className="space-y-1.5">
-                                        <Label htmlFor="momo-phone">Mobile Money number to pay from</Label>
-                                        <Input
+                                <>
+                                    <div className="space-y-2">
+                                        <label htmlFor="momo-phone" className={SHEET_LABEL_CLASS}>
+                                            Mobile Money number <span className="font-semibold text-gray-400">(to pay)</span>
+                                        </label>
+                                        <input
                                             id="momo-phone"
+                                            type="tel"
                                             inputMode="numeric"
                                             autoComplete="tel"
                                             placeholder="0241234567"
                                             value={momoPhone}
                                             maxLength={10}
                                             onChange={e => setMomoPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                            className={SHEET_FIELD_CLASS}
                                         />
                                     </div>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {NETWORKS.map(n => (
-                                            <button
-                                                key={n.id}
-                                                type="button"
-                                                onClick={() => { setMomoNetwork(n.id); setMomoNetworkManual(true) }}
-                                                className={cn(
-                                                    'py-2 rounded-xl border text-xs font-bold transition-colors',
-                                                    momoNetwork === n.id ? 'border-foreground bg-secondary/60 shadow-sm' : 'text-muted-foreground hover:border-foreground/30'
-                                                )}
-                                            >
-                                                {n.label}
-                                            </button>
-                                        ))}
+                                    <div className="space-y-2">
+                                        <label className={SHEET_LABEL_CLASS}>Network</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {NETWORKS.map(n => (
+                                                <button
+                                                    key={n.id}
+                                                    type="button"
+                                                    onClick={() => { setMomoNetwork(n.id); setMomoNetworkManual(true) }}
+                                                    className={cn(
+                                                        'flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-bold transition-all',
+                                                        momoNetwork === n.id
+                                                            ? 'border-gray-900 dark:border-white bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                                                            : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-300'
+                                                    )}
+                                                >
+                                                    <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', n.id === 'MTN' ? 'bg-[#ffcc00]' : n.id === 'Telecel' ? 'bg-[#da291c]' : 'bg-[#2463eb]')} />
+                                                    {n.label}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
+                                </>
+                            )}
+
+                            {payMethod === 'direct' && quoteError && (
+                                <div className="flex items-start gap-2 p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                                    <p className="text-xs font-bold text-red-800 dark:text-red-300">{quoteError}</p>
                                 </div>
                             )}
+                        </>
+                    )}
+                        </div>
 
-                            <div className="rounded-xl bg-secondary/60 p-3 space-y-1.5 text-sm">
-                                <div className="flex justify-between"><span className="text-muted-foreground">Bundle</span><span className="font-bold">{theme.label} {selected?.size}</span></div>
-                                <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-bold">{ghs(selected?.price ?? 0)}</span></div>
-                                {payMethod === 'wallet' ? (
-                                    <div className="flex justify-between"><span className="text-muted-foreground">Wallet after</span><span className={cn('font-bold', insufficient && 'text-red-600')}>{balance == null || !selected ? '—' : ghs(balance - selected.price)}</span></div>
-                                ) : (
-                                    <>
-                                        <div className="flex justify-between"><span className="text-muted-foreground">Payment fee</span><span className="font-bold">{quote ? ghs(quote.fee) : quoteLoading ? '…' : '—'}</span></div>
-                                        <div className="flex justify-between border-t pt-1.5"><span className="text-muted-foreground">You pay</span><span className="font-black">{quote ? ghs(quote.total) : quoteLoading ? '…' : '—'}</span></div>
-                                    </>
-                                )}
-                            </div>
+                        {/* Cost summary + action, pinned to the bottom */}
+                        <div className="sticky bottom-0 border-t border-gray-100 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 px-5 pt-3 pb-4 safe-b space-y-3">
+                            {!pollingRef && !otpRequired && (
+                                <dl className="space-y-1.5">
+                                    <div className="flex items-center justify-between text-sm">
+                                        <dt className="font-semibold text-gray-500 dark:text-gray-400">Bundle</dt>
+                                        <dd className="font-bold tabular text-gray-900 dark:text-gray-100">{ghs(selected.price)}</dd>
+                                    </div>
+                                    {payMethod === 'wallet' ? (
+                                        <div className="flex items-center justify-between text-sm">
+                                            <dt className="font-semibold text-gray-500 dark:text-gray-400">Wallet after</dt>
+                                            <dd className={cn('font-bold tabular', insufficient ? 'text-red-600' : 'text-gray-900 dark:text-gray-100')}>
+                                                {balance == null ? '—' : ghs(balance - selected.price)}
+                                            </dd>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center justify-between text-sm">
+                                            <dt className="font-semibold text-gray-500 dark:text-gray-400">Payment fee</dt>
+                                            <dd className="font-semibold text-gray-500 dark:text-gray-400">
+                                                {quote ? (quote.fee > 0 ? ghs(quote.fee) : 'added by Mobile Money') : quoteLoading ? '…' : '—'}
+                                            </dd>
+                                        </div>
+                                    )}
+                                </dl>
+                            )}
 
-                            {payMethod === 'wallet' && insufficient && (
-                                <p className="text-sm text-red-600">
-                                    Your wallet balance is too low for this bundle.{' '}
-                                    <button type="button" className="underline font-bold" onClick={() => setPayMethod('direct')}>Pay with Mobile Money</button>
-                                    {' '}or <a href="/dashboard/wallet" className="underline font-bold">top up</a>.
+                            {pollingRef ? (
+                                <Button variant="outline" className="w-full h-14 text-base font-black" onClick={() => setSelected(null)}>Close</Button>
+                            ) : otpRequired ? (
+                                <div className="flex gap-2">
+                                    <Button variant="outline" className="h-14 px-5 font-bold" onClick={() => { setOtpRequired(false); setOtpCode('') }} disabled={submitting}>Back</Button>
+                                    <Button className="flex-1 h-14 text-lg font-black" onClick={verifyOtp} disabled={!otpCode.trim() || submitting}>
+                                        {submitting && <Loader2 className="w-5 h-5 animate-spin mr-2" />} Confirm code
+                                    </Button>
+                                </div>
+                            ) : payMethod === 'wallet' ? (
+                                <Button className="w-full h-14 text-lg font-black" onClick={confirmBuy} disabled={!phoneValid || insufficient || submitting}>
+                                    {submitting ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Wallet className="w-5 h-5 mr-2" />}
+                                    Pay {ghs(selected.price)} from wallet
+                                </Button>
+                            ) : (
+                                <Button className="w-full h-14 text-lg font-black" onClick={startDirect} disabled={!phoneValid || !quote || quoteLoading || !momoReady || submitting}>
+                                    {submitting ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Smartphone className="w-5 h-5 mr-2" />}
+                                    {quote ? `Pay ${ghs(quote.total)}` : 'Pay'}
+                                </Button>
+                            )}
+
+                            {!pollingRef && !otpRequired && (
+                                <p className="text-[12px] text-center font-semibold text-gray-400 leading-snug">
+                                    {payMethod === 'wallet'
+                                        ? 'Paid straight from your wallet. The bundle is sent at once.'
+                                        : !phoneValid
+                                            ? 'Enter the number to receive the bundle to see the total.'
+                                            : needsMomo ? 'Your phone will show the exact total to approve.' : 'You will choose how to pay and see the exact total on the next page.'}
                                 </p>
                             )}
-                            {payMethod === 'direct' && quoteError && <p className="text-sm text-red-600">{quoteError}</p>}
-                            {payMethod === 'direct' && !phoneValid && <p className="text-xs text-muted-foreground">Enter the number to receive the bundle to see the total.</p>}
                         </div>
-                    )}
-
-                    <DialogFooter className="gap-2">
-                        {pollingRef ? (
-                            <Button variant="outline" onClick={() => setSelected(null)}>Close</Button>
-                        ) : otpRequired ? (
-                            <>
-                                <Button variant="outline" onClick={() => { setOtpRequired(false); setOtpCode('') }} disabled={submitting}>Back</Button>
-                                <Button onClick={verifyOtp} disabled={!otpCode.trim() || submitting}>
-                                    {submitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Confirm code
-                                </Button>
-                            </>
-                        ) : (
-                            <>
-                                <Button variant="outline" onClick={() => setSelected(null)} disabled={submitting}>Cancel</Button>
-                                {payMethod === 'wallet' ? (
-                                    <Button onClick={confirmBuy} disabled={!phoneValid || insufficient || submitting}>
-                                        {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Wallet className="w-4 h-4 mr-2" />}
-                                        Pay {ghs(selected?.price ?? 0)} from wallet
-                                    </Button>
-                                ) : (
-                                    <Button onClick={startDirect} disabled={!phoneValid || !quote || quoteLoading || !momoReady || submitting}>
-                                        {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Smartphone className="w-4 h-4 mr-2" />}
-                                        {quote ? `Pay ${ghs(quote.total)} now` : 'Pay now'}
-                                    </Button>
-                                )}
-                            </>
-                        )}
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
