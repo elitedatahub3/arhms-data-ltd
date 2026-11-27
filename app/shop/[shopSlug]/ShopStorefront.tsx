@@ -449,7 +449,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
             .catch(() => {})
     }, [])
 
-    const realNetworks = useMemo(() => {
+    const networks = useMemo(() => {
         const available = NETWORK_ORDER.filter(n => {
             if (n === 'Special MTN Mashup' && isSpecialMtnMashupHidden) return false
             if (n === 'EXPRESS MTN' && isExpressMtnHidden) return false
@@ -460,24 +460,15 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
         return [...available, ...extra]
     }, [packages, isSpecialMtnMashupHidden, isExpressMtnHidden, isStandardMtnHidden])
 
-    // When the shop sells no MTN data of its own, ALL MTN Standard Bundles (Special
-    // Bundles, Data, Video, …) also fill MTN's place in the DATA tile. The
-    // Standard Bundles tile always offers every enabled network, MTN included.
-    const shopSellsMtnData = realNetworks.includes('MTN') || realNetworks.includes('EXPRESS MTN')
-    const specialInDataTile = isShopBundlesEnabled && !shopSellsMtnData && bundleNetworks.includes('MTN')
+    // Standard Bundles live only in their own tile (every enabled network, MTN
+    // included); the DATA tile shows only the shop's own packages.
     const bundlesTileNetworks = [...bundleNetworks]
     const showBundlesTile = isShopBundlesEnabled
-
-    const networks = useMemo(
-        () => (specialInDataTile ? ['MTN', ...realNetworks] : realNetworks),
-        [specialInDataTile, realNetworks]
-    )
 
     // Back from a Paystack card page for a Standard Bundle: open the tab whose
     // panel resumes the wait (it reads ?bundle_ref itself).
     useEffect(() => {
-        // MTN bundles bought from the DATA tile resume there (DATA is the default tab).
-        if (showBundlesTile && !specialInDataTile && new URLSearchParams(window.location.search).get('bundle_ref')) setActiveTab('bundles')
+        if (showBundlesTile && new URLSearchParams(window.location.search).get('bundle_ref')) setActiveTab('bundles')
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
@@ -2354,7 +2345,7 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                 )}
 
                 {/* Search Bar matching screenshot */}
-                {activeTab === 'data' && !(specialInDataTile && activeNetwork === 'MTN') && (
+                {activeTab === 'data' && (
                     <div className="flex gap-3 mb-8">
                         <div className="relative flex-1">
                             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -2371,12 +2362,8 @@ export default function ShopStorefront({ shop, packages, adminSettings, initialA
                     </div>
                 )}
 
-                {/* Package grid — or, when MTN is the Special Bundles stand-in, those instead */}
-                {activeTab === 'data' && specialInDataTile && activeNetwork === 'MTN' ? (
-                    <div className="mb-6">
-                        <StorefrontBundles shopSlug={shop.shop_slug} brandColor={shop.brand_color} scope="all" networks={['MTN']} />
-                    </div>
-                ) : filteredPackages.length === 0 ? (
+                {/* Package grid */}
+                {filteredPackages.length === 0 ? (
                     <div className="text-center py-24 text-gray-400 flex flex-col items-center">
                         <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-900 flex items-center justify-center mb-6">
                             <AlertCircle className="w-8 h-8 opacity-40" />

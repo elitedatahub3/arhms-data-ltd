@@ -6,10 +6,8 @@
  * percentage goes on top, and that percentage is the shop's profit
  * (bundle_orders.shop_profit), paid into the shop wallet once delivered.
  *
- * MTN placement on the storefront:
- *  - the Standard Bundles tile always offers every enabled network, MTN included.
- *  - shop sells no MTN data → ALL MTN Standard Bundles (Special Bundles, Data,
- *    Video, …) ALSO show inside the DATA tile as its MTN tab.
+ * Storefront placement: Standard Bundles live only in their own tile, which
+ * offers every enabled network (MTN included). The DATA tile is untouched.
  */
 import { BUNDLE_SETTING_KEYS } from '@/lib/bundle-pricing'
 import { isBundlesEnabled, type BundleSettings } from '@/lib/bundle-order-intent'
