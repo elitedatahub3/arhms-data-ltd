@@ -10,6 +10,9 @@ import {
     GraduationCap,
     ShieldCheck,
     Search,
+    Receipt,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -27,7 +30,24 @@ interface Slide {
     ctaLabel: string
     href: string
     gradientClass: string
+    /** Brand logo shown in a white tile on the right instead of the badge icon. */
+    logo?: string
 }
+
+// Bill slides open the bill page with that biller already picked. Only on the
+// main dashboard (role is set): sub-agents' bill link is their pricing page.
+const billSlide = (key: string, title: string, logo: string, gradientClass: string) => ({
+    key: 'bill-' + key,
+    badgeIcon: Receipt,
+    badgeLabel: 'Utility Bills',
+    title,
+    description: 'Pay your ' + title + ' bill straight from your wallet.',
+    ctaLabel: 'Pay Now',
+    href: '/dashboard/utilities?service=' + key,
+    gradientClass,
+    logo,
+    show: (p: PromoHeroCarouselProps) => !!p.role,
+})
 
 const ALL_SLIDES: (Slide & { show: (p: PromoHeroCarouselProps) => boolean })[] = [
     {
@@ -96,6 +116,11 @@ const ALL_SLIDES: (Slide & { show: (p: PromoHeroCarouselProps) => boolean })[] =
         gradientClass: 'from-yellow-600 to-amber-800',
         show: () => true,
     },
+    billSlide('ecg', 'ECG Prepaid', '/images/utilities/ecg.png', 'from-[#1e2a78] via-[#7a1a1a] to-[#8a7a12]'),
+    billSlide('ghanawater', 'Ghana Water', '/images/utilities/ghanawater.png', 'from-sky-600 to-blue-900'),
+    billSlide('dstv', 'DSTV', '/images/utilities/dstv.png', 'from-[#0a4f9e] to-[#06234a]'),
+    billSlide('gotv', 'GOtv', '/images/utilities/gotv.png', 'from-[#7a0a0a] to-[#0b4a1c]'),
+    billSlide('startimes', 'StarTimes TV', '/images/utilities/startimes.png', 'from-[#0b3a66] via-slate-950 to-[#8a5a0a]'),
     {
         key: 'verify',
         badgeIcon: ShieldCheck,
@@ -140,14 +165,57 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
     }, [startTimer])
 
     const handleNav = (i: number) => {
-        setCurrent(i)
+        setCurrent(((i % slides.length) + slides.length) % slides.length)
         startTimer()
+    }
+    const prev = () => handleNav(current - 1)
+    const next = () => handleNav(current + 1)
+
+    // Swipe on touch, drag with a mouse. A horizontal move past 40px changes
+    // slide; anything shorter is a tap and the CTA link still works.
+    const dragStart = useRef<{ x: number; y: number } | null>(null)
+    const dragged = useRef(false)
+    const onPointerDown = (e: React.PointerEvent) => {
+        dragStart.current = { x: e.clientX, y: e.clientY }
+        dragged.current = false
+    }
+    const onPointerUp = (e: React.PointerEvent) => {
+        const s = dragStart.current
+        dragStart.current = null
+        if (!s) return
+        const dx = e.clientX - s.x
+        const dy = e.clientY - s.y
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+            dragged.current = true
+            if (dx < 0) next()
+            else prev()
+        }
+    }
+    // Swallow the click that ends a drag so it does not open the slide's link.
+    const onClickCapture = (e: React.MouseEvent) => {
+        if (dragged.current) {
+            e.preventDefault()
+            e.stopPropagation()
+            dragged.current = false
+        }
     }
 
     if (slides.length === 0) return null
 
     return (
-        <div className="relative w-full overflow-hidden rounded-3xl shadow-sm">
+        <div
+            className="relative w-full overflow-hidden rounded-3xl shadow-sm select-none touch-pan-y"
+            onPointerDown={onPointerDown}
+            onPointerUp={onPointerUp}
+            onPointerCancel={() => { dragStart.current = null }}
+            onClickCapture={onClickCapture}
+            onKeyDown={(e) => {
+                if (e.key === 'ArrowLeft') prev()
+                else if (e.key === 'ArrowRight') next()
+            }}
+            role="region"
+            aria-roledescription="carousel"
+        >
             <div className="relative h-52 sm:h-48">
                 {slides.map((slide, i) => (
                     <div
@@ -157,20 +225,29 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
                             i === current ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                         )}
                     >
-                        <div className={cn('relative h-full w-full bg-gradient-to-br p-4 sm:p-6 flex flex-col justify-between', slide.gradientClass)}>
+                        <div className={cn('relative h-full w-full bg-gradient-to-br py-4 px-12 sm:py-6 sm:px-14 flex flex-col justify-between', slide.gradientClass)}>
                             <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
 
-                            <div className="relative z-10 flex items-start justify-between">
+                            <div className={cn('relative z-10 flex items-start justify-between', slide.logo && 'pr-14 sm:pr-24')}>
                                 <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-white">
                                     <slide.badgeIcon className="w-3 h-3" />
                                     {slide.badgeLabel}
                                 </span>
-                                <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center">
-                                    <slide.badgeIcon className="w-4 h-4 text-white" />
-                                </div>
+                                {!slide.logo && (
+                                    <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center">
+                                        <slide.badgeIcon className="w-4 h-4 text-white" />
+                                    </div>
+                                )}
                             </div>
 
-                            <div className="relative z-10 pb-7">
+                            {slide.logo && (
+                                <div className="absolute right-12 sm:right-16 top-1/2 -translate-y-1/2 z-10 w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white p-1.5 shadow-lg overflow-hidden flex items-center justify-center">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={slide.logo} alt="" draggable={false} className="w-full h-full object-contain rounded-xl" loading="lazy" />
+                                </div>
+                            )}
+
+                            <div className={cn('relative z-10 pb-7', slide.logo && 'pr-24 sm:pr-36')}>
                                 <h3 className="text-base sm:text-xl font-black text-white tracking-tight mb-1">
                                     {slide.title}
                                 </h3>
@@ -187,6 +264,27 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
                     </div>
                 ))}
             </div>
+
+            {slides.length > 1 && (
+                <>
+                    <button
+                        type="button"
+                        aria-label="Previous slide"
+                        onClick={prev}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center backdrop-blur-sm transition"
+                    >
+                        <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                        type="button"
+                        aria-label="Next slide"
+                        onClick={next}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center backdrop-blur-sm transition"
+                    >
+                        <ChevronRight className="w-4 h-4" />
+                    </button>
+                </>
+            )}
 
             {slides.length > 1 && (
                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2">

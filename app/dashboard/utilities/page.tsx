@@ -306,6 +306,14 @@ function UtilitiesPageInner() {
         }
     }, [searchParams])
 
+    // Deep link from the dashboard carousel: /dashboard/utilities?service=ecg
+    // preselects that biller once the config has loaded, if it is enabled.
+    useEffect(() => {
+        const wanted = searchParams.get('service')
+        if (!wanted || serviceId) return
+        if (services.some(s => s.id === wanted && s.enabled)) setServiceId(wanted)
+    }, [searchParams, services, serviceId])
+
     // ── Lookup ───────────────────────────────────────────────────────────────
     // A stale name must never sit above a changed account number — the confirmed
     // name is the whole safety mechanism here — so the result is tied to the exact
