@@ -62,12 +62,12 @@ interface LookupResult {
 
 // ─── Presentation ─────────────────────────────────────────────────────────────
 
-const SERVICE_STYLE: Record<string, { icon: React.ElementType; gradient: string; tint: string }> = {
-    dstv:       { icon: Tv,       gradient: 'from-[#0057b8] to-[#0091ea]', tint: 'text-[#0057b8]' },
-    gotv:       { icon: Tv,       gradient: 'from-[#43a047] to-[#7cb342]', tint: 'text-[#2e7d32]' },
-    startimes:  { icon: Tv,       gradient: 'from-[#e65100] to-[#fb8c00]', tint: 'text-[#e65100]' },
-    ecg:        { icon: Zap,      gradient: 'from-[#f9a825] to-[#fdd835]', tint: 'text-[#f57f17]' },
-    ghanawater: { icon: Droplets, gradient: 'from-[#0277bd] to-[#4fc3f7]', tint: 'text-[#01579b]' },
+const SERVICE_STYLE: Record<string, { logo: string; tint: string }> = {
+    dstv:       { logo: '/images/utilities/dstv.png',       tint: 'text-[#0057b8]' },
+    gotv:       { logo: '/images/utilities/gotv.png',       tint: 'text-[#2e7d32]' },
+    startimes:  { logo: '/images/utilities/startimes.png',  tint: 'text-[#e65100]' },
+    ecg:        { logo: '/images/utilities/ecg.png',        tint: 'text-[#f57f17]' },
+    ghanawater: { logo: '/images/utilities/ghanawater.png', tint: 'text-[#01579b]' },
 }
 
 const QUICK_AMOUNTS = [10, 20, 50, 100, 200, 500]
@@ -632,7 +632,7 @@ function UtilitiesPageInner() {
                     <Zap className="w-7 h-7" />
                     <Droplets className="w-7 h-7" />
                 </div>
-                <h1 className="text-2xl font-black text-foreground">Pay Bills — coming soon</h1>
+                <h1 className="text-2xl font-black text-foreground">Utility Bills — coming soon</h1>
                 <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
                     You will soon be able to pay DSTV, GOtv, StarTimes, ECG and Ghana Water bills
                     straight from here, with Mobile Money. We are putting it through its final
@@ -646,7 +646,7 @@ function UtilitiesPageInner() {
         <div className="max-w-3xl mx-auto pb-24">
             {/* Header */}
             <div className="mb-6">
-                <h1 className="text-2xl font-black text-foreground">Pay Bills</h1>
+                <h1 className="text-2xl font-black text-foreground">Utility Bills</h1>
                 <p className="text-sm text-muted-foreground mt-1">
                     DSTV, GOtv, StarTimes, ECG and Ghana Water — paid instantly by Mobile Money.
                 </p>
@@ -689,7 +689,6 @@ function UtilitiesPageInner() {
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                             {services.map(s => {
                                 const style = SERVICE_STYLE[s.id] || SERVICE_STYLE.dstv
-                                const Icon = style.icon
                                 const active = serviceId === s.id
                                 return (
                                     <button
@@ -702,8 +701,9 @@ function UtilitiesPageInner() {
                                             !s.enabled && 'opacity-40 cursor-not-allowed'
                                         )}
                                     >
-                                        <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center mb-2', style.gradient)}>
-                                            <Icon className="w-5 h-5 text-white" />
+                                        <div className="w-10 h-10 rounded-xl bg-white border border-border overflow-hidden flex items-center justify-center mb-2">
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img src={style.logo} alt="" className="w-full h-full object-contain" loading="lazy" />
                                         </div>
                                         <p className="font-bold text-sm text-foreground">{s.label}</p>
                                         <p className="text-[11px] text-muted-foreground mt-0.5">
@@ -1058,12 +1058,12 @@ function UtilitiesPageInner() {
                         <div className="space-y-2.5">
                             {filteredOrders.map(order => {
                                 const style = SERVICE_STYLE[order.service] || SERVICE_STYLE.dstv
-                                const Icon = style.icon
                                 return (
                                     <div key={order.id} className="bg-card border border-border rounded-2xl p-4">
                                         <div className="flex items-start gap-3">
-                                            <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center shrink-0', style.gradient)}>
-                                                <Icon className="w-5 h-5 text-white" />
+                                            <div className="w-10 h-10 rounded-xl bg-white border border-border overflow-hidden flex items-center justify-center shrink-0">
+                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                <img src={style.logo} alt="" className="w-full h-full object-contain" loading="lazy" />
                                             </div>
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-start justify-between gap-2">

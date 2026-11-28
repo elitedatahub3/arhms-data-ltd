@@ -190,7 +190,7 @@ export default function SubDashboard() {
   const quickLinks = [
     { href: '/dashboard/data-packages', label: 'Buy Data Bundles', icon: Package },
     { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
-    { href: '/dashboard/sub/utilities', label: 'Pay Bills', icon: Receipt },
+    { href: '/dashboard/sub/utilities', label: 'Utility Bills', icon: Receipt },
     { href: '/dashboard/sub/rc', label: 'Results Checker', icon: Tag },
     { href: '/dashboard/sub/orders', label: 'My Orders', icon: ClipboardList },
     { href: '/dashboard/sub/storefront-orders', label: 'Storefront Orders', icon: Store },

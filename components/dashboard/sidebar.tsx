@@ -65,7 +65,7 @@ const userNavItems = [
     { href: '/dashboard/results-checker', label: 'Results Checker', icon: Tag },
     { href: '/dashboard/afa-orders', label: 'AFA Registration', icon: BadgeCheck },
     { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
-    { href: '/dashboard/utilities', label: 'Pay Bills', icon: Receipt },
+    { href: '/dashboard/utilities', label: 'Utility Bills', icon: Receipt },
     { href: '/dashboard/my-orders', label: 'Orders', icon: ShoppingCart },
     { href: '/dashboard/top-performers', label: 'Top Performers', icon: Trophy },
     { href: '/dashboard/shop/sub-agents', label: 'Sub-Agents', icon: UserPlus },

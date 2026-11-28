@@ -18,15 +18,15 @@
  * can carry several meters and paying the wrong one is unrecoverable.
  */
 import { useState } from 'react'
-import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight, Phone, ArrowRight, Tv, Zap, Droplets } from 'lucide-react'
+import { Loader2, Receipt, CheckCircle2, AlertTriangle, ChevronRight, Phone, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const BILLERS = [
-    { id: 'dstv',       label: 'DSTV',       hint: 'Smartcard / IUC number',    icon: Tv,       gradient: 'from-[#0057b8] to-[#0091ea]' },
-    { id: 'gotv',       label: 'GOtv',       hint: 'IUC number',                icon: Tv,       gradient: 'from-[#43a047] to-[#7cb342]' },
-    { id: 'startimes',  label: 'StarTimes',  hint: 'Account number',            icon: Tv,       gradient: 'from-[#e65100] to-[#fb8c00]' },
-    { id: 'ecg',        label: 'ECG Prepaid', hint: 'Looked up by phone number', icon: Zap,      gradient: 'from-[#f9a825] to-[#fdd835]' },
-    { id: 'ghanawater', label: 'Ghana Water', hint: 'Meter number',              icon: Droplets, gradient: 'from-[#0277bd] to-[#4fc3f7]' },
+    { id: 'dstv',       label: 'DSTV',       hint: 'Smartcard / IUC number',    logo: '/images/utilities/dstv.png' },
+    { id: 'gotv',       label: 'GOtv',       hint: 'IUC number',                logo: '/images/utilities/gotv.png' },
+    { id: 'startimes',  label: 'StarTimes',  hint: 'Account number',            logo: '/images/utilities/startimes.png' },
+    { id: 'ecg',        label: 'ECG Prepaid', hint: 'Looked up by phone number', logo: '/images/utilities/ecg.png' },
+    { id: 'ghanawater', label: 'Ghana Water', hint: 'Meter number',              logo: '/images/utilities/ghanawater.png' },
 ] as const
 
 type BillerId = typeof BILLERS[number]['id']
@@ -225,7 +225,6 @@ export default function StorefrontUtilities({
                 <label className="block text-sm font-bold mb-2 text-foreground">Choose a service</label>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {BILLERS.map(b => {
-                        const Icon = b.icon
                         const active = biller === b.id
                         return (
                             <button
@@ -242,8 +241,9 @@ export default function StorefrontUtilities({
                                 // card still belongs to the storefront it is sitting on.
                                 style={active ? { borderColor: accent } : undefined}
                             >
-                                <div className={cn('w-10 h-10 rounded-xl bg-gradient-to-br flex items-center justify-center mb-2', b.gradient)}>
-                                    <Icon className="w-5 h-5 text-white" />
+                                <div className="w-10 h-10 rounded-xl bg-white border border-border overflow-hidden flex items-center justify-center mb-2">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={b.logo} alt="" className="w-full h-full object-contain" loading="lazy" />
                                 </div>
                                 <p className="font-bold text-sm text-foreground">{b.label}</p>
                                 <p className="text-[11px] text-muted-foreground mt-0.5">{b.hint}</p>
