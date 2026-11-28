@@ -201,6 +201,8 @@ export async function buildUtilityIntent(
         service,
         accountNumber,
         phone: def.requiresPhone ? phoneRaw : undefined,
+        // Only Datagod's Ghana Water lookup uses it.
+        email: email || undefined,
     })
 
     // ECG links a meter to the paying number on first payment, so a meter the

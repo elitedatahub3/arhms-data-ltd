@@ -2,8 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { sendPushToAdmins } from '@/lib/web-push'
 import { UTILITY_SERVICES, isUtilityService } from '@/lib/hubtel-utility-service'
-import { getUtilityOrderStatus } from '@/lib/utility-provider'
+import { getUtilityOrderStatusForOrder, orderUtilityProvider, UTILITY_PROVIDER_LABEL } from '@/lib/utility-provider'
 import { finalizeUtilityOrder } from '@/lib/utility-order-completion'
+
+/*
+ * Settles BOTH bill providers, despite the name (kept so the cron-job.org job keeps
+ * working). Each order is asked about with the provider stamped on it at dispatch.
+ * Datagod sends no webhooks, so for Datagod-routed billers this sweep is the ONLY
+ * thing that ever completes an order.
+ */
 
 /**
  * Reconciles bill payments against KingFlexy.
@@ -58,7 +65,7 @@ export async function GET(request: NextRequest) {
 
         const { data: openOrders, error } = await supabase
             .from('utility_orders')
-            .select('id, reference_code, external_transaction_id, service, account_number, account_name, bill_amount, total_paid, status, dispatch_claimed_at, created_at')
+            .select('id, reference_code, external_transaction_id, provider, service, account_number, account_name, bill_amount, total_paid, status, dispatch_claimed_at, created_at')
             .in('status', ['pending', 'processing'])
             .not('dispatch_claimed_at', 'is', null)
             .lt('created_at', staleCutoff)
@@ -73,12 +80,15 @@ export async function GET(request: NextRequest) {
         for (const order of (openOrders || [])) {
             results.checked++
             const label = isUtilityService(order.service) ? UTILITY_SERVICES[order.service].label : order.service
+            const provider = orderUtilityProvider(order)
+            const providerLabel = UTILITY_PROVIDER_LABEL[provider]
 
             // Claimed but no supplier reference means the process died between
-            // claiming the latch and hearing back. We cannot ask about an order we
-            // have no handle on, and re-sending could pay the bill twice — so this
-            // is the one case that still needs a human.
-            if (!order.external_transaction_id) {
+            // claiming the latch and hearing back. For KingFlexy we cannot ask about
+            // an order we have no handle on, and re-sending could pay the bill twice —
+            // so that case needs a human. Datagod is asked by OUR reference_code, so
+            // its orders fall through to the status check below.
+            if (!order.external_transaction_id && provider !== 'datagod') {
                 const ageMin = (Date.now() - new Date(order.created_at).getTime()) / 60000
                 if (ageMin < ALERT_CUTOFF_MINUTES) {
                     results.flagged++
@@ -91,7 +101,26 @@ export async function GET(request: NextRequest) {
                 continue
             }
 
-            const status = await getUtilityOrderStatus(order.external_transaction_id)
+            const status = await getUtilityOrderStatusForOrder(order)
+
+            if (!status.success && status.notFound && provider === 'datagod' && !order.external_transaction_id) {
+                // Datagod has never heard of this reference AND we never got an answer
+                // from /pay. A 404 is not proof nothing was charged, so a human
+                // decides. One alert per order. A claim under STALE_MINUTES old may
+                // simply still be mid-dispatch (lookup + pay take a while), so wait.
+                const claimAgeMin = (Date.now() - new Date(order.dispatch_claimed_at).getTime()) / 60000
+                if (claimAgeMin < STALE_MINUTES) { results.pending++; continue }
+                const ageMin = claimAgeMin
+                if (ageMin < ALERT_CUTOFF_MINUTES) {
+                    results.flagged++
+                    await sendPushToAdmins({
+                        title: '⚠️ Bill payment unknown to Datagod',
+                        body: `${order.reference_code}: ${label} GHS ${Number(order.bill_amount).toFixed(2)} was claimed but Datagod has no order under this reference. Check their dashboard before refunding or re-sending.`,
+                        url: '/admin/utilities',
+                    }).catch(() => {})
+                }
+                continue
+            }
 
             if (!status.success) {
                 // Could not reach them, or they do not recognise the reference. Leave
@@ -108,6 +137,9 @@ export async function GET(request: NextRequest) {
                     .from('utility_orders')
                     .update({
                         commission: status.commissionEarned ?? null,
+                        ...(provider === 'datagod' && !order.external_transaction_id
+                            ? { external_transaction_id: order.reference_code }
+                            : {}),
                         account_name: status.accountName ?? order.account_name ?? null,
                         provider_response: (status.raw ?? null) as any,
                         updated_at: new Date().toISOString(),
@@ -125,7 +157,7 @@ export async function GET(request: NextRequest) {
                 await finalizeUtilityOrder({
                     orderId: order.id,
                     status: 'failed',
-                    note: `KingFlexy reported the ${label} payment as ${status.status}.`,
+                    note: `${providerLabel} reported the ${label} payment as ${status.status}.`,
                     refund: true,
                 })
                 results.failed++

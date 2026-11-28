@@ -4,6 +4,9 @@ import { createRouteHandlerClient } from '@/lib/supabase-server'
 import { revalidateTag } from 'next/cache'
 import { PUBLIC_CONFIG_CACHE_TAG } from '@/lib/cache-tags'
 import { UTILITY_SERVICE_KEYS } from '@/lib/hubtel-utility-service'
+import { isUtilityProvider, utilityProviderSettingKey } from '@/lib/utility-provider'
+
+const PROVIDER_KEYS = new Set(UTILITY_SERVICE_KEYS.map(s => utilityProviderSettingKey(s)))
 
 /**
  * Every admin_settings key the utilities feature owns.
@@ -39,6 +42,8 @@ const UTILITY_SETTING_KEYS: string[] = [
         `utility_fee_${service}_agent`,
         `utility_min_amount_${service}`,
         `utility_max_amount_${service}`,
+        // KingFlexy or Datagod — lib/utility-provider.ts. Missing = KingFlexy.
+        utilityProviderSettingKey(service),
     ]),
 ]
 
@@ -89,6 +94,11 @@ export async function POST(request: NextRequest) {
             .map(([key, value]) => ({ key, value: String(value) }))
 
         if (updates.length === 0) return NextResponse.json({ error: 'No valid settings provided' }, { status: 400 })
+
+        const badProvider = updates.find(u => PROVIDER_KEYS.has(u.key) && !isUtilityProvider(u.value))
+        if (badProvider) {
+            return NextResponse.json({ error: `${badProvider.key} must be kingflexy or datagod` }, { status: 400 })
+        }
 
         const supabase = createServerClient()
         const { error } = await (supabase.from('admin_settings') as any)

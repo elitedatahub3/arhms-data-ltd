@@ -50,9 +50,25 @@ interface UtilityOrder {
     payment_status: string
     response_code: string | null
     dispatch_claimed_at: string | null
+    provider: string | null
     fulfillment_note: string | null
     created_at: string
     users?: { first_name: string; last_name: string; email: string; phone_number: string } | null
+}
+
+// Mirrors lib/utility-provider.ts (not imported: it pulls in server-only modules).
+const PROVIDER_LABEL: Record<string, string> = { kingflexy: 'KingFlexy', datagod: 'Datagod' }
+/** admin_settings.value is JSONB; tolerate a quoted string. Missing = KingFlexy. */
+const readProvider = (raw: unknown) => {
+    const s = String(raw ?? '').replace(/^"+|"+$/g, '').toLowerCase()
+    return s === 'datagod' ? 'datagod' : 'kingflexy'
+}
+
+interface DgTestResult {
+    success: boolean
+    error?: string
+    warning?: string | null
+    billers?: { key: string; label: string; enabled: boolean; min_amount: number; max_amount: number }[]
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -83,6 +99,20 @@ export default function AdminUtilitiesPage() {
     const [settings, setSettings] = useState<Record<string, string>>({})
     const [settingsLoading, setSettingsLoading] = useState(true)
     const [saving, setSaving] = useState(false)
+    const [dgTest, setDgTest] = useState<DgTestResult | null>(null)
+    const [dgTesting, setDgTesting] = useState(false)
+
+    const testDatagod = async () => {
+        setDgTesting(true)
+        try {
+            const res = await fetch('/api/admin/utilities/datagod-test', { cache: 'no-store' })
+            setDgTest(await res.json())
+        } catch (e: any) {
+            setDgTest({ success: false, error: e?.message || 'Request failed' })
+        } finally {
+            setDgTesting(false)
+        }
+    }
 
     const fetchOrders = useCallback(async () => {
         setLoading(true)
@@ -182,7 +212,7 @@ export default function AdminUtilitiesPage() {
                         <Receipt className="w-6 h-6" /> Utility Bills
                     </h1>
                     <p className="text-sm text-muted-foreground mt-1">
-                        DSTV, GOtv, StarTimes, ECG and Ghana Water payments via Hubtel Commission Services.
+                        DSTV, GOtv, StarTimes, ECG and Ghana Water payments via KingFlexy or Datagod (chosen per biller in Settings).
                     </p>
                 </div>
                 <Button variant="outline" onClick={() => { fetchOrders(); fetchSettings() }} disabled={loading}>
@@ -268,6 +298,11 @@ export default function AdminUtilitiesPage() {
                                                     {order.status}
                                                 </Badge>
                                                 <Badge variant="outline" className="capitalize text-xs">{order.payment_method}</Badge>
+                                                {order.provider && (
+                                                    <Badge variant="outline" className={cn('text-xs', order.provider === 'datagod' ? 'bg-violet-50 text-violet-700 border-violet-200' : '')}>
+                                                        {PROVIDER_LABEL[order.provider] || order.provider}
+                                                    </Badge>
+                                                )}
                                                 {order.payment_status === 'refunded' && (
                                                     <Badge variant="outline" className="text-xs bg-slate-100">refunded</Badge>
                                                 )}
@@ -453,11 +488,75 @@ export default function AdminUtilitiesPage() {
                                 </div>
                             </div>
 
+                            {/* Datagod connection check — reads their biller list, moves no money. */}
+                            <div className="border rounded-2xl p-5 space-y-3">
+                                <div className="flex items-start justify-between gap-4 flex-wrap">
+                                    <div>
+                                        <Label className="text-base font-bold flex items-center gap-2">
+                                            <Settings2 className="w-4 h-4" /> Bill provider
+                                        </Label>
+                                        <p className="text-sm text-muted-foreground mt-1 max-w-xl">
+                                            Each biller below picks KingFlexy or Datagod. The choice only affects NEW
+                                            orders; orders already sent keep settling with the provider that took them.
+                                            Datagod sends no webhooks, so its bills settle through the reconciliation cron.
+                                        </p>
+                                    </div>
+                                    <Button variant="outline" onClick={testDatagod} disabled={dgTesting}>
+                                        {dgTesting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                                        Test Datagod
+                                    </Button>
+                                </div>
+                                {dgTest && (
+                                    <div className={cn('rounded-xl p-3 text-sm', dgTest.success ? 'bg-emerald-50 dark:bg-emerald-950/30' : 'bg-red-50 dark:bg-red-950/30')}>
+                                        {dgTest.warning && (
+                                            <p className="flex items-center gap-2 text-amber-700 font-semibold mb-2">
+                                                <AlertTriangle className="w-4 h-4" /> {dgTest.warning}
+                                            </p>
+                                        )}
+                                        {dgTest.success ? (
+                                            <ul className="space-y-1">
+                                                {(dgTest.billers || []).map(b => (
+                                                    <li key={b.key} className="flex items-center gap-2">
+                                                        {b.enabled ? <CheckCircle className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+                                                        <span className="font-semibold">{b.label}</span>
+                                                        <span className="text-muted-foreground">GHS {b.min_amount}–{b.max_amount}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        ) : (
+                                            <p className="flex items-center gap-2 text-red-700">
+                                                <XCircle className="w-4 h-4" /> {dgTest.error || 'Datagod could not be reached.'}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
                             {SERVICES.map(s => (
                                 <div key={s.id} className="border rounded-2xl p-5 space-y-4">
-                                    <div className="flex items-center justify-between">
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
                                         <h3 className="font-black">{s.label}</h3>
-                                        <div className="flex items-center gap-5">
+                                        <div className="flex items-center gap-5 flex-wrap">
+                                            <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg" role="radiogroup" aria-label={`${s.label} provider`}>
+                                                {(['kingflexy', 'datagod'] as const).map(p => {
+                                                    const active = readProvider(settings[`utility_provider_${s.id}`]) === p
+                                                    return (
+                                                        <button
+                                                            key={p}
+                                                            type="button"
+                                                            role="radio"
+                                                            aria-checked={active}
+                                                            onClick={() => setSetting(`utility_provider_${s.id}`, p)}
+                                                            className={cn(
+                                                                'px-3 py-1 rounded-md text-xs font-bold transition',
+                                                                active ? 'bg-white dark:bg-slate-900 shadow-sm' : 'text-muted-foreground'
+                                                            )}
+                                                        >
+                                                            {PROVIDER_LABEL[p]}
+                                                        </button>
+                                                    )
+                                                })}
+                                            </div>
                                             <label className="flex items-center gap-2 text-sm">
                                                 <Switch
                                                     checked={settings[`utility_enabled_${s.id}`] !== 'false'}

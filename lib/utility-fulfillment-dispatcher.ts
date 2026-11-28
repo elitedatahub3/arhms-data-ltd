@@ -24,7 +24,13 @@ import {
     UTILITY_SERVICES,
     isUtilityService,
 } from '@/lib/hubtel-utility-service'
-import { payUtilityBill, UTILITY_PROVIDER } from '@/lib/utility-provider'
+import {
+    payUtilityBillForOrder,
+    resolveUtilityProvider,
+    UTILITY_PROVIDER_LABEL,
+} from '@/lib/utility-provider'
+import { listDgBillers } from '@/lib/datagod-utility-service'
+import { billerForService } from '@/lib/api-v2-billers'
 
 /**
  * Hubtel allows 36 characters. reference_code is `UTIL-GHD-<ts>-<hex>`, so taking
@@ -120,6 +126,37 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
             return { dispatched: false, reason: `auto-fulfilment off for ${order.service}` }
         }
 
+        // ── Provider ─────────────────────────────────────────────────────────
+        // Decided once, here, and stamped on the row in the claim below. Every later
+        // step (status checks, the cron, refunds) asks the stamped provider, so an
+        // admin flipping the biller's switch never strands this order.
+        const provider = await resolveUtilityProvider(supabase, order.service)
+        const providerLabel = UTILITY_PROVIDER_LABEL[provider]
+
+        if (provider === 'datagod') {
+            // Datagod can switch a biller off on their side. Checked BEFORE the
+            // claim, so an order stopped here stays unclaimed and the cron's rescue
+            // sweep sends it once the biller is back, exactly like the auto-off case.
+            // If the catalog itself cannot be read, carry on: /pay will refuse with
+            // "nothing was charged" if the biller really is off.
+            const catalog = await listDgBillers()
+            const dgKey = billerForService(order.service)
+            const entry = catalog.success ? catalog.billers?.find(b => b.key === dgKey) : undefined
+            if (entry && !entry.enabled) {
+                console.log(`[UtilityDispatch] Datagod has ${def.label} switched off — order left unclaimed.`)
+                return { dispatched: false, reason: `Datagod biller ${dgKey} disabled` }
+            }
+            const amt = Number(order.bill_amount)
+            if (entry && (amt < entry.min_amount || amt > entry.max_amount)) {
+                await haltForAdmin(
+                    order,
+                    `GHS ${amt.toFixed(2)} is outside Datagod's ${def.label} limits (GHS ${entry.min_amount}–${entry.max_amount}). Nothing was sent.`,
+                    { refund: true }
+                )
+                return { dispatched: false, reason: 'amount outside Datagod limits' }
+            }
+        }
+
         // ── Claim ────────────────────────────────────────────────────────────
         // The whole idempotency story. Nothing above this line has spent anything,
         // and nothing below runs twice for one order: a concurrent invocation
@@ -131,7 +168,7 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
             .from('utility_orders')
             .update({
                 dispatch_claimed_at: new Date().toISOString(),
-                provider: UTILITY_PROVIDER,
+                provider,
                 client_reference: clientReference,
                 updated_at: new Date().toISOString(),
             })
@@ -148,13 +185,14 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
 
         console.log(
             `[UtilityDispatch] ${order.reference_code} | ${def.label} | GHS ${Number(order.bill_amount).toFixed(2)} → ` +
-            `${order.account_number} (dest ${order.destination})`
+            `${order.account_number} (dest ${order.destination}) via ${providerLabel}`
         )
 
         // ── Pay ──────────────────────────────────────────────────────────────
         // Our reference_code goes as THEIR idempotency key, so a retry returns the
         // original order rather than paying the bill a second time.
-        const result = await payUtilityBill({
+        const result = await payUtilityBillForOrder({
+            provider,
             service: order.service,
             accountNumber: order.account_number,
             amount: Number(order.bill_amount),
@@ -162,16 +200,29 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
             // nothing for the TV billers. `destination` was Hubtel's field and
             // encoded that rule per service; here the phone is simply the phone.
             phone: def.requiresPhone ? order.customer_phone : null,
+            // Datagod's Ghana Water lookup needs the customer's email.
+            email: order.customer_email ?? null,
             reference: order.reference_code,
+            // Datagod only: a changed price is accepted only up to what the
+            // customer actually paid us.
+            maxCost: Number(order.total_paid ?? order.bill_amount),
         })
 
         await supabase
             .from('utility_orders')
             .update({
-                provider: UTILITY_PROVIDER,
-                // THEIR reference (UTIL-<BILLER>-<hex>), not ours — it is what the
-                // status endpoint and the webhook correlate on.
-                external_transaction_id: result.supplierReference ?? null,
+                provider,
+                // KingFlexy: THEIR reference (UTIL-<BILLER>-<hex>), what their status
+                // endpoint and webhook correlate on. Datagod echoes OUR reference_code,
+                // and its status check asks by that anyway.
+                external_transaction_id: result.supplierReference
+                    ?? (provider === 'datagod' && result.success ? order.reference_code : null),
+                // KingFlexy reports commission only at settlement (cron/webhook write
+                // it). Datagod returns its cashback on /pay; the cron re-reads it at
+                // settlement before the order is finalised.
+                ...(provider === 'datagod' && result.success && result.cashback != null
+                    ? { commission: result.cashback }
+                    : {}),
                 transaction_id: result.orderId ?? null,
                 // Commission is not known yet: they report it once the order settles,
                 // and the cron or webhook writes it then.
@@ -205,8 +256,9 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
             const knownUnpaid = result.knownUnpaid === true
             await haltForAdmin(
                 { ...order, status: 'pending' },
-                `KingFlexy rejected the ${def.label} payment: ${result.error || 'unknown error'}.` +
-                (knownUnpaid ? '' : ' The request may or may not have reached the provider — confirm in the KingFlexy dashboard BEFORE refunding or re-sending.'),
+                `${providerLabel} rejected the ${def.label} payment: ${result.error || 'unknown error'}.` +
+                (result.insufficientBalance ? ` Top up the ${providerLabel} wallet.` : '') +
+                (knownUnpaid ? '' : ` The request may or may not have reached the provider — confirm in the ${providerLabel} dashboard BEFORE refunding or re-sending.`),
                 { refund: knownUnpaid }
             )
             return { dispatched: false, reason: result.error || 'provider rejected payment' }
@@ -223,7 +275,7 @@ export async function triggerUtilityFulfillment(orderId: string): Promise<Utilit
         })
 
         console.log(
-            `[UtilityDispatch] ${order.reference_code} dispatched to KingFlexy as ` +
+            `[UtilityDispatch] ${order.reference_code} dispatched to ${providerLabel} as ` +
             `${result.supplierReference ?? '(no reference returned)'}` +
             (result.alreadyProcessed ? ' — idempotent replay of an existing order.' : ' — awaiting settlement.')
         )

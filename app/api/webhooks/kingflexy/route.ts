@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { createServerClient } from '@/lib/supabase'
 import { UTILITY_SERVICES, isUtilityService } from '@/lib/hubtel-utility-service'
-import { getUtilityOrderStatus } from '@/lib/utility-provider'
+import { getUtilityOrderStatusForOrder, orderUtilityProvider } from '@/lib/utility-provider'
 import { finalizeUtilityOrder } from '@/lib/utility-order-completion'
 
 /**
@@ -85,14 +85,14 @@ export async function POST(request: NextRequest) {
     // same value you sent (or that was echoed back)", which differs by product.
     let { data: order } = await supabase
         .from('utility_orders')
-        .select('id, reference_code, service, status, bill_amount, account_name, external_transaction_id')
+        .select('id, reference_code, provider, service, status, bill_amount, account_name, external_transaction_id')
         .eq('external_transaction_id', reference)
         .maybeSingle()
 
     if (!order) {
         const byOurs = await supabase
             .from('utility_orders')
-            .select('id, reference_code, service, status, bill_amount, account_name, external_transaction_id')
+            .select('id, reference_code, provider, service, status, bill_amount, account_name, external_transaction_id')
             .eq('reference_code', reference)
             .maybeSingle()
         order = byOurs.data
@@ -102,6 +102,13 @@ export async function POST(request: NextRequest) {
         // 200, not 404: an unknown reference is not something they can fix by
         // retrying, and a non-2xx would just burn their one retry.
         console.warn(`[KingFlexyWebhook] No order matches reference ${reference}`)
+        return NextResponse.json({ received: true, matched: false })
+    }
+
+    // A Datagod-routed order can match by reference_code. It is not KingFlexy's to
+    // settle; the reconciliation cron asks Datagod about it.
+    if (orderUtilityProvider(order) !== 'kingflexy') {
+        console.warn(`[KingFlexyWebhook] ${reference} belongs to ${order.provider}, not KingFlexy — ignoring.`)
         return NextResponse.json({ received: true, matched: false })
     }
 
@@ -116,7 +123,7 @@ export async function POST(request: NextRequest) {
     // commission_earned, which the callback does not carry and which an API
     // partner's share is calculated from.
     const authoritative = order.external_transaction_id
-        ? await getUtilityOrderStatus(order.external_transaction_id)
+        ? await getUtilityOrderStatusForOrder(order)
         : { success: false as const, error: 'no supplier reference on the order' }
 
     const settled = authoritative.success ? authoritative.status : undefined

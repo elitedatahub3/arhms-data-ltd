@@ -116,9 +116,14 @@ export async function processUtilityDirectOrder(
             service,
             accountNumber: meta.account_number,
             phone: meta.customer_phone,
+            email: meta.customer_email ?? undefined,
         })
 
-        if (!refreshed.success || !refreshed.sessionId) {
+        // Only a failed re-verification stops the order. The sessionId was Hubtel's;
+        // neither KingFlexy nor Datagod returns one (each handles the Ghana Water
+        // session itself), so requiring it failed-and-refunded every paid Ghana
+        // Water Direct Pay order.
+        if (!refreshed.success) {
             // The customer has paid and we cannot deliver. Create the order so the
             // money is traceable, then fail-and-refund through the one code path
             // that knows how to do that.
@@ -154,7 +159,7 @@ export async function processUtilityDirectOrder(
             return { success: false, error: refreshed.error || 'Could not start a payment session' }
         }
 
-        sessionId = refreshed.sessionId
+        sessionId = refreshed.sessionId ?? null
         accountName = refreshed.accountName ?? accountName
     }
 
