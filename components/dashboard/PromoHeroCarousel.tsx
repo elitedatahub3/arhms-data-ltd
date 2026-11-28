@@ -50,6 +50,11 @@ const billSlide = (key: string, title: string, logo: string, gradientClass: stri
 })
 
 const ALL_SLIDES: (Slide & { show: (p: PromoHeroCarouselProps) => boolean })[] = [
+    billSlide('ecg', 'ECG Prepaid', '/images/utilities/ecg.png', 'from-[#1e2a78] via-[#7a1a1a] to-[#8a7a12]'),
+    billSlide('ghanawater', 'Ghana Water', '/images/utilities/ghanawater.png', 'from-sky-600 to-blue-900'),
+    billSlide('dstv', 'DSTV', '/images/utilities/dstv.png', 'from-[#0a4f9e] to-[#06234a]'),
+    billSlide('gotv', 'GOtv', '/images/utilities/gotv.png', 'from-[#7a0a0a] to-[#0b4a1c]'),
+    billSlide('startimes', 'StarTimes TV', '/images/utilities/startimes.png', 'from-[#0b3a66] via-slate-950 to-[#8a5a0a]'),
     {
         key: 'recruit',
         badgeIcon: UserPlus,
@@ -116,11 +121,6 @@ const ALL_SLIDES: (Slide & { show: (p: PromoHeroCarouselProps) => boolean })[] =
         gradientClass: 'from-yellow-600 to-amber-800',
         show: () => true,
     },
-    billSlide('ecg', 'ECG Prepaid', '/images/utilities/ecg.png', 'from-[#1e2a78] via-[#7a1a1a] to-[#8a7a12]'),
-    billSlide('ghanawater', 'Ghana Water', '/images/utilities/ghanawater.png', 'from-sky-600 to-blue-900'),
-    billSlide('dstv', 'DSTV', '/images/utilities/dstv.png', 'from-[#0a4f9e] to-[#06234a]'),
-    billSlide('gotv', 'GOtv', '/images/utilities/gotv.png', 'from-[#7a0a0a] to-[#0b4a1c]'),
-    billSlide('startimes', 'StarTimes TV', '/images/utilities/startimes.png', 'from-[#0b3a66] via-slate-950 to-[#8a5a0a]'),
     {
         key: 'verify',
         badgeIcon: ShieldCheck,
