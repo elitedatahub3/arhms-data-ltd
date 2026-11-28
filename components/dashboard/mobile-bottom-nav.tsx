@@ -213,8 +213,8 @@ const NAV_VARIANTS = {
             data: [
                 { href: '/dashboard/data-packages', label: 'Data Packages', icon: Package },
                 { href: '/dashboard/standard-bundles', label: 'Standard Bundles', icon: Wifi },
-                { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                 { href: '/dashboard/utilities', label: 'Utility Bills', icon: Receipt },
+                { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                 { href: '/dashboard/results-checker', label: 'Results Checker', icon: Tag },
                 { href: '/dashboard/afa-orders', label: 'AFA Registration', icon: BadgeCheck },
             ],
@@ -257,8 +257,8 @@ const NAV_VARIANTS = {
             data: [
                 { href: '/dashboard/data-packages', label: 'Data Packages', icon: Package },
                 { href: '/dashboard/standard-bundles', label: 'Standard Bundles', icon: Wifi },
-                { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                 { href: '/dashboard/sub/utilities', label: 'Utility Bills', icon: Receipt },
+                { href: '/dashboard/airtime', label: 'Buy Airtime', icon: Phone },
                 { href: '/dashboard/sub/rc', label: 'Results Checker', icon: Tag },
                 { href: '/dashboard/sub/afa', label: 'AFA Registration', icon: BadgeCheck },
             ],
