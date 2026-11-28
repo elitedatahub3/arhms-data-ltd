@@ -141,21 +141,79 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
         () => ALL_SLIDES.filter((s) => s.show({ role, phoneVerified })),
         [role, phoneVerified]
     )
+    const n = slides.length
 
-    const [current, setCurrent] = useState(0)
+    // The track holds [last, ...slides, first]. `pos` indexes the track, so the
+    // real slides live at 1..n. Sliding onto a clone at either end and then
+    // jumping (without animation) to its twin makes the loop seamless, so the
+    // last slide moves on to the first instead of rewinding past every slide.
+    const track = useMemo(() => (n > 1 ? [slides[n - 1], ...slides, slides[0]] : slides), [slides, n])
+    const [pos, setPos] = useState(n > 1 ? 1 : 0)
+    const [animate, setAnimate] = useState(true)
+    const [dragDx, setDragDx] = useState(0)
+    const moving = useRef(false)
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+    const current = n > 1 ? (pos - 1 + n) % n : 0
+    const posRef = useRef(pos)
+    posRef.current = pos
+    const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    // End of a slide move: unlock, and if we landed on a clone jump to its twin.
+    // Runs on transitionend, with a timer as backup because a hidden tab may
+    // never fire the event and the carousel would otherwise stay locked.
+    const settle = useCallback(() => {
+        if (settleTimer.current) { clearTimeout(settleTimer.current); settleTimer.current = null }
+        if (!moving.current) return
+        moving.current = false
+        const p = posRef.current
+        if (p >= n + 1) { setAnimate(false); setPos(1) }
+        else if (p <= 0) { setAnimate(false); setPos(n) }
+    }, [n])
+    const armSettle = useCallback(() => {
+        if (settleTimer.current) clearTimeout(settleTimer.current)
+        settleTimer.current = setTimeout(settle, 700)
+    }, [settle])
+    useEffect(() => () => { if (settleTimer.current) clearTimeout(settleTimer.current) }, [])
+
     useEffect(() => {
-        if (current >= slides.length) setCurrent(0)
-    }, [slides.length, current])
+        setAnimate(false)
+        setPos(n > 1 ? 1 : 0)
+        moving.current = false
+    }, [n])
+
+    // Re-enable the transition a frame after an instant jump.
+    useEffect(() => {
+        if (animate) return
+        let inner = 0
+        const outer = requestAnimationFrame(() => {
+            inner = requestAnimationFrame(() => setAnimate(true))
+        })
+        return () => {
+            cancelAnimationFrame(outer)
+            cancelAnimationFrame(inner)
+        }
+    }, [animate])
+
+    const go = useCallback((target: number) => {
+        if (n <= 1 || moving.current) return
+        moving.current = true
+        setAnimate(true)
+        setPos(target)
+        armSettle()
+    }, [n, armSettle])
 
     const startTimer = useCallback(() => {
         if (timerRef.current) clearInterval(timerRef.current)
-        if (slides.length <= 1) return
+        if (n <= 1) return
         timerRef.current = setInterval(() => {
-            setCurrent((i) => (i + 1) % slides.length)
+            if (moving.current) return
+            moving.current = true
+            setAnimate(true)
+            setPos((p) => p + 1)
+            armSettle()
         }, AUTO_ADVANCE_MS)
-    }, [slides.length])
+    }, [n, armSettle])
 
     useEffect(() => {
         startTimer()
@@ -164,32 +222,48 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
         }
     }, [startTimer])
 
-    const handleNav = (i: number) => {
-        setCurrent(((i % slides.length) + slides.length) % slides.length)
-        startTimer()
+    const onTransitionEnd = (e: React.TransitionEvent) => {
+        if (e.target !== e.currentTarget) return
+        settle()
     }
-    const prev = () => handleNav(current - 1)
-    const next = () => handleNav(current + 1)
 
-    // Swipe on touch, drag with a mouse. A horizontal move past 40px changes
-    // slide; anything shorter is a tap and the CTA link still works.
-    const dragStart = useRef<{ x: number; y: number } | null>(null)
+    const handleNav = (i: number) => { go(i + 1); startTimer() }
+    const prev = () => { go(pos - 1); startTimer() }
+    const next = () => { go(pos + 1); startTimer() }
+
+    // Swipe on touch, drag with a mouse: the track follows the finger, and a
+    // move past 40px changes slide on release; anything shorter is a tap.
+    const dragStart = useRef<{ x: number; y: number; horizontal: boolean | null } | null>(null)
     const dragged = useRef(false)
     const onPointerDown = (e: React.PointerEvent) => {
-        dragStart.current = { x: e.clientX, y: e.clientY }
+        if (n <= 1 || moving.current) return
+        if ((e.target as HTMLElement).closest('button')) return
+        dragStart.current = { x: e.clientX, y: e.clientY, horizontal: null }
         dragged.current = false
     }
-    const onPointerUp = (e: React.PointerEvent) => {
+    const onPointerMove = (e: React.PointerEvent) => {
         const s = dragStart.current
-        dragStart.current = null
         if (!s) return
         const dx = e.clientX - s.x
         const dy = e.clientY - s.y
-        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-            dragged.current = true
-            if (dx < 0) next()
-            else prev()
+        if (s.horizontal === null && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+            s.horizontal = Math.abs(dx) > Math.abs(dy)
+            if (!s.horizontal) { dragStart.current = null; return }
+            if (timerRef.current) clearInterval(timerRef.current)
         }
+        if (s.horizontal) setDragDx(dx)
+    }
+    const endDrag = (e?: React.PointerEvent) => {
+        const s = dragStart.current
+        dragStart.current = null
+        if (!s || !s.horizontal) { setDragDx(0); return }
+        const dx = e ? e.clientX - s.x : dragDx
+        setDragDx(0)
+        if (Math.abs(dx) > 40) {
+            dragged.current = true
+            go(dx < 0 ? pos + 1 : pos - 1)
+        }
+        startTimer()
     }
     // Swallow the click that ends a drag so it does not open the slide's link.
     const onClickCapture = (e: React.MouseEvent) => {
@@ -200,14 +274,16 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
         }
     }
 
-    if (slides.length === 0) return null
+    if (n === 0) return null
 
     return (
         <div
             className="relative w-full overflow-hidden rounded-3xl shadow-sm select-none touch-pan-y"
             onPointerDown={onPointerDown}
-            onPointerUp={onPointerUp}
-            onPointerCancel={() => { dragStart.current = null }}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerLeave={() => endDrag()}
+            onPointerCancel={() => endDrag()}
             onClickCapture={onClickCapture}
             onKeyDown={(e) => {
                 if (e.key === 'ArrowLeft') prev()
@@ -216,14 +292,19 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
             role="region"
             aria-roledescription="carousel"
         >
-            <div className="relative h-52 sm:h-48">
-                {slides.map((slide, i) => (
+            <div
+                className="flex h-52 sm:h-48"
+                style={{
+                    transform: `translateX(calc(${-pos * 100}% + ${dragDx}px))`,
+                    transition: animate && dragDx === 0 ? 'transform 500ms cubic-bezier(0.22, 0.61, 0.36, 1)' : 'none',
+                }}
+                onTransitionEnd={onTransitionEnd}
+            >
+                {track.map((slide, ti) => (
                     <div
-                        key={slide.key}
-                        className={cn(
-                            'absolute inset-0 transition-opacity duration-500 ease-in-out',
-                            i === current ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
-                        )}
+                        key={`${slide.key}-${ti}`}
+                        className="relative h-full w-full shrink-0"
+                        aria-hidden={ti !== pos}
                     >
                         <div className={cn('relative h-full w-full bg-gradient-to-br py-4 px-12 sm:py-6 sm:px-14 flex flex-col justify-between', slide.gradientClass)}>
                             <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
@@ -243,7 +324,7 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
                             {slide.logo && (
                                 <div className="absolute right-12 sm:right-16 top-1/2 -translate-y-1/2 z-10 w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white p-1.5 shadow-lg overflow-hidden flex items-center justify-center">
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={slide.logo} alt="" draggable={false} className="w-full h-full object-contain rounded-xl" loading="lazy" />
+                                    <img src={slide.logo} alt="" draggable={false} className="w-full h-full object-contain rounded-xl" />
                                 </div>
                             )}
 
@@ -254,7 +335,7 @@ export function PromoHeroCarousel({ role, phoneVerified }: PromoHeroCarouselProp
                                 <p className="text-xs sm:text-sm text-white/85 font-medium leading-snug mb-2.5 max-w-md line-clamp-2">
                                     {slide.description}
                                 </p>
-                                <Link href={slide.href}>
+                                <Link href={slide.href} draggable={false} tabIndex={ti === pos ? 0 : -1}>
                                     <span className="inline-flex items-center justify-center rounded-xl bg-white px-4 py-2 text-xs sm:text-sm font-bold text-slate-900 shadow-lg transition-transform hover:scale-[1.02] active:scale-95">
                                         {slide.ctaLabel}
                                     </span>
